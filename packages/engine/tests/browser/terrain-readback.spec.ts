@@ -1,4 +1,4 @@
-// Terrain readback: steps 2-4 of docs/plan/09-renderer-terrain.md ("Order of work"). Scenes hand-fill
+// Terrain readback: steps 2-4 of M09 ("Order of work"). Scenes hand-fill
 // the page/indirection textures directly through `window.__terrain` (no worker, no ABI instance --
 // the real ring-driven data path is step 5's; Deviations records exactly which tests here would need
 // to be re-pointed at it). Every scene uses `tilesPerPx: 1` and places the camera so pixel index
@@ -27,7 +27,7 @@ const TOL = 2 // 0020 §6: "≤ 2/255 per channel"
 // not just "within 0020 §6's tolerance" -- 0 (exact) if the round-trip supports it.
 const JITTER_TOL = 0
 
-// M09b fixture additions (docs/plan/09b-terrain-art-and-lifecycle.md Planning decisions
+// M09b fixture additions (M09b Planning decisions
 // "Probe-friendly fixture art"; `scripts/gen-terrain-art.mjs`): `tile_px` is 4, so every art texel
 // is a quarter of a tile on each axis.
 const ART_SIZE = 4
@@ -178,7 +178,7 @@ test('device: view probe both paths', async ({ page }, testInfo) => {
   })
 })
 
-// The real-client scenes (docs/plan/09-renderer-terrain.md, step 5): a real `createClient()` over
+// The real-client scenes (M09, step 5): a real `createClient()` over
 // `fx-terrain` (Gen + Client roles) instead of hand-filled textures -- readback (`expectAdapter|
 // readback`, M10's own grep) still runs through `terrain-client.html`. `fx-terrain`'s deterministic
 // generator (`fixtures/terrain/src/lib.rs`) puts the same grass/ore/water scene at the same chunk
@@ -246,7 +246,7 @@ test('terrain: probe tile colours', async ({ page }, testInfo) => {
 // under `pnpm test:slow`, only in the `webkit` project -- Firefox's own `@engines`-only grep never
 // matches this title, so a null WebGPU adapter there (0020 §6) never reaches `expectAdapter`.
 //
-// M36 scoping fix (docs/plan/36-slow-tier-and-benchmarks.md step 8; M09 Deviations, "Gate round 3"):
+// M36 scoping fix (M36 step 8; M09 Deviations, "Gate round 3"):
 // a `@slow` tag alone does not scope a test to the `webkit` project, because the `chromium` project
 // has no grep of its own, so under `pnpm test:slow` this title also ran in headless Chromium. The
 // guard is explicit now: it runs in real WebKit only.
@@ -258,7 +258,7 @@ test('terrain: probe tile colours webkit @webkit-gpu @slow', async ({
   await runProbeTileColours(page, testInfo)
 })
 
-// `webkit-readback @slow` (docs/plan/36-slow-tier-and-benchmarks.md step 8; 0020 §6: "Playwright
+// `webkit-readback @slow` (M36 step 8; 0020 §6: "Playwright
 // WebKit has a working headless adapter on macOS: one readback scene in the slow tier"). The hand-fed
 // border scene of M09 (`terrain.html`: no workers, no client, two chunks staged straight into the page
 // table), the same four semantic pixel probes as the Chromium scene above; the sibling WebKit test
@@ -304,7 +304,7 @@ test('terrain: nonresident is neutral', async ({ page }, testInfo) => {
 
 test('terrain: patch one texel', async ({ page }, testInfo) => {
   // A real `uploadRing`-shaped SAB driven by hand-built records (no worker): proves `render/
-  // upload.ts`'s own CHUNK-then-PATCH handling directly (docs/plan/09-renderer-terrain.md
+  // upload.ts`'s own CHUNK-then-PATCH handling directly (M09
   // Deviations "Steps 5-7" -- this test is not one of the two the brief names as needing a real
   // client; hand-building the records this way exercises the code `render/upload.ts` itself added
   // in step 5, which the hand-filled `writePageChunk`/`writePageTexel` calls above never touch).
@@ -393,7 +393,7 @@ test('terrain: far from origin exact', async ({ page }, testInfo) => {
   const nearOrigin = await renderBorderScene(page, borderCamera(64, 32, 8))
   // Shift the camera tile by exactly 2^23 on both axes: chunk shifts by exactly 2^18 (2^23 / 32),
   // and 2^18 is a multiple of 64, so the toroidal indirection window addresses the very same cells
-  // (docs/plan/09-renderer-terrain.md Deviations, `terrain.wgsl`'s own `wrap_mask` comment).
+  // (M09 Deviations, `terrain.wgsl`'s own `wrap_mask` comment).
   const shift = 1 << 23
   const farOrigin = await renderBorderScene(page, borderCamera(64, 32 + shift, 8 + shift))
 
@@ -416,7 +416,7 @@ test('terrain: nothing outside viewport', async ({ page }, testInfo) => {
 
   // 64x64, camera tile (16, 16): visible tiles range roughly [-16, 47] on both axes, so only the
   // middle third of the frame falls inside the one resident chunk (tiles [0, 31]); every corner is
-  // outside it (docs/plan/09-renderer-terrain.md Deviations: this milestone's own reading of
+  // outside it (M09 Deviations: this milestone's own reading of
   // "nothing outside viewport" -- nothing beyond the resident chunk's footprint shows anything but
   // the neutral colour).
   const camera: FrameUniformValues = {
@@ -452,7 +452,7 @@ test('terrain: nothing outside viewport', async ({ page }, testInfo) => {
   expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
 })
 
-// M09b step 2 (docs/plan/09b-terrain-art-and-lifecycle.md): the PCG-hash variant/flip/rotate/jitter
+// M09b step 2 (M09b: the PCG-hash variant/flip/rotate/jitter
 // path. Both tests below drive `terrain.html`'s hand-filled path (no Rust fixture change, Files
 // touched: "No Rust"), reusing `microCamera`'s 1x1 render target so one scalar (`camFracX`/
 // `camFracY`) picks out one specific art texel of one specific tile with no pixel-grid arithmetic.
@@ -506,7 +506,7 @@ test('terrain: magnified texel exact', async ({ page }, testInfo) => {
 
   // Exactly 1 screen px per art texel ("integer pixels-per-texel", Planning decisions): every one
   // of the 4 texels on each side of the chunk (0,0)/(1,0) border -- tiles 31 and 32, `CHUNK_BITS ===
-  // 5` (docs/plan/09-renderer-terrain.md Planning decisions) -- reads its own tile's exact flat
+  // 5` (M09 Planning decisions) -- reads its own tile's exact flat
   // colour, with no blur or bleed across the array-layer boundary at the seam.
   const INTEGER_TILES_PER_PX = 1 / ART_SIZE
   for (let texel = 0; texel < ART_SIZE; texel++) {
@@ -693,7 +693,7 @@ test('terrain: jitter matches reference', async ({ page }, testInfo) => {
   expectNoGpuErrors(await page.evaluate(() => window.__terrain?.errors() ?? []))
 })
 
-// M09b step 3 (docs/plan/09b-terrain-art-and-lifecycle.md): stateless edge dithering.
+// M09b step 3 (M09b: stateless edge dithering.
 
 const PRIO_LOW_VISUAL = 7
 const PRIO_HIGH_VISUAL = 8
@@ -1002,7 +1002,7 @@ test('terrain: evicted slot shows new chunk, never stale texels', async ({ page 
 
 // Open gate failures item 6, gate round 1 negative: a deliberately invalid WGSL string must make
 // `checkCompilation` fail the check (`readback`'s own filename keeps this in M10's
-// `expectAdapter|readback` grep, docs/plan/09-renderer-terrain.md Consumes).
+// `expectAdapter|readback` grep, M09 Consumes).
 test('device: bad wgsl fails the compilation check', async ({ page }, testInfo) => {
   await openPage(page, '/terrain.html')
   allowGpuErrors(page) // provokes a WGSL error on purpose

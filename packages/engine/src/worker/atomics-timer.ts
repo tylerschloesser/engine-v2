@@ -1,10 +1,10 @@
-// `AtomicsTimer` (docs/plan/13-sim-host-tick-loop.md, Scope "Sim worker kind"): an implementation
+// `AtomicsTimer` (M13, Scope "Sim worker kind"): an implementation
 // of `HostServices['timer']` (`server.ts`) built on top of `runBlockingLoop`'s own
 // `timeoutMs: () => number` (`worker/shell.ts`), so `Atomics.wait` itself is what the sim worker
 // blocks in between ticks (0015 §2) instead of a `setInterval`/spin loop -- M06b's park/resume
 // protocol keeps working unchanged, since this is still an ordinary `timeoutMs` function.
 //
-// docs/plan/13b-tick-timing-allocation.md (Deviations): this used to read `clock.now()` on every
+// M13b (Deviations): this used to read `clock.now()` on every
 // `poll()`/`timeoutMs()` call to decide whether a tick's own deadline had passed, and to compute
 // `Atomics.wait`'s own timeout precisely. Both boxed a fresh `HeapNumber` per call in the
 // interpreter tier -- a fractional double, never a Smi -- exceeding the strict 8 B/frame budget

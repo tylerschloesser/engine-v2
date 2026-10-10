@@ -1,4 +1,4 @@
-// `assertBudget` (docs/plan/31-rates-and-integrity.md Seams; docs/decisions/0020-testing-strategy.md
+// `assertBudget` (M31 Seams; docs/decisions/0020-testing-strategy.md
 // §9): the exact value a scenario recorded, and the ceiling it may never pass.
 //
 // A row lives at `counters.net.<row>` in `packages/engine/budgets.json`:

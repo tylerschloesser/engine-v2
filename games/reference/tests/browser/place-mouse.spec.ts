@@ -1,4 +1,4 @@
-// `reference_place_mouse` (docs/plan/33-reference-furnace.md Tests added), with
+// `reference_place_mouse` (M33 Tests added), with
 // `reference_ghost_swap_one_frame` folded into the same page boot (ruling R2: the step keeps that
 // name). Real Playwright mouse events on the real canvas; stepped ticks and frames only (0020 §4).
 import { expect, test } from '@playwright/test'

@@ -1,5 +1,5 @@
 //! `TileTexel`, `VisualTables` and the `ClientSide` trait (docs/decisions/0018-renderer.md §2,
-//! §3; docs/plan/09-renderer-terrain.md Planning decisions "TileTexel::from_tables registration").
+//! §3; M09 Planning decisions "TileTexel::from_tables registration").
 //!
 //! The game calls `Registry::set_base_visual`/`set_resource_visual` inside `Game::register` (until
 //! M12 lands `Game`, a fixture calls them directly, then [`install_visual_tables`]); the engine
@@ -94,7 +94,7 @@ pub fn install_visual_tables(registry: &Registry) {
 /// `tile_visual`, because M09 ran before M12's `Game` trait existed. M12 extends it in place: the
 /// `G: Game` bound and `Default` supertrait (0003, verbatim) replace the `= ()` default -- a
 /// defaulted, unconstrained `G` and a `G: Game` bound cannot coexist on the same parameter -- and
-/// `frame`/`extract`/`ui` join `tile_visual` with no-op defaults (docs/plan/12-store-and-game-
+/// `frame`/`extract`/`ui` join `tile_visual` with no-op defaults (M12
 /// trait.md Planning decisions "Shell types now, not later"), so `impl<G: Game> ClientSide<G> for
 /// ()` below lets a fixture write `type Client = ();`. `frame`, `extract` and `ui` are themselves
 /// shells: `FrameCx`/`FrameView`/`DrawList` (`crate::game`) grow fields in M16b-M18, at which point
@@ -119,7 +119,7 @@ pub trait ClientSide<G: Game>: Default {
     /// Called exactly once, right after `Default::default()` constructs this client
     /// (`game_instance::ClientInstance::init`, before anything else ever calls `frame`/`extract`/
     /// `ui`): the seed and worldgen params this instance's own world was created with -- the one
-    /// thing `Default` itself can never carry (docs/plan/20b-reference-player-and-collect-ui.md,
+    /// thing `Default` itself can never carry (M20b,
     /// gate round 1 fix). No-op by default: most games have no per-client-frame state that depends
     /// on the world's own seed at all.
     fn on_init(&mut self, _seed: u64, _params: &<G::Worldgen as Worldgen>::Params) {}

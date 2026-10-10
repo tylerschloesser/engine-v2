@@ -1,4 +1,4 @@
-//! Desync hashes and the desync report (docs/plan/31b-desync-hashes.md, 0013 "Per-chunk desync
+//! Desync hashes and the desync report (M31b, 0013 "Per-chunk desync
 //! hashes"): the one definition of "the hash of a chunk / of `Global` / of a player" both
 //! `host::Host` and `client::Replica` call, and the fixed-size report ring both sides fill.
 //!

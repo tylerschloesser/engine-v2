@@ -1,4 +1,4 @@
-//! docs/plan/22b-persistence-load-and-fs.md: `sim_restore_end` reports `Status::IdentityMismatch`
+//! M22b: `sim_restore_end` reports `Status::IdentityMismatch`
 //! when a decoded snapshot's own `Identity::build_hash` differs from the running build's own,
 //! rather than silently loading it (0005 Upgrades: "if the running identity hash differs ...").
 //! Non-scope here (M24b): no migrate path exists, so this is reported, not handled -- proven

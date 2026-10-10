@@ -1,4 +1,4 @@
-// `secret/persists-across-reload` (docs/plan/28-sessions-and-reconnect.md, Tests added): a real
+// `secret/persists-across-reload` (M28, Tests added): a real
 // single-player page (`connected.html`, `host.connect: true`) mints a device secret through
 // `loadOrMintSecret()` (`src/client/secret.ts`) on its very first load and keeps it in
 // `localStorage` under `engine.playerSecret`, one per origin (0013 Identity) -- a page reload must

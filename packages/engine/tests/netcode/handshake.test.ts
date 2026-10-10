@@ -1,4 +1,4 @@
-// `handshake` (docs/plan/28-sessions-and-reconnect.md, Tests added): the scenarios step 1-2 did
+// `handshake` (M28, Tests added): the scenarios step 1-2 did
 // not already cover -- `Superseded`, `Bye{Leave}`, `Full`, `BadKey`, `VersionMismatch`, garbage
 // before `Hello`, the 5 s no-`Hello` timeout, a storage crash between the session-table write and
 // the log record it precedes, same-secret reconnect, and reveal-after-visible-chunks. Every raw
@@ -301,7 +301,7 @@ describe('handshake', () => {
   })
 
   test('hello-behind-a-shifted-entry-is-still-answered', async () => {
-    // docs/plan/30d-hello-resent-silence.md: `mp/hello-resent-after-pre-welcome-drop`'s intermittent
+    // M30d: `mp/hello-resent-after-pre-welcome-drop`'s intermittent
     // red. A `Hello` whose connection then closed leaves a resolved entry in the attach queue; the
     // redial (same `ConnId`) says `Hello` while it is still hashing; a tick then shifts the stale
     // entry off *before* the new one resolves. The new entry used to be written to the index it
@@ -500,7 +500,7 @@ describe('handshake', () => {
     }
   })
 
-  // M39ak (docs/plan/39ak-hello-settle-rejection.md): a rejected `settle` (a failing
+  // M39ak ( a rejected `settle` (a failing
   // `sessions.save()` or digest) used to leave `sessionMutationChain` unresolved and its slot in
   // `attachQueue`, so no later `Hello` was ever admitted.
   async function settleRejectionScenario(

@@ -102,7 +102,7 @@ export class EngineTrap extends Error {
 }
 
 /**
- * docs/plan/39y-wasm-tick-cost.md: the receiver of `engine.bench_mark(phase)`, the one import a
+ * M39y: the receiver of `engine.bench_mark(phase)`, the one import a
  * module built with cargo feature `bench-phases` has beyond `panic` and `log` (bench builds only;
  * a shipped module has no such import). The hook reads a host clock and attributes the time since
  * its previous call to `phase`; it must not allocate. `null` (the default) makes every call a no-op.
@@ -119,7 +119,7 @@ const encoder = new TextEncoder()
  * Whether `buffer` was detached by a `memory.grow` (0014 §4). `ArrayBuffer.prototype.detached`
  * (widely available; `lib: es2023` here predates its `.d.ts`, hence the cast) returns a plain
  * `boolean`, never boxed, unlike the `byteLength === 0` check it replaced. That comparison's own
- * comment claimed "allocates nothing", which fix round 2 (docs/plan/06b-workers-and-spawn.md,
+ * comment claimed "allocates nothing", which fix round 2 (M06b,
  * Deviations) measured false: `TypedArray.prototype.byteLength`'s getter return value boxed a
  * fresh `HeapNumber` on every `call0`/`call1`/`call2`, in every kind and every isolate that calls
  * a WASM export at all -- a source of `gc: flat transport parity`'s (M04) run-to-run byte

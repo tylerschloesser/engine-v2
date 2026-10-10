@@ -1,4 +1,4 @@
-// `puts-ui.html`'s tests (docs/plan/16b-ui-observation-and-clock.md Tests added,
+// `puts-ui.html`'s tests (M16b Tests added,
 // `dom_counter_follows_global`/`progress_from_done_at_and_clock`): a real, connected
 // `createClient()` topology over `fx-puts`'s own `PutsUi`, driven deterministically through
 // `stepTick` (no real-time pacing). Chromium only: nothing here is renderer/GPU-specific.

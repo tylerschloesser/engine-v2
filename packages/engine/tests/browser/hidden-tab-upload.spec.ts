@@ -1,4 +1,4 @@
-// `hidden-tab-upload.html`'s test (docs/plan/20c-client-ack-freeze-under-untilquiescent.md, the
+// `hidden-tab-upload.html`'s test (M20c, the
 // "production question"): can a production client worker reach the same frozen-ack state as
 // `untilQuiescent`'s own bug, since a hidden tab's `FrameLoop.pause()` (0018 §8) stops exactly the
 // "upload" phase that drains `client.uploadRing` in a real page? Answer this test proves: no --
@@ -25,7 +25,7 @@ declare global {
 
 // `@slow`: needs several real seconds (a real hidden window, `packages/engine/CLAUDE.md`'s own
 // "Where tests live": "put `@slow` in a title" -- the fast `browser` suite has no room for this at
-// 28-29s of its own 35s budget, docs/plan/20b-reference-player-and-collect-ui.md Deviations).
+// 28-29s of its own 35s budget, M20b Deviations).
 test('hidden_tab_upload_backpressure_never_blocks_the_client @slow', async ({ page }, testInfo) => {
   await openPage(page, '/hidden-tab-upload.html')
   const adapterInfo = await page.evaluate(() => window.__init?.().then((r) => r.adapterInfo))

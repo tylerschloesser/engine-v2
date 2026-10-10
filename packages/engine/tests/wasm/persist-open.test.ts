@@ -1,4 +1,4 @@
-// docs/plan/22b-persistence-load-and-fs.md, Order of work step 2: `Persistence.open` happy path
+// M22b, Order of work step 2: `Persistence.open` happy path
 // (create-or-load, resume tick) and the crash matrix, driven through the *real* pipeline (a real
 // `SimHost` + `Persistence` over the built `.wasm`, with `Connected` records in the log) per the
 // brief's own instruction -- never a hand-built container.
@@ -374,7 +374,7 @@ describe('Persistence.open (fx-persist, real pipeline)', () => {
     expect(hashAfterResend).toBe(hashAfterFirst) // the resend must not apply a second time
   })
 
-  /** docs/plan/24b-upgrade-and-migration.md superseded this test's own original premise (M22b/M23:
+  /** M24b superseded this test's own original premise (M22b/M23:
    * any buildHash difference is unconditionally fatal, `WorldLoadError { kind: 'identity' }`). A
    * plain buildHash-only change (schema/tick-rate/worldgen all unchanged) now takes the Direct load
    * path and succeeds instead (0005 Upgrades) -- storage gains a new segment (Planning decisions

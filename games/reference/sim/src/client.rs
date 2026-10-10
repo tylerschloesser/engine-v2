@@ -1,4 +1,4 @@
-//! `RefClient: ClientSide<RefGame>` (docs/plan/20b-reference-player-and-collect-ui.md Scope):
+//! `RefClient: ClientSide<RefGame>` (M20b Scope):
 //! `PlayerPresence`, the critically damped camera-follow spring, the own-player circle + range
 //! ring, and the depletion `tile_visual` override moved here from `lib.rs` (steps 1-3 landed it
 //! there before this module existed).
@@ -426,7 +426,7 @@ fn depletion_stage(aux: u16) -> u8 {
 }
 
 impl ClientSide<RefGame> for RefClient {
-    /// Gate round 1 fix (docs/plan/20b-reference-player-and-collect-ui.md; engine change: `client::
+    /// Gate round 1 fix (M20b; engine change: `client::
     /// texel::ClientSide::on_init`, called once by `game_instance::ClientInstance::init` right
     /// after `Default::default()`, before `frame`/`extract`/`ui` ever run): recomputes `Ui.spawn`
     /// against the seed/params this instance's own world was *actually* created with, replacing the

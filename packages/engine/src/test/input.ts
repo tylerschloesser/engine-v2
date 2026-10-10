@@ -1,5 +1,5 @@
 // `engine/test`: engine-level input injection (docs/decisions/0019-camera-input-and-overlay.md,
-// Consequences; docs/decisions/0020-testing-strategy.md §8; docs/plan/11-camera-and-input.md Seams,
+// Consequences; docs/decisions/0020-testing-strategy.md §8; M11 Seams,
 // Provides). `injectPointer`/`injectWheel`/`injectKey` write into the exact same fixed slots a real
 // `PointerEvent`/`WheelEvent`/`KeyboardEvent` listener would (`input/pointers.ts`, `input/keys.ts`,
 // `input/wheel.ts`'s own `record*` functions), so a test drives gestures with no real DOM dispatch

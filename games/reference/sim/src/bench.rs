@@ -1,4 +1,4 @@
-//! The standard large save (docs/decisions/0020 §9; docs/plan/36-slow-tier-and-benchmarks.md),
+//! The standard large save (docs/decisions/0020 §9; M36,
 //! behind cargo feature `bench`. **Never ships**: `vite build` and the fast tier's `.wasm` never
 //! enable the feature; `buildGame({ features: ['bench'] })` is the only way in (build dir
 //! `target/engine/<profile>+bench`, a different build hash, so a bench client cannot join a normal

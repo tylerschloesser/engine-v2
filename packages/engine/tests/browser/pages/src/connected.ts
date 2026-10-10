@@ -1,4 +1,4 @@
-// `connected.html`'s script (docs/plan/15b-ring-connection-and-replica-rendering.md, step 6): a
+// `connected.html`'s script (M15b, step 6): a
 // real `createClient()` local topology over `fx-puts`, `host.connect: true` (Orchestrator ruling
 // 1) -- the sim and client workers linked over a real uplink/downlink ring pair, `SimHost.accept`
 // admitting a real connection at startup. No renderer/canvas wiring (bare `<canvas>`, never drawn
@@ -57,7 +57,7 @@ declare global {
 
 const wasm = await fixtureWasm('puts')
 const canvas = document.createElement('canvas')
-// A manual clock (docs/plan/11-camera-and-input.md Planning decisions "Stepped frames in tests"):
+// A manual clock (M11 Planning decisions "Stepped frames in tests"):
 // `ClientCore::poll_uplink`'s own 50 ms/1 s pacing (0010 "Rates") is real milliseconds read from
 // `CameraBlock.frame_time_ms`, which `stepFrame` sets from this clock's `now()` -- without one,
 // two `stepFrame` calls close together in *real* wall-clock time (this whole page's script easily
@@ -79,7 +79,7 @@ const client = createClient({
   genWorkers: 1,
   test: { clock, flags: {} },
 })
-// `pumpUntilLive` (docs/plan/16-action-round-trip.md, `engine/test`'s own doc comment has the
+// `pumpUntilLive` (M16, `engine/test`'s own doc comment has the
 // full reasoning): this page's own ticks are test-driven, and `client.ready` now needs one before
 // it resolves, so a bare `await client.ready` here would deadlock against the very hooks below
 // that would otherwise drive one.
@@ -87,7 +87,7 @@ await pumpUntilLive(client)
 
 // This page draws nothing (no renderer/canvas wiring): `engine/test.untilQuiescent` waits for
 // *every* ring to reach `pushed === popped`, `uploadRing` included, and nothing else here would
-// ever drain it (`terrain-client.ts`'s own precedent, docs/plan/09-renderer-terrain.md Deviations
+// ever drain it (`terrain-client.ts`'s own precedent, M09 Deviations
 // "Steps 5-7"). A plain interval pop-and-discard loop, not a render loop: this page only needs the
 // ring kept empty, never the bytes.
 const uploadDiscard = new RingConsumer(client.uploadRing)

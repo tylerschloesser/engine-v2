@@ -1,4 +1,4 @@
-//! Fixture game `fx-persist` (docs/plan/22-persistence-log-and-snapshots.md Files: "one entity type
+//! Fixture game `fx-persist` (M22 Files: "one entity type
 //! with a timer, one player field, a global counter, one RNG-using action, tile depletion"). Used
 //! by this milestone's own recorded log + checkpoint hashes (`tests/fixture_log.rs`) and by native
 //! heavy mode (`tests/heavy.rs`); the `.wasm` this crate also builds (`cdylib`) is M22b's/steps
@@ -86,7 +86,7 @@ pub struct Persist;
 
 impl Game for Persist {
     const SCHEMA_VERSION: u32 = 1;
-    // docs/plan/22-persistence-log-and-snapshots.md steps 4-6: `Game::GAME_VERSION`'s own doc
+    // M22 steps 4-6: `Game::GAME_VERSION`'s own doc
     // comment -- `env!` here reads *this* crate's manifest (macro hygiene), unlike the trait
     // default.
     const GAME_VERSION: &'static str = env!("CARGO_PKG_VERSION");

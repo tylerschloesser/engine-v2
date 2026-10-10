@@ -1,4 +1,4 @@
-//! Fixture game `fx-predict` (docs/plan/25-prediction-core.md step 1): a 2x2 `Place`-able machine,
+//! Fixture game `fx-predict` (M25 step 1): a 2x2 `Place`-able machine,
 //! `Deposit` (addressed by tile, so a follow-up can name a machine the client has only predicted),
 //! a timed `Collect`, `Roll` (draws from `w.rng()`, host-only under prediction), `Cascade`
 //! (`predict() == false`), and `SetGlobal` (`w.put_global`). Modelled on
@@ -77,7 +77,7 @@ pub enum Action {
     Cascade,
     /// `w.put_global` (0003): the one action that writes the global scope directly.
     SetGlobal { value: i32 },
-    /// `w.set_tile` (docs/plan/26-prediction-rendering-and-clocks.md step 3: the texel tests need
+    /// `w.set_tile` (M26 step 3: the texel tests need
     /// a predicted tile write, which nothing above provides). Declines like `Place` if `tile` is
     /// already occupied by a machine (the same conflict shape, so a rival's `Place` landing before
     /// this action's own reject ack reproduces 0012's "conflicting delta arrives before the reject
@@ -154,7 +154,7 @@ pub fn can_place(w: &dyn WorldRead<Predict>, origin: Pos) -> Result<(), Reject> 
     Ok(())
 }
 
-/// What the DOM overlay observes (docs/plan/26-prediction-rendering-and-clocks.md step 1: fixture
+/// What the DOM overlay observes (M26 step 1: fixture
 /// `ClientSide` `ui`): the local player's own inventory, read through `FrameView::predicted_player`
 /// (overlay-then-replica) so it reads the exact same value before and after an ack that changes
 /// nothing visible (M25's own "converges with no visible change" property, now also true of the
@@ -167,7 +167,7 @@ pub struct Ui {
     pub coal: u16,
 }
 
-/// `ClientSide<Predict>` (docs/plan/26-prediction-rendering-and-clocks.md step 1): one `rect` per
+/// `ClientSide<Predict>` (M26 step 1): one `rect` per
 /// visible `Machine`, at its anchor tile, `PREDICTED` set from `view.is_predicted(id)` (Planning
 /// decisions "`predicted` flag": "`extract` asks `view.is_predicted(id)` ... and sets `PREDICTED`"
 /// -- true for a provisional id or a real id the overlay currently overrides, so the flag reads

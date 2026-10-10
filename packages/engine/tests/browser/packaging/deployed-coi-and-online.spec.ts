@@ -1,4 +1,4 @@
-// `deployed/coi-and-online @slow` (docs/plan/38-hosting-checks.md, Tests added): the reference game
+// `deployed/coi-and-online @slow` (M38, Tests added): the reference game
 // built and served from a real deployment (`games/reference-server --static` on Fly), opened in a real
 // browser. Runs only with `DEPLOYED_URL=https://<app>.fly.dev`; without it the test is reported as
 // skipped by name. In the `packaging` project (after the gc projects), so a slow remote page load never

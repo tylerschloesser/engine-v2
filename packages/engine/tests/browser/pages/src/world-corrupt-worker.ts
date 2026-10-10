@@ -1,4 +1,4 @@
-// `world.html`'s test-only debug worker (docs/plan/23-persistence-opfs-and-lifecycle.md step 5,
+// `world.html`'s test-only debug worker (M23 step 5,
 // `export_works_after_load_failure`): overwrites one key of a *not-currently-open* world's OPFS
 // storage with arbitrary bytes, via `createWritable()` (a plain File System Access API write, not
 // `createSyncAccessHandle()` -- a manifest key has no persistently-open sync handle of its own,

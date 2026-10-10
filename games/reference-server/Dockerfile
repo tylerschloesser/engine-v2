@@ -1,4 +1,4 @@
-# One Fly machine per world (docs/plan/38-hosting-checks.md). Build context: this directory after
+# One Fly machine per world (M38. Build context: this directory after
 # `node scripts/stage-image.mjs` (it fills `.stage/`; `.dockerignore` admits nothing else).
 FROM node:22-slim
 WORKDIR /app

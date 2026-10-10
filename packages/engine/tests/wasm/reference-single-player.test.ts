@@ -1,5 +1,5 @@
 // `reference_single_player_save_to_server` and `reference_state_budget_full`
-// (docs/plan/34b-reference-scripted-single-player.md Tests added), on the reference game's `.wasm`
+// (M34b Tests added), on the reference game's `.wasm`
 // under Node: a real `createWorldServer` over memory storage, `HeadlessClient`s, a virtual clock.
 //
 // - A single-player world (its player joined with a secret, stone in the pocket) is exported, imported

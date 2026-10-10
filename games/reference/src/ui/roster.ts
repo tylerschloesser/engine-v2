@@ -1,4 +1,4 @@
-// `createRosterUi` (docs/plan/34-reference-multiplayer.md Scope): one dot per `Ui.roster` entry,
+// `createRosterUi` (M34 Scope): one dot per `Ui.roster` entry,
 // in the player's colour, hollow (border only) while the player is offline. The page's own dot
 // carries `data-me="true"` and a thicker outline. A fixed, non-anchored readout like `inventory.ts`.
 //

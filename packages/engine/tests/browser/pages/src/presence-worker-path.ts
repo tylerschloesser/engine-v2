@@ -1,4 +1,4 @@
-// `presence-worker-path.html`'s script (docs/plan/19-presence-channel.md, step 6): a real
+// `presence-worker-path.html`'s script (M19, step 6): a real
 // `createClient()` local topology over `fx-presence` (`host.connect: true`, `connected.ts`'s own
 // precedent), no renderer -- this page is for `presence-worker-path.spec.ts`'s own claim that a
 // fixture presence sample written every client frame reaches the sim worker's own `PresenceTable`
@@ -46,7 +46,7 @@ const client = createClient({
   genWorkers: 1,
   test: { clock, flags: {} },
 })
-// `pumpUntilLive` (docs/plan/16-action-round-trip.md, `engine/test`'s own doc comment): this
+// `pumpUntilLive` (M16, `engine/test`'s own doc comment): this
 // page's own ticks are test-driven, and `client.ready` now needs one real frame before it
 // resolves.
 await pumpUntilLive(client)

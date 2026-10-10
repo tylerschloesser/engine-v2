@@ -8,7 +8,7 @@
 // setVisibility`. Reuses `/terrain/tiles.json`'s existing art and `PutsClient` (`fixtures/puts/src/
 // lib.rs`).
 //
-// `overlay_tile_reaches_screen` (docs/plan/15c-terrain-visibility-and-cache-invalidation.md, steps
+// `overlay_tile_reaches_screen` (M15c, steps
 // 3-5): `__writeFrameUniform`/`__renderAndRead` below are the GPU readback this page was built for
 // but could not use while the M15b-discovered cache-invalidation bug stood (M15c steps 1-2 fixed
 // it). Renders through the `renderer` object directly (`renderTo`'s `Renderable` overload, not its
@@ -113,7 +113,7 @@ window.__init = async () => {
     genWorkers: 1,
     test: { clock, flags: {} },
   })
-  // `pumpUntilLive` (docs/plan/16-action-round-trip.md, `engine/test`'s own doc comment has the
+  // `pumpUntilLive` (M16, `engine/test`'s own doc comment has the
   // full reasoning): this page's own ticks are test-driven, and `client.ready` now needs one
   // before it resolves, so a bare `await client.ready` here would deadlock against the very hooks
   // wired below that would otherwise drive one.

@@ -3,7 +3,7 @@ import { INPUT_RECORD_BYTES, InputKind, writeInputRecord } from './record.js'
 
 test('input: record layout golden', () => {
   // Field values chosen to catch a swapped field, a wrong offset, a sign error on the `i32` tile
-  // pair, or a little/big-endian mistake (docs/plan/11-camera-and-input.md's own warning): every
+  // pair, or a little/big-endian mistake (M11's own warning): every
   // byte distinct, a negative tile axis, a large positive one, and frac values (0.25/0.75) whose
   // IEEE-754 bit patterns are neither all-zero nor palindromic under a byte-order flip.
   const dst = new Uint8Array(INPUT_RECORD_BYTES)

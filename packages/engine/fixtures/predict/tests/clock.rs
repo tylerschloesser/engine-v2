@@ -1,4 +1,4 @@
-//! docs/plan/26-prediction-rendering-and-clocks.md steps 4-6, Tests added: `own_timer_no_jump_at_
+//! M26 steps 4-6, Tests added: `own_timer_no_jump_at_
 //! ack`, `own_timer_correction_eases` (k = 2 of 20, as the spike), `completion_gap_measured`.
 //! `lead_converges_to_exact` (Open gate failures item 2, gate round 1) joins them: the same real
 //! `Loopback` round trip, pinning the measured exact figure (`delay + 1`) rather than the brief's

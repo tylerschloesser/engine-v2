@@ -186,7 +186,7 @@ fn well_formed_undersize_presence_is_recorded() {
 
 /// Was `outside_world_cap_dropped`; renamed (gate round 1 fix) to match what it actually asserts.
 /// `Presence::pos()` returns `engine::world::WorldPos`, whose `i32` fields map 1:1 onto
-/// `[TILE_MIN, TILE_MAX]` once floored to a tile (`docs/plan/07-world-model-core.md` Deviations:
+/// `[TILE_MIN, TILE_MAX]` once floored to a tile (`M07` Deviations:
 /// "the raw i32 already covers [TILE_MIN, TILE_MAX] 1:1 ... so only a wider intermediate can be out
 /// of range"; `i32::MIN`/`i32::MAX` map to exactly `TILE_MIN`/`TILE_MAX`). There is no `i32` bit
 /// pattern a `WorldPos` can hold whose `.tile()` fails `in_range()`, so `Host::on_uplink`'s own

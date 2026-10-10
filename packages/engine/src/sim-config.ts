@@ -1,4 +1,4 @@
-// Pure sim-role config helpers, split out of `server.ts` (docs/plan/13-sim-host-tick-loop.md):
+// Pure sim-role config helpers, split out of `server.ts` (M13:
 // `WorldConfig`, `seedToHexU64` and `buildSimInstanceConfig` touch no `EngineInstance`/`instantiate`
 // (`loader.ts`), unlike the rest of `server.ts` (`wrapEngineInstance`/`createSimHost`). `client.ts`
 // (main thread) needs exactly these three to build the sim worker's own config for a local host,
@@ -31,7 +31,7 @@ export interface WorldConfig<Params = unknown> {
   cacheChunks?: number
   arenaBytes?: number
   actionRate?: { perSecond?: number; burst?: number }
-  /** docs/plan/31b-desync-hashes.md, dev and test: how much desync hashing the host does
+  /** M31b, dev and test: how much desync hashing the host does
    * (`host::SimConfig::hash_mode`): `'production'` (default: 0013's schedule), `'off'` or `'all'`
    * (every eligible chunk every frame, announced to clients in `Welcome`). The test harness
    * defaults to `'all'`; the Vite dev server sets `'all'`. Not part of 0009's shape. */
@@ -64,7 +64,7 @@ export function seedToHexU64(seed: string): string {
   return `0x${n.toString(16)}`
 }
 
-/** `WorldConfig` -> the sim role's `InstanceConfig` (docs/plan/13-sim-host-tick-loop.md, Scope
+/** `WorldConfig` -> the sim role's `InstanceConfig` (M13, Scope
  * "Sim-role config"). Pure: no instantiation, so the seed conversion is testable without a
  * module. */
 export function buildSimInstanceConfig(
@@ -80,13 +80,13 @@ export function buildSimInstanceConfig(
       maxModifiedTiles: cfg.params.maxModifiedTiles,
       maxActionGrowth: cfg.params.maxActionGrowth,
       cacheChunks: cfg.cacheChunks,
-      // docs/plan/22-persistence-log-and-snapshots.md steps 4-6 (Consumes: "M13 `WorldConfig.
+      // M22 steps 4-6 (Consumes: "M13 `WorldConfig.
       // buildHash` reaching the instance through M02's `InstanceConfig` in the `engine_init`
       // config"): plain lowercase hex (`build-game.ts`'s own `createHash('sha256')...digest('hex')`
       // shape), parsed by `SimConfig::build_hash` (`host/mod.rs`) into `Identity.build_hash`'s
       // first 128 bits.
       buildHash: cfg.buildHash,
-      // docs/plan/28-sessions-and-reconnect.md step 5: `WorldConfig.view` reaches `host::SimConfig`
+      // M28 step 5: `WorldConfig.view` reaches `host::SimConfig`
       // (`viewMaxTilesPerAxis`/`viewMaxChunks`, `#[serde(default)]` 256/128, 0010) -- previously
       // parsed by nothing (M15's own "Non-scope: Connections, subscriptions" carve-out, before a
       // real `Welcome` ever echoed these), so every world silently welcomed clients at the serde
@@ -95,7 +95,7 @@ export function buildSimInstanceConfig(
       // `#[serde(default)]` fills the gap exactly as before.
       viewMaxTilesPerAxis: cfg.view?.maxTilesPerAxis,
       viewMaxChunks: cfg.view?.maxChunks,
-      // docs/plan/31-rates-and-integrity.md step 3: `WorldConfig.bandwidth` reaches `host::SimConfig`
+      // M31 step 3: `WorldConfig.bandwidth` reaches `host::SimConfig`
       // (`Option<u32>`, 0010's defaults when unset: 16 KB/s soft cap, 48 KB/s refill, 128 KB burst).
       softCapBytesPerS: cfg.bandwidth?.softCapBytesPerS,
       chunkRefillBytesPerS: cfg.bandwidth?.chunkRefillBytesPerS,

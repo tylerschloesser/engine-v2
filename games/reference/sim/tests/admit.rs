@@ -1,5 +1,5 @@
 //! `admit_rejects_far_witness`, `admit_rejects_without_sample`, `admit_accepts_within_tolerance`
-//! (docs/plan/20b-reference-player-and-collect-ui.md Tests added): `Game::admit`'s own
+//! (M20b Tests added): `Game::admit`'s own
 //! `StartCollect` witness check (0001 "Witness-carrying actions" step 1), against a hand-built
 //! `PresenceTable` -- `admit` runs host-only and is never replayed (0001 Consequences), so it needs
 //! its own unit tests rather than scenario coverage.

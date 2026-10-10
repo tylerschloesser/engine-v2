@@ -1,4 +1,4 @@
-// `window.__check` (docs/plan/39f-device-auto-runner.md, "The check reporter contract") is page
+// `window.__check` (M39f, "The check reporter contract") is page
 // instrumentation for the fixture pages only: no production output carries it. The fixture app's own
 // build is the positive control (it must), the engine package's output and sources and the reference
 // game's release build must not. The bench build of `games/reference` (`dist-bench/`, never ships) is the

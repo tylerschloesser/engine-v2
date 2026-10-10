@@ -1,4 +1,4 @@
-// M34c step 5 (docs/plan/34c-reference-scripted-multiplayer.md Scope, "Counters"): what the two-player
+// M34c step 5 (M34c Scope, "Counters"): what the two-player
 // full game costs each client on the wire, against `budgets.json`.
 import { assertBudget } from 'engine/test'
 import { expect, test } from 'vitest'

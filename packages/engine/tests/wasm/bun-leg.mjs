@@ -32,7 +32,7 @@ const BUDGET_NAME = 'reference_state_budget_full (bun)'
 const ADAPTER_NAME = 'bun-adapter loopback'
 
 /**
- * The Bun half of decision B (fix round 3, docs/plan/06b-workers-and-spawn.md, Deviations): the
+ * The Bun half of decision B (fix round 3, M06b, Deviations): the
  * loader's detach check is feature-detected at module load (`ArrayBuffer.prototype.detached`, with
  * the `byteLength === 0` fallback), and a runtime where the detection picked the wrong branch would
  * never rebuild its views after `memory.grow` -- silently, since every read would then come from a
@@ -101,7 +101,7 @@ function manualTimer() {
   }
 }
 
-/** `fx-puts`'s own idle-100 golden (docs/plan/13-sim-host-tick-loop.md step 3). docs/plan/
+/** `fx-puts`'s own idle-100 golden (M13 step 3). docs/plan/
  * 27-server-entrypoint-and-netcode-harness.md, Order of work 1 ("Bun: M02's plain script,
  * extended"): ticked through a real `createWorldServer` with `memoryStorage()`, the Bun leg's own
  * counterpart of `puts.test.ts`'s `wasm_idle_100_matches_native` -- the checkpoint hash is read
@@ -272,7 +272,7 @@ async function runReferenceHarnessLegs() {
   return legs
 }
 
-/** `engine/server/bun` on a real `Bun.serve` (docs/plan/35b-bun-and-deno-adapters.md): the scenario
+/** `engine/server/bun` on a real `Bun.serve` (M35b: the scenario
  * `adapter-loopback.mjs` shares with the Deno test. */
 async function runBunAdapterLeg() {
   const dir = await mkdtemp(join(tmpdir(), 'bun-adapter-'))

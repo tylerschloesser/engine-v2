@@ -1,4 +1,4 @@
-// `createBytePump` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Seams; docs/decisions/
+// `createBytePump` (M27, Seams; docs/decisions/
 // 0015-threads-memory-and-topology.md §1): the net worker's pump core, between M06 rings
 // (`SabSet.uplink`/`downlink`) and a `Connection` (docs/decisions/0009-transport-and-hosting.md).
 // From the ring pair's own naming (`worker/client-net.ts`): `uplink` is produced by a client
@@ -9,7 +9,7 @@
 // worker, no `Atomics.wait`) -- "the net worker's pump core" reused directly rather than
 // reimplemented, matching this milestone's own "one thread, stepped actors" Planning decision.
 //
-// docs/plan/29-net-worker-and-reference-server.md, this cut's own step 5 (Deviations, carried
+// M29, this cut's own step 5 (Deviations, carried
 // forward from the M27 gate note and repeated at steps 1-2/3-4): this module allocated per message
 // (`.slice()` on every uplink drain, `.slice()` per downlink push) -- true while it ran only inside
 // `HeadlessClient`, outside `.claude/rules/hot-paths.md` (the server is exempt, 0016). Wrapped in a

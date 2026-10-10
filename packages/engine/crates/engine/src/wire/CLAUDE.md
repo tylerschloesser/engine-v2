@@ -1,4 +1,4 @@
-# wire (docs/decisions/0011, docs/plan/14-wire-framing.md)
+# wire (docs/decisions/0011, M14
 
 Frame header, sections, chunk-coordinate lists, overlay runs, chunk snapshots, action results,
 uplink batch. Every writer is generic over `ByteSink` and allocates nothing; every reader borrows
@@ -20,7 +20,7 @@ chunk coord + `n varint` x `(index-gap varint, tile u32)`), then a flat entity-o
 section's end (`op u8`: `0 Put id value`, `1 Gone id`). **ActionResults**: `n varint` x
 `(seq varint, tag u8)`: `0 Applied`, `1 Rejected::Game+Codec`, `2 Rejected::Engine+u8`
 (`EngineReject`: `RateLimited=0, StateBudgetFull=1, EngineFault=2`); `Ack.tick` = frame tick.
-**Presence** (section 8, docs/plan/19-presence-channel.md steps 4-6): a flat entry list to the
+**Presence** (section 8, M19 steps 4-6): a flat entry list to the
 section's end (no leading count, `wire/presence.rs`'s own module doc comment), ascending
 `PlayerId`: `who varint` · `tag u8` (`0 Sample`, `1 Gone`); `Sample` continues `age_ticks varint`
 · `Codec G::Presence` (no length prefix -- the codec's own decode boundary is exact). `age_ticks =

@@ -1,4 +1,4 @@
-// docs/plan/27-server-entrypoint-and-netcode-harness.md, Exit criterion 3: "No `node:` import
+// M27, Exit criterion 3: "No `node:` import
 // outside `src/server-node.ts` and M22b's fs storage (grep test)". A source scan, not a parser
 // (the same technique `no-wasm-instantiate.test.ts` uses), over every non-test `.ts` file in `src/`.
 // `vite.ts` (the Vite plugin) and `build-game.ts` (`buildGame()`, the cargo-driving build pipeline,

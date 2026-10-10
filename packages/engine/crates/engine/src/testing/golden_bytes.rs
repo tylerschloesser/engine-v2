@@ -1,4 +1,4 @@
-//! Native byte-format goldens (Planning decisions 6 of docs/plan/05-codec-and-state-hash.md):
+//! Native byte-format goldens (Planning decisions 6 of M05:
 //! lower-case hex, 32 bytes per line, checked in beside the test that produced them. Distinct from
 //! M02's checkpoint-hash `golden.json`, which is written only by `pnpm golden` from the `.wasm`
 //! under Node; these are written only by `pnpm golden:bytes`, natively, under `GOLDEN_BLESS=1`.

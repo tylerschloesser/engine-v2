@@ -1,4 +1,4 @@
-// `buildGame({ wasmOpt })` (docs/decisions/0017 §5; docs/plan/35-packaging-and-adapters.md): `wasm-opt`
+// `buildGame({ wasmOpt })` (docs/decisions/0017 §5; M35: `wasm-opt`
 // runs when asked and found on `PATH`, hashing happens afterwards, and `game.json` says so
 // (`wasmOpt`). Requested but missing: one named warning, `wasm-opt-missing`, and the build goes on.
 // `fx-persist` on the release profile is the module: no other test builds that directory.

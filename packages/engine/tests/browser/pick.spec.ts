@@ -1,4 +1,4 @@
-// docs/plan/18-picking-and-overlay.md Tests added (this cut's own share, steps 1-2): `pick.
+// M18 Tests added (this cut's own share, steps 1-2): `pick.
 // tap_reports_entity_pick_id`, `pick.hover_once_per_raf_on_change`, `pick.
 // matches_interpolated_frame_on_screen`. Drives `real-camera.html` (already the reused page for
 // every real-DOM/injection input test, `semantic.spec.ts`'s own precedent): a real `createClient()`,

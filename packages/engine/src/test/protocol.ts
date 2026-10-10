@@ -11,7 +11,7 @@ export type ToWorker =
       role: Role
       config: InstanceConfig
       sab: SharedArrayBuffer
-      /** M04 (docs/plan/04-zero-gc-harness.md, Seams): a fixed block copied SAB -> `Rx` and a fixed
+      /** M04 ( Seams): a fixed block copied SAB -> `Rx` and a fixed
        * block copied `Tx` -> SAB, through view pairs created here at setup. Absent for a worker that
        * only needs plain `sim_tick` (M03's `stepping.html`). */
       rxTx?: { rx: SharedArrayBuffer; tx: SharedArrayBuffer }
@@ -21,7 +21,7 @@ export type ToWorker =
   | { type: 'admit'; bytes: Uint8Array }
   | { type: 'memory' }
   | { type: 'memGrows' }
-  /** M18c (docs/plan/18c-stepping-hash-under-load.md): diagnostic only -- the worker's own count of
+  /** M18c ( diagnostic only -- the worker's own count of
    * ticks it has actually run (`harness-worker.ts`'s `ticksRun`, incremented once per `coreTick()`
    * call), independent of the step block's `Req`/`Ack` words so a lost or duplicated tick shows up
    * even when `Req`/`Ack` still agree. */

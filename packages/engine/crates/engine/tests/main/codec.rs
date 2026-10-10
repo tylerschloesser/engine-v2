@@ -1,6 +1,6 @@
 //! Black-box `Codec` tests: only the public API of `engine::{bytes, codec, hash}`. The tests that
 //! need `codec::encode_to_with`'s crate-private `strict` switch live inline in `src/codec.rs`
-//! (docs/plan/05-codec-and-state-hash.md, Order of work 3 and 7).
+//! (M05, Order of work 3 and 7).
 
 use engine::codec::{self, CodecError};
 use engine::hash::{self, Fnv64};

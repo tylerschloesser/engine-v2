@@ -1,4 +1,4 @@
-// `sim`-kind worker body (docs/plan/13-sim-host-tick-loop.md, Order of work 4): a real `SimHost`
+// `sim`-kind worker body (M13, Order of work 4): a real `SimHost`
 // (`server.ts`) over the instantiated `role=sim` instance, paced by `AtomicsTimer` on top of
 // `runBlockingLoop`'s own `timeoutMs` (0015 §2's "sim worker" row) -- the worker blocks in
 // `Atomics.wait` between ticks instead of spinning, and M06b's park/resume keeps working unchanged
@@ -80,7 +80,7 @@ import type { LoopState, Shell } from './shell.js'
 import { handleTestCall } from './test-call.js'
 import { asNumberList } from './test-trap.js'
 
-/** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: the Web Lock name a persisted world's
+/** M23 steps 3-4: the Web Lock name a persisted world's
  * sim worker holds for its whole life (Planning decision 6: "Import ... takes lock `world:<id>` for
  * the duration" -- the same convention, so a running world and a pending import of its own id
  * contend on the identical lock). */
@@ -111,7 +111,7 @@ function requestWorldLock(worldId: string, waitMs: number): Promise<boolean> {
   })
 }
 
-/** docs/plan/23-persistence-opfs-and-lifecycle.md steps 1-2 (Deviations): OPFS's own probe --
+/** M23 steps 1-2 (Deviations): OPFS's own probe --
  * `opfsStorage` rejects with `OpfsUnavailable` on a browser with no working OPFS (0005 "Browser":
  * "No OPFS (Safari private mode): an in-memory adapter and `durable: false`"). Returns the adapter
  * plus whether it is durable, never throwing for that one, expected failure mode. */
@@ -128,7 +128,7 @@ async function openWorldStorage(
   }
 }
 
-/** docs/plan/23-persistence-opfs-and-lifecycle.md step 6, `neg_control_snapshot_allocates`:
+/** M23 step 6, `neg_control_snapshot_allocates`:
  * `globalThis` property write, not a bare local -- the same reasoning `worker/gc-hook.ts`'s own
  * `sinkHolder` doc comment gives (a bundler tree-shakes an unread local all the way down to
  * nothing; a write to a property it cannot prove has no outside reader survives). */
@@ -178,7 +178,7 @@ async function readStorageStatus(durable: boolean): Promise<StorageStatus> {
 }
 
 /**
- * docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Rules and traps ("serialize them"): one
+ * M23 step 5, Rules and traps ("serialize them"): one
  * FIFO promise chain per sim worker, shared by `sim-pause`/`sim-resume` and every export/import/
  * delete request, so the two families never interleave their own `SimHost`/`Storage` calls -- an
  * export requested while a hidden-boundary pause is mid-flight (or the reverse) always runs one to
@@ -194,7 +194,7 @@ function makeOpQueue(): (fn: () => Promise<void>) => void {
 }
 
 /**
- * docs/plan/23-persistence-opfs-and-lifecycle.md step 5: the export/import/delete handler, shared
+ * M23 step 5: the export/import/delete handler, shared
  * between a normally-loaded world and one whose `Persistence.open` itself failed (Deviations,
  * `'load-failed'` -- `persistence`/`simHost` are both `null` there, so this closes only over
  * `storage`/`runningWorldId`, never touching either). `storage`'s own OPFS root is shared by every
@@ -314,7 +314,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const newInstance = await instantiateFactoryForSetup(shell, message, Role.Sim)
   const gcHook = message.test?.gcHook === true
 
-  // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: "Sim worker start-up order: Web Lock
+  // M23 steps 3-4: "Sim worker start-up order: Web Lock
   // -> OPFS probe -> Persistence.open -> tick loop", gated entirely on `message.world` (present only
   // for a persisted local host, `client.ts`'s own `host.persist` doc comment) -- every existing
   // `sim`-kind test/dev page omits `host.persist`, so `message.world` is `undefined` there and this
@@ -324,7 +324,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   let inst = newInstance()
   let persistence: Persistence | undefined
   let initialTicksRun = 0
-  // docs/plan/24b-upgrade-and-migration.md: set only when `Persistence.open` itself took the
+  // M24b: set only when `Persistence.open` itself took the
   // upgrade path -- fires `simHost.onRecovered({reason: 'upgrade', ...})` once, right after
   // `simHost` exists (M24's own `onRecovered` field is set by the caller, never before then).
   let openedUpgrade: { reason: 'direct' | 'migrated'; droppedTailRecords: number } | undefined
@@ -334,7 +334,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // OPFS (`durable === true`; a `memoryStorage()` fallback has no such queue, `pendingAsync()` is
   // OPFS-only).
   let opfsAdapter: OpfsStorage | undefined
-  // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: kept for the export/import/delete
+  // M23 step 5: kept for the export/import/delete
   // handler below (built once persistence has actually opened) -- distinct from `opfsAdapter`
   // (`undefined` on the `noOpfs`/memory-storage fallback, where export/import/delete still work).
   let worldStorage: Storage | undefined
@@ -342,7 +342,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
 
   if (message.world) {
     const world = message.world
-    // A respawned worker (docs/plan/37-robustness-events.md step 2) takes the lock the dead one held:
+    // A respawned worker (M37 step 2) takes the lock the dead one held:
     // main terminated it a moment ago, and the browser releases the lock when that thread is gone,
     // which is not instant: the same wait as a start after a reload.
     const locked = await requestWorldLock(world.worldId, world.lockWaitMs ?? WORLD_LOCK_WAIT_MS)
@@ -382,7 +382,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         created: opened.outcome === 'created',
       })
     } catch (e) {
-      // docs/plan/23-persistence-opfs-and-lifecycle.md step 5 (Deviations, `'load-failed'`): unlike
+      // M23 step 5 (Deviations, `'load-failed'`): unlike
       // `world-busy` above, this worker's own OPFS/Web-Lock handles are real and undamaged -- only
       // the *load* failed. Deliberately broad (any error from `Persistence.open`, not only
       // `WorldLoadError`'s own identity mismatch): a corrupt manifest (`JSON.parse` itself throwing
@@ -394,7 +394,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       // non-ticking loop instead of dying like `world-busy` does.
       const kind = e instanceof WorldLoadError ? e.kind : 'load-error'
       const message = e instanceof Error ? e.message : String(e)
-      // docs/plan/24b-upgrade-and-migration.md: `kind === 'incompatible'` is carved out of the
+      // M24b: `kind === 'incompatible'` is carved out of the
       // broad `'load-failed'` bucket above into its own `'save-incompatible'` code (Traps: "other
       // open failures stay 'load-failed'") -- both keep this same degraded-worker fallback
       // (`exportWorld`/`deleteWorld` still reachable), only the reported code/detail differ.
@@ -429,12 +429,12 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // never on an uninterrupted pass; `SimHost`'s resync (0030) is the other reader.
   const atomicsTimer = createAtomicsTimer(systemClock)
   const simInstance = wrapEngineInstance(inst)
-  // docs/plan/24-recovery-and-migration.md: `SimHost.recover()`'s own dependencies -- `instance` is
+  // M24: `SimHost.recover()`'s own dependencies -- `instance` is
   // kept in sync by `recover()` itself on every successful recovery, so this file's own `testCall`
   // fallback (`handleTestCall`, below) always reaches the *current* raw instance instead of a stale,
   // dead one after a recovery.
   const recoveryDeps: RecoveryDeps = { instance: inst, newInstance }
-  // docs/plan/28-sessions-and-reconnect.md step 5: the real handshake, wired for this worker's own
+  // M28 step 5: the real handshake, wired for this worker's own
   // linked (single-player) topology too -- Scope: "single-player takes the same path", exit
   // criterion 1: "no provisional-join code path remains in the sim host" (of the two production
   // call sites, `createWorldServer` already wired this in steps 1-2; this was the one left over,
@@ -467,7 +467,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       sessions,
     }
   }
-  // docs/plan/28b-reconnect-and-lifecycle.md step 4 gate fix (real CI regression, found live):
+  // M28b step 4 gate fix (real CI regression, found live):
   // "a test/dev page normally never calls [`start()`]" (this file's own module doc comment, and
   // the `simHost.start()` gate below) used to be the *only* thing standing between a test/dev page
   // and real-time `AtomicsTimer` pacing -- true right up until step 4 added `host.resume()`'s own
@@ -501,10 +501,10 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     recoveryDeps,
     handshake,
   )
-  // docs/plan/24-recovery-and-migration.md: the fatal report, through M06b's `shell.fatal`, with the
+  // M24: the fatal report, through M06b's `shell.fatal`, with the
   // tick prefixed (Scope: "wiring into ... the sim worker (fatal report via `shell.fatal` with the
   // tick prefixed)").
-  // docs/plan/37-robustness-events.md step 3: the world is wedged (or its storage failed), which is
+  // M37 step 3: the world is wedged (or its storage failed), which is
   // not the worker dying. Say so with `sim-fatal` (main raises `client.onFatal`) and stay alive: the
   // body below runs no more ticks, no file is touched, and `exportWorld` still reaches the storage.
   let fatalSeen = false
@@ -512,19 +512,19 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     fatalSeen = true
     shell.post({ type: 'sim-fatal', tick: f.tick, message: f.message })
   }
-  // docs/plan/28b-reconnect-and-lifecycle.md step 2 (0005 Panic recovery 2): the same per-call-site
+  // M28b step 2 (0005 Panic recovery 2): the same per-call-site
   // wiring `server.ts`'s own `createWorldServer` uses -- every successful `recover()` (a live panic,
   // during single-player play) bumps the epoch and resyncs the one linked connection with it.
   simHost.onRecovered = () => {
     simHost.bumpEpoch()
     simHost.resyncAll()
   }
-  // docs/plan/24b-upgrade-and-migration.md: fired once, for the upgrade `Persistence.open` itself
+  // M24b: fired once, for the upgrade `Persistence.open` itself
   // just performed (never a post-panic recovery) -- the real production handler just wired above
   // is already live by the time this runs, so this is not a no-op (only relevant here since
   // load-time `Persistence.open` decides the upgrade path before any connection exists to resync --
   // `resyncAll()` itself is a no-op with none open yet).
-  // docs/plan/37-robustness-events.md step 2: this worker replaces one that died. The ordinary load
+  // M37 step 2: this worker replaces one that died. The ordinary load
   // path above has already run (snapshot and log tail); a new session epoch tells the clients their
   // old one is over (0005 Panic recovery 2).
   if (message.respawn === true) simHost.bumpEpoch()
@@ -536,7 +536,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     })
   }
 
-  // docs/plan/15b-ring-connection-and-replica-rendering.md Scope: "the sim worker creates one
+  // M15b Scope: "the sim worker creates one
   // RingConnection at startup and accepts it" -- gated on `message.link` (Orchestrator ruling 1:
   // "the sim worker accepts a connection when the SAB set it boots with actually carries a client
   // link, and not otherwise"). Steps 1-3 left this line out entirely because every existing
@@ -564,7 +564,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   if (connection) simHost.accept(connection)
 
   let lastStepReq = Atomics.load(shell.control.words, CB_SIM_STEP_REQ)
-  // docs/plan/23-persistence-opfs-and-lifecycle.md step 6: `CB_FORCE_SNAPSHOT_REQ`'s own "last seen"
+  // M23 step 6: `CB_FORCE_SNAPSHOT_REQ`'s own "last seen"
   // counter, the same diff-against-last-value shape as `lastStepReq` above.
   let lastForceSnapshotReq = Atomics.load(shell.control.words, CB_FORCE_SNAPSHOT_REQ)
   // ADR 0030's `AtomicsTimer.poll()` fix (Deviations, "the highest-risk item"; Orchestrator ruling
@@ -601,7 +601,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // made (kept as one flag, not two independent conditions that could drift).
   if (pacingEnabled) simHost.start()
 
-  // `TestFlags.killSimWorkerAtTick` / `failStorageAtTick` (docs/plan/37-robustness-events.md): the
+  // `TestFlags.killSimWorkerAtTick` / `failStorageAtTick` (M37: the
   // first listed tick is this worker's; `client.ts` hands a respawned worker the rest.
   const killAtTick = asNumberList(message.test?.killSimWorkerAtTick)?.[0] ?? null
   const failStorageAt = message.test?.failStorageAtTick ?? null
@@ -609,10 +609,10 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const leakyAppendArmed = message.test?.leakyStorageAppend === true
   // M36's bench HUD (`CB_SIM_TICK_US`); only a bench page's setup carries it.
   const timing = message.test?.timing === true
-  // docs/plan/39o: the parts of the timed pass (`SimHost.profile`), preallocated once.
+  // M39o: the parts of the timed pass (`SimHost.profile`), preallocated once.
   const profile = timing ? new Int32Array(PROFILE_SLOTS) : null
   if (profile) simHost.profile = profile
-  // docs/plan/39y: `engine.bench_mark(phase)` of a `bench-phases` module attributes the time since
+  // M39y: `engine.bench_mark(phase)` of a `bench-phases` module attributes the time since
   // the previous call to `phase`; slot `SIM_PHASES` holds that previous call's time. Preallocated.
   const phaseMs = timing ? new Float64Array(SIM_PHASES + 1) : null
   if (phaseMs) {
@@ -647,7 +647,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         lastStepReq = stepReq
         simHost.stepTick(delta)
       }
-      // docs/plan/23-persistence-opfs-and-lifecycle.md step 6, Planning decision 1: `engine/test.
+      // M23 step 6, Planning decision 1: `engine/test.
       // forceSnapshot()`'s own request word -- a real, deterministic snapshot inside a zero-GC page's
       // measured window, bypassing `sim_dirty()`'s own cadence guard the periodic path uses (this is a
       // *test* forcing exactly one snapshot event, not the production cadence). A no-op when this
@@ -709,7 +709,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       // one created by this call (`.claude/rules/hot-paths.md`).
       const pending = opfsAdapter?.pendingAsync()
       if (pending) shell.runAsync(pending)
-      // docs/plan/28-sessions-and-reconnect.md step 5 (`SimHost.hasInFlightHandshakes`'s own doc
+      // M28 step 5 (`SimHost.hasInFlightHandshakes`'s own doc
       // comment has the mechanism): the exact same "leave the Atomics.wait-blocked loop, await,
       // re-enter" pattern as `pendingAsync()` above, for a secret digest/session-table write a
       // valid `Hello` just started off this same pass (`connection.drainUplink()`, above).
@@ -717,7 +717,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
         shell.runAsync(() => simHost.handshakesSettled())
       }
     } catch (e) {
-      // docs/plan/24-recovery-and-migration.md (0005 Panic recovery 2): a trap anywhere in this
+      // M24 (0005 Panic recovery 2): a trap anywhere in this
       // pass (an admit, a tick, a snapshot -- any `SimInstance`/`Persistence` call whose underlying
       // export threw) no longer falls through to `runBlockingLoop`'s own `shell.fatal` catch
       // (`worker/shell.ts`'s `runBodyOnce`): it is caught here first and handed to `SimHost.
@@ -738,7 +738,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
     }
   }
 
-  // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: `sim-pause`/`sim-resume`, present
+  // M23 steps 3-4: `sim-pause`/`sim-resume`, present
   // only for a persisted world (`message.world`, same gate as the startup order above) --
   // `exactOptionalPropertyTypes` (root `tsconfig.base.json`) rejects an explicit `undefined` for an
   // optional field, so the field itself is only ever added via this conditional spread, never set to

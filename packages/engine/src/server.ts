@@ -1,11 +1,11 @@
-// The sim host (docs/plan/13-sim-host-tick-loop.md): one TypeScript module driving a `role=sim`
+// The sim host (M13: one TypeScript module driving a `role=sim`
 // instance identically in the sim worker and on a server (docs/decisions/0015 "Server" row) --
 // only `Connection`, `Storage` and the clock differ. Shared module: no `node:`/DOM imports here
 // (packages/engine/src/CLAUDE.md).
 //
 // Types `Connection`, `MsgClass`, `HostServices`, `WorldConfig`, `Storage` are declared exactly as
 // docs/decisions/0009-transport-and-hosting.md / docs/decisions/0005-persistence-and-recovery.md.
-// `storage` was unused through M13-M21b; docs/plan/22-persistence-log-and-snapshots.md steps 4-6
+// `storage` was unused through M13-M21b; M22 steps 4-6
 // make it real (`createSimHost` below builds a `Persistence` from it).
 
 import { RegionId, Role, Status } from './abi.js'
@@ -56,14 +56,14 @@ import { buildSimInstanceConfig, type WorldConfig } from './sim-config.js'
 import type { Storage } from './storage/types.js'
 import { worldKeys } from './storage/types.js'
 
-// `host/recovery.ts` (docs/plan/24-recovery-and-migration.md): re-exported unchanged, same
+// `host/recovery.ts` (M24: re-exported unchanged, same
 // "no renamed Provides" convention as the re-exports above.
 export type { RecoveryDeps } from './host/recovery.js'
 // `sim-config.ts`'s own pure helpers (Seams: no renamed Provides -- still `server.ts`'s own export
 // surface, just built elsewhere so `client.ts` can import them without also importing `loader.ts`,
 // `main.no_wasm_instantiate`'s own rule).
 export { buildSimInstanceConfig, seedToHexU64, type WorldConfig } from './sim-config.js'
-// `storage/archive.ts` (docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: "TS functions
+// `storage/archive.ts` (M23 step 5, Seams: "TS functions
 // from `engine/server`"): re-exported unchanged, same "no renamed Provides" convention.
 export {
   ArchiveFormatError,
@@ -104,7 +104,7 @@ export interface HostServices {
   storage: Storage
   clock: { now(): number }
   timer: { every(ms: number, fn: () => void): () => void }
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 4: one-shot timers for the grace/idle world
+  /** M28b step 4: one-shot timers for the grace/idle world
    * lifecycle (`host/lifecycle.ts`) -- distinct from `timer.every` above, which paces the tick
    * loop alone and is stubbed to a no-op under `engine/test`'s harness (ticking is driven
    * manually there). Grace/idle timers must still fire deterministically under a virtual clock, so
@@ -143,7 +143,7 @@ export interface WorldServer {
 
 /** `host::MAX_CONNS` (`host::warm::MAX_VIEWS`, `crates/engine/src/host/mod.rs`): the sim role's
  * own fixed connection-table size, one cap reused rather than two (M15 Deviations). Not read from
- * config or any ABI export (docs/plan/15b-ring-connection-and-replica-rendering.md Deviations:
+ * config or any ABI export (M15b Deviations:
  * `ConnId` is a plain, host-picked `u32 < MAX_CONNS`, and `host::Host::connect` enforces this
  * bound itself with a native `assert!`) -- mirrored here as a plain constant, the same relationship
  * `DEFAULT_TICK_HZ` already has to `TickRate::HZ_20`. */
@@ -162,7 +162,7 @@ const NO_SUPERSEDED_CONN = 0xffff_ffff
 export const MAX_CATCHUP_TICKS = 5
 /** 0008 §2 "Sim host warmer": the between-tick warm budget. */
 export const WARM_BUDGET_MS = 2
-/** docs/plan/13b-tick-timing-allocation.md (ADR amending M13): how many ticks pass between the
+/** M13b (ADR amending M13): how many ticks pass between the
  * real clock reads that drive `tickOverruns`/`ticksDropped`/the chunk warmer -- see `resync`'s own
  * doc comment for why this number and the byte math behind it. */
 export const RESYNC_TICKS = 8
@@ -185,7 +185,7 @@ const DEFAULT_TICK_HZ = 20
 /**
  * A thin, easily-fakeable seam over the sim-role ABI exports, distinct from the full
  * `EngineInstance` (`call0`/regions/`mem`/...). "a fake instance under Vitest" (Tests added, step
- * 2 of docs/plan/13-sim-host-tick-loop.md) means a hand-written object shaped like this, not a
+ * 2 of M13 means a hand-written object shaped like this, not a
  * hand-rolled `EngineInstance`; `wrapEngineInstance` below is the real adapter step 3's
  * WASM-under-Node test drives instead.
  */
@@ -203,7 +203,7 @@ export interface SimInstance {
   simSealFrame(): { len: number; bytes?: Uint8Array }
   /** 16-digit lowercase hex, `EngineInstance.readU64Hex`'s own format. */
   simHash(): string
-  /** docs/plan/27-server-entrypoint-and-netcode-harness.md, M27 gate round 2: `Host::region_hash
+  /** M27, M27 gate round 2: `Host::region_hash
    * (conn)` (`sim_region_hash`, `host/mod.rs`) -- the chunks `conn` is subscribed to plus its own
    * `Global`/`Player`, 16-digit lowercase hex; `0000000000000000` if `conn` is not connected or
    * the sim has not been genesis'd (`region_hash`'s own doc comment). */
@@ -214,48 +214,48 @@ export interface SimInstance {
    * real game, `20` (the trait default) for anything that never overrides it. Read once, by
    * `createSimHostFromInstance`, at construction -- not on every tick. */
   tickHz(): number
-  /** docs/plan/15b-ring-connection-and-replica-rendering.md: admits `conn` into the sim role's
+  /** M15b: admits `conn` into the sim role's
    * connection table (`sim_connect`, forwarding to `host::Host::connect`). `Status` (numeric). */
   simConnect(conn: number): number
-  /** docs/plan/24-recovery-and-migration.md, Traps ("Connections stay open across recovery"):
+  /** M24, Traps ("Connections stay open across recovery"):
    * re-attaches `conn` (`sim_reattach`, forwarding to `host::Host::reattach`) with the same
    * deterministic `PlayerId` a live `simConnect` would assign, but queues no `Record::Player` event
    * and touches no game state -- recovery's own call, distinct from `simConnect`. `Status`
    * (numeric). */
   simReattach(conn: number): number
-  /** docs/plan/24-recovery-and-migration.md fix round 1 (Planning decisions 2): queues
+  /** M24 fix round 1 (Planning decisions 2): queues
    * `Rejected(Engine(EngineFault))` for `seq` directly onto `conn`'s own (already-reattached)
    * connection and raises its dedup floor to at least `seq` (`sim_fault_ack`, forwarding to
    * `host::Host::fault_ack`). `Status` (numeric); tolerates an unknown `conn`. */
   simFaultAck(conn: number, seq: number): number
-  /** docs/plan/15b-ring-connection-and-replica-rendering.md: frees `conn`'s slot (`sim_disconnect`,
+  /** M15b: frees `conn`'s slot (`sim_disconnect`,
    * `host::Host::disconnect`). `Status` (numeric); tolerates an unknown/already-freed `conn`. */
   simDisconnect(conn: number): number
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 4: `sim_log_disconnected(player)` -- queues
+  /** M28b step 4: `sim_log_disconnected(player)` -- queues
    * `Record::Player { Disconnected }` for `player`, delivered at the next `tick()`, independent of
    * any live connection (`host::Host::log_disconnected`). `Status` (numeric). */
   simLogDisconnected(player: number): number
-  /** docs/plan/15b-ring-connection-and-replica-rendering.md: copies `bytes` (the whole buffer --
+  /** M15b: copies `bytes` (the whole buffer --
    * only its first `len` bytes are read on the Rust side, `Host::sim_admit`'s own contract) into
    * the sim role's own `Rx` region and calls `sim_admit(conn, len)`. `Status` (numeric). */
   simAdmit(conn: number, bytes: Uint8Array, len: number): number
-  /** docs/plan/15b-ring-connection-and-replica-rendering.md: builds `conn`'s frame into the sim
+  /** M15b: builds `conn`'s frame into the sim
    * role's own `Tx` region (`sim_build_frame`), returning its byte length (`0` = nothing to say,
    * `Host::build_frame`'s own "nothing to say" convention) -- throws on a negative/error status,
    * the same convention `simSealFrame` uses for `sim_seal_frame`. `bytes` is a view over the `Tx`
    * region valid only until the next call that touches it (the same "engine-owned buffer" contract
    * 0009's `Connection.send` already carries); present only when `len > 0`. */
   simBuildFrame(conn: number): { len: number; bytes?: Uint8Array }
-  /** docs/plan/15b-ring-connection-and-replica-rendering.md: the sim role's own `Rx`/`Tx` region
+  /** M15b: the sim role's own `Rx`/`Tx` region
    * capacities in bytes, read once so a `RingConnection`'s preallocated buffers can be sized to
    * match exactly instead of a magic number duplicated between Rust and TS. `0` when the region is
    * absent (a role/instance with no such region, e.g. a hand-rolled fixture `SimInstance`). */
   rxBytes(): number
   txBytes(): number
-  /** docs/plan/28-sessions-and-reconnect.md: `sim_attach(conn, len)` -- `input` is the whole
+  /** M28: `sim_attach(conn, len)` -- `input` is the whole
    * handshake input (`host/handshake.ts`'s `buildAttachInput`), copied into the sim role's own
    * `Rx` region; returns `Welcome` bytes (a view over `Tx`, valid only until the next call that
-   * touches it) or throws on a negative/malformed status. docs/plan/28-sessions-and-reconnect.md
+   * touches it) or throws on a negative/malformed status. M28
    * steps 3-5: `supersededConn` is the other, already-attached `ConnId` this call silently freed
    * because it shares this connection's own `PlayerId` (0013 "the old connection gets
    * `Bye{Superseded}`"), `undefined` when nothing was freed. */
@@ -263,20 +263,20 @@ export interface SimInstance {
     conn: number,
     input: Uint8Array,
   ): { len: number; bytes?: Uint8Array; supersededConn?: number }
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: `sim_resync(conn, epoch)` -- sends a fresh
+  /** M28b step 2: `sim_resync(conn, epoch)` -- sends a fresh
    * `Welcome` on an already-open connection, carrying the host's new `epoch`. Returns `Welcome`
    * bytes (a view over `Tx`, valid only until the next call that touches it) or throws on a
    * negative/malformed status (an unknown `conn`, which `SimHost.resyncAll()` never passes: it
    * only ever iterates its own open connection table). */
   simResync(conn: number, epoch: number): { len: number; bytes?: Uint8Array }
-  /** docs/plan/28-sessions-and-reconnect.md: frees `conn`'s slot (`sim_detach`, same effect as
+  /** M28: frees `conn`'s slot (`sim_detach`, same effect as
    * `sim_disconnect`). `Status` (numeric); tolerates an unknown/already-freed `conn`. */
   simDetach(conn: number): number
-  /** docs/plan/34-reference-multiplayer.md (`ABI_VERSION` 38): the presence sample the `simDetach`
+  /** M34 (`ABI_VERSION` 38): the presence sample the `simDetach`
    * just before removed with its connection (`G::Presence`'s codec bytes), `null` when it removed
    * none. Valid only until the next call that touches `Result`. Optional: a test double may omit it. */
   simDetachedPresence?(): Uint8Array | null
-  /** docs/plan/28-sessions-and-reconnect.md: `1`/`0`, whether this world's own `Store` already has
+  /** M28: `1`/`0`, whether this world's own `Store` already has
    * a player slot for `player` (`sim_has_player`). */
   simHasPlayer(player: number): number
 }
@@ -375,7 +375,7 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
       if (raw === 0) return { len: 0 }
       const txRegion = inst.region(RegionId.Tx)
       if (!txRegion) throw new Error('sim_attach: len > 0 but the Tx region is absent')
-      // docs/plan/28-sessions-and-reconnect.md steps 3-5: `sim_attach`'s own contract widened
+      // M28 steps 3-5: `sim_attach`'s own contract widened
       // (`ABI_VERSION` 27 -> 28) -- one LE `u32` at `Result` offset 0, `0xFFFFFFFF` = "nothing
       // superseded", read right after a successful call (`abi/mod.rs`'s own doc comment: "a
       // second, sequential borrow ... after the `Tx` borrow above has ended").
@@ -424,13 +424,13 @@ export interface SimHost {
   /** Runs `sim_genesis()` once (a second `start()` after `stop()` does not re-run it) and arms
    * the pacing timer. */
   start(): void
-  /** docs/plan/22b-persistence-load-and-fs.md step 3: disarms the pacing timer, then (0005
+  /** M22b step 3: disarms the pacing timer, then (0005
    * Cadence: "at every clean boundary the host can detect") snapshots if dirty, prunes old
    * snapshots and awaits `flush()` when a `Persistence` is wired in -- resolves once everything is
    * durable. Counters are left as they are. A `SimHost` with no `persistence` (`worker/sim.ts`'s
    * own real topology, still unwired: this milestone's own Deviations) resolves immediately. */
   stop(): Promise<void>
-  /** docs/plan/22b-persistence-load-and-fs.md step 3: disarms the pacing timer (0005: "a paused
+  /** M22b step 3: disarms the pacing timer (0005: "a paused
    * host stops calling `sim_tick`, nothing is logged"), then the same snapshot-if-dirty/prune/flush
    * sequence as `stop()` (0013 World lifecycle: zero-player pause). The paused wall-clock interval
    * is invisible to `resume()`'s pacing. */
@@ -442,17 +442,17 @@ export interface SimHost {
    * pacing timer entirely (a manual driver for tests and `engine/test`'s `stepTick`). */
   stepTick(n?: number): void
   hash(): string
-  /** docs/plan/27-server-entrypoint-and-netcode-harness.md, M27 gate round 2: `SimInstance.
+  /** M27, M27 gate round 2: `SimInstance.
    * simRegionHash(conn)`, unwrapped -- the live per-connection region hash `worldServerTestHandle`
    * exists to reach (0020 §8: "per-region state hashes at any tick"). */
   regionHash(conn: number): string
-  /** docs/plan/28-sessions-and-reconnect.md Seams (`serverInternals(server).handshakesSettled()`
+  /** M28 Seams (`serverInternals(server).handshakesSettled()`
    * is a thin wrapper over this): resolves once every currently in-flight secret digest/allocate
    * has settled. Consuming those into a real `sim_attach` + `Welcome` still waits for the next
    * tick boundary (`pumpHandshakes`) -- a caller wants a tick of its own after this resolves, not
    * instead of it. Resolves immediately when `handshake` was never given. */
   handshakesSettled(): Promise<void>
-  /** docs/plan/28-sessions-and-reconnect.md step 5: whether any secret digest/allocate is
+  /** M28 step 5: whether any secret digest/allocate is
    * currently in flight -- a plain sync read (`inFlightHandshakes.size > 0`), `worker/sim.ts`'s own
    * signal to call `shell.runAsync(() => simHost.handshakesSettled())`, the exact same "leave the
    * `Atomics.wait`-blocked loop while `fn` resolves" pattern that worker's own `opfsAdapter.
@@ -466,7 +466,7 @@ export interface SimHost {
    * never affected). Always `false` when `handshake` was never given. */
   readonly hasInFlightHandshakes: boolean
   /**
-   * docs/plan/24-recovery-and-migration.md (0005 Panic recovery 2-4): call this once the caller has
+   * M24 (0005 Panic recovery 2-4): call this once the caller has
    * observed the current instance trap (an `EngineTrap` from any `SimInstance` call). Disarms
    * pacing, then re-derives a fresh instance from storage (`Persistence.recover`, reusing
    * `Persistence.loadLatest`); a repeat trap during that replay writes a `Skip` record and retries
@@ -488,25 +488,25 @@ export interface SimHost {
    * world is wedged under this build). `null` until set by the caller (the sim worker maps this to
    * `shell.fatal` with the tick prefixed). */
   onFatal: ((f: { tick: number; message: string }) => void) | null
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5: whether the pacing timer is currently
+  /** M23 step 5: whether the pacing timer is currently
    * armed -- `worker/sim.ts`'s own export-request handler reads this to decide whether it needs to
    * `pause()`/`resume()` around a snapshot-for-export itself, or whether the world is already paused
    * (a hidden-boundary pause in flight or settled) and must be left exactly as it is. */
   readonly running: boolean
   readonly counters: SimHostCounters
   logSink: ((bytes: Uint8Array) => void) | null
-  /** docs/plan/39o-large-save-tick-breakdown.md: bench builds only. When set (`PROFILE_SLOTS` int32s,
+  /** M39o: bench builds only. When set (`PROFILE_SLOTS` int32s,
    * preallocated by the sim worker), the paced tick writes its parts' durations into it in whole
    * microseconds (`PROFILE_*`, `sab/control.ts`); `null` everywhere else, where each site is one
    * null check. Timing never feeds the sim. */
   profile: Int32Array | null
-  /** docs/plan/30d-hello-resent-silence.md: test-only diagnostic. When set, every handshake step
+  /** M30d: test-only diagnostic. When set, every handshake step
    * (a `Hello` queued, an attach-queue slot filled, what `pumpHandshakes` did with an entry, a
    * connection closing) is reported as one line. `null` in production; each call site is guarded
    * by `if (handshakeTrace)`, so nothing is built when it is unset. */
   handshakeTrace: ((line: string) => void) | null
   /**
-   * docs/plan/15b-ring-connection-and-replica-rendering.md Scope: admits `connection` into the
+   * M15b Scope: admits `connection` into the
    * sim role's connection table. Allocates the next free `ConnId` (0-based, `< MAX_CONNS`, the
    * same fixed cap `host::Host::connect` itself enforces), calls `sim_connect`, and wires
    * `connection.onMessage`/`onClose` so every uplink message this connection ever delivers reaches
@@ -525,11 +525,11 @@ export interface SimHost {
    * to call per connection once `accept` has returned.
    */
   accept(connection: Connection): number
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: the current session epoch (0013/0005) --
+  /** M28b step 2: the current session epoch (0013/0005) --
    * `0` for a brand-new world, loaded from `ManifestV1.epoch` on a reload, bumped by
    * `bumpEpoch()`. Carried in every `Welcome` (`attach`'s own `Welcome.epoch` field). */
   readonly epoch: number
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: increments `epoch` and, when a `Persistence`
+  /** M28b step 2: increments `epoch` and, when a `Persistence`
    * is wired in, writes the bump back to the manifest (`Storage.write`, the same fire-and-forget
    * convention `Persistence`'s own manifest rewrites already use) before returning -- so the new
    * value is already visible to the very next `accept()`/`Welcome` in the same synchronous turn,
@@ -537,7 +537,7 @@ export interface SimHost {
    * (`createSimHostFromInstance`'s own default, below) rather than calling it directly in
    * production; a test may still call it to force a foreign-epoch resume hint. */
   bumpEpoch(): number
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: sends a fresh `Welcome` (carrying the
+  /** M28b step 2: sends a fresh `Welcome` (carrying the
    * current `epoch`) on every currently open connection and resets each one's own subscription
    * bookkeeping so the next tick treats every chunk it holds as unsent (`Host::resync`'s own doc
    * comment) -- the resync signal for a live connection after panic recovery or an upgrade bump
@@ -545,20 +545,20 @@ export interface SimHost {
    * fails to build (an unknown `conn` on the Rust side, never expected: this only ever iterates
    * `SimHost`'s own open connection table) is skipped, not thrown. */
   resyncAll(): void
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 3: the current live raw `EngineInstance`
+  /** M28b step 3: the current live raw `EngineInstance`
    * (`recoveryDeps.instance`, kept current across `recover()` calls), or `null` when this host was
    * built with no `recoveryDeps` at all. Test-only (`engine/test`'s `trapSim` takes a raw
    * `EngineInstance`, not `SimInstance` -- `SimInstance`'s own doc comment explains why it stays
    * narrow); `serverInternals(server).rawInstance` is the public re-export, `harness.panicServer()`
    * its one real caller. */
   readonly rawInstanceForTest: EngineInstance | null
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 4: how many times the idle sequence (`pause()`
+  /** M28b step 4: how many times the idle sequence (`pause()`
    * then `onIdle()`) has actually run -- `lifecycle/idle-stops-ticks-then-onidle`'s own "one
    * `onIdle`" assertion. */
   readonly idleCalls: number
 }
 
-/** docs/plan/28-sessions-and-reconnect.md Provides: what `SimHost.accept`'s real handshake needs
+/** M28 Provides: what `SimHost.accept`'s real handshake needs
  * beyond `HostServices`/`SimInstance` -- the parts of `WorldConfig` a handshake decision reads
  * (`joinKey`/`maxPlayers`/`buildHash`) plus the already-loaded session table. `createWorldServer`
  * builds this once, after `loadSessionTable` resolves, inside its own `ready` chain. */
@@ -575,7 +575,7 @@ export interface HandshakeDeps {
 interface HandshakeConnState {
   status: 'garbage' | 'awaiting-attach' | 'settled'
   connectedAtMs: number
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 4: this connection's own `PlayerId`, set once
+  /** M28b step 4: this connection's own `PlayerId`, set once
    * `status` becomes `'settled'` -- `onClose`'s own signal for `lifecycle.connectionDropped`,
    * without asking the (possibly already-freed) sim for it. */
   playerId?: number
@@ -614,7 +614,7 @@ const noopScheduler: Scheduler = {
 }
 
 /** The shared implementation, over an already-built [`SimInstance`] -- real or fake.
- * `persistence` (docs/plan/22-persistence-log-and-snapshots.md steps 4-6) is optional so every
+ * `persistence` (M22 steps 4-6) is optional so every
  * existing caller (`worker/sim.ts`'s own two-argument call, this file's own tests) keeps working
  * unmodified: when given, `logSink` is wired to `persistence.appendFrame` and `persistence.
  * afterTick(tick)` runs once per completed tick, right after `sim_tick()` succeeds. */
@@ -622,7 +622,7 @@ export function createSimHostFromInstance(
   sim: SimInstance,
   services: TimerServices,
   persistence?: Persistence,
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: seeds `counters.ticksRun` from a
+  /** M23 steps 3-4: seeds `counters.ticksRun` from a
    * `Persistence.open()` load's own `tick` result -- additive (a 4th optional parameter, default
    * `0`, every existing 3-argument caller unaffected), not a renamed seam. Without this, a reloaded
    * world's own `logSink`/`afterTick(counters.ticksRun)` call would restart counting from tick 0
@@ -630,17 +630,17 @@ export function createSimHostFromInstance(
    * `this.tick` with a wrong, small value on the very first tick after a load -- corrupting every
    * `keys.snap(tick)` key it writes from then on. */
   initialTicksRun = 0,
-  /** docs/plan/24-recovery-and-migration.md: enables `SimHost.recover()`. Optional, additive (a
+  /** M24: enables `SimHost.recover()`. Optional, additive (a
    * 5th argument, every existing 2-4-argument caller unaffected) -- without it (or without
    * `persistence`), `recover()` always reports `onFatal` immediately (nothing to recover from). */
   recoveryDeps?: RecoveryDeps,
-  /** docs/plan/28-sessions-and-reconnect.md: enables the real `Hello`/`Welcome` handshake in
+  /** M28: enables the real `Hello`/`Welcome` handshake in
    * `accept()`. Optional, additive (a 7th argument, every existing 2-6-argument caller unaffected:
    * `worker/sim.ts`'s own single-player topology keeps M15's implicit accept until a later
    * milestone wires this there too) -- without it, `accept()` falls back to `sim.simConnect`
    * exactly as before this milestone. */
   handshake?: HandshakeDeps,
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 4: `WorldConfig.keepTickingWhenEmpty` (0013
+  /** M28b step 4: `WorldConfig.keepTickingWhenEmpty` (0013
    * "World lifecycle": "unless `keepTickingWhenEmpty` is set"). Optional, additive (an 8th
    * argument, every existing 2-7-argument caller unaffected) -- default `false`, so a world with
    * no players stops ticking after the grace/idle sequence exactly as 0013 describes unless a
@@ -662,34 +662,34 @@ export function createSimHostFromInstance(
   }
   let genesisDone = false
   let running = false
-  // docs/plan/28b-reconnect-and-lifecycle.md step 4: `pause()`'s own idempotency flag, distinct
+  // M28b step 4: `pause()`'s own idempotency flag, distinct
   // from `running` -- see `pause()`'s own doc comment for why the two can no longer be the same
   // boolean once the idle sequence disarms/clears `running` *before* calling `pause()`.
   let paused = false
   let stopTimer: (() => void) | null = null
-  // docs/plan/28b-reconnect-and-lifecycle.md step 4: `SimHost.idleCalls`'s own backing counter,
+  // M28b step 4: `SimHost.idleCalls`'s own backing counter,
   // bumped once per completed idle sequence (`lifecycle.ts`'s own `deps.idle` callback, below).
   let idleCalls = 0
-  // docs/plan/37-robustness-events.md step 3 (0005 Panic recovery 4, Storage): set once by
+  // M37 step 3 (0005 Panic recovery 4, Storage): set once by
   // `raiseFatal`. A fatal host runs no tick, writes no file (no snapshot on `stop()`/`pause()`) and
   // never starts again: a fixed build loads the last snapshot through the upgrade path.
   let fatal = false
   let storageFatal = false
 
-  // docs/plan/28b-reconnect-and-lifecycle.md step 2: the session epoch (0013/0005), loaded from
+  // M28b step 2: the session epoch (0013/0005), loaded from
   // `persistence.epoch` when a `Persistence` is wired in (`ManifestV1.epoch`, reserved by M22),
   // else `0` for a topology with no persistence (still real: `bumpEpoch()` and `resyncAll()` work
   // either way, just without a durable write-back). Read by `pumpHandshakes` for every `Welcome`
   // an accept produces, and by `resyncAll()` for the second `Welcome` an epoch bump sends.
   let epoch = persistence?.epoch ?? 0
 
-  // docs/plan/24-recovery-and-migration.md, Planning decisions 3 (the loop guard): "more than 3
+  // M24, Planning decisions 3 (the loop guard): "more than 3
   // recoveries without 1,200 successfully ticked ticks in between is fatal". `recoveryCount` is how
   // many `recover()` calls have happened since the last time `goodTicksSinceRecovery` reached
   // `RECOVERY_GOOD_TICKS_RESET`; `runOneTick` (below) is the only place that increments the latter.
   let recoveryCount = 0
   let goodTicksSinceRecovery = 0
-  // docs/plan/24-recovery-and-migration.md fix round 1 (Planning decisions 2): the `conn` whose own
+  // M24 fix round 1 (Planning decisions 2): the `conn` whose own
   // `sim.simAdmit()` call is currently in flight, set right before the call and cleared right after
   // it returns normally -- so if it throws instead (an `Admit`-phase trap), this is left holding the
   // one piece of information only the *live* caller has (the Progress cursor's own `record` is the
@@ -698,12 +698,12 @@ export function createSimHostFromInstance(
   // `Admit`-phase (a trap during, say, `sim_tick()` never touches this in the first place).
   let inFlightAdmitConn: number | null = null
 
-  // docs/plan/15b-ring-connection-and-replica-rendering.md: one slot per `ConnId`, `null` when
+  // M15b: one slot per `ConnId`, `null` when
   // free. Reused array, sized once at construction (`.claude/rules/hot-paths.md`), never
   // reallocated: `accept`/a future disconnect only ever write existing slots.
   const conns: (Connection | null)[] = new Array(MAX_CONNS).fill(null)
 
-  // docs/plan/28b-reconnect-and-lifecycle.md step 4: the grace/idle world lifecycle. `host` and
+  // M28b step 4: the grace/idle world lifecycle. `host` and
   // `disarm`/`running` (below) are all referenced only from inside these closures, never called
   // until well after every one of them is assigned (module doc comment, `host/lifecycle.ts`).
   const lifecycle = createLifecycleTracker({
@@ -724,8 +724,8 @@ export function createSimHostFromInstance(
     },
   })
 
-  // -- M28: the real handshake (docs/plan/28-sessions-and-reconnect.md) -----------------------
-  /** docs/plan/34-reference-multiplayer.md: frees `conn` (`sim_detach`) and keeps the presence
+  // -- M28: the real handshake (M28 -----------------------
+  /** M34: frees `conn` (`sim_detach`) and keeps the presence
    * sample that went with it in the session table (0013: "the last presence sample is kept in the
    * host-side session table ... so a returning player resumes where they were"), which `Welcome`
    * then echoes on the next attach. A tick-rate-irrelevant, human-rate event: the table is saved at
@@ -742,7 +742,7 @@ export function createSimHostFromInstance(
   // Per-connection handshake bookkeeping, only ever populated when `handshake` is given (Deviations
   // above: `worker/sim.ts`'s single-player topology never reaches any of this).
   const handshakeState = new Map<ConnId, HandshakeConnState>()
-  // docs/plan/28-sessions-and-reconnect.md step 5 (real bug, found live: a browser `gc` page's own
+  // M28 step 5 (real bug, found live: a browser `gc` page's own
   // steady-state bytesPerFrame, not the server, which `pumpHandshakes`'s own doc comment below
   // assumed covered this -- `worker/sim.ts`'s linked topology *is* a zero-GC-constrained caller):
   // how many entries in `handshakeState` are still `'garbage'` -- incremented at `accept()`,
@@ -761,7 +761,7 @@ export function createSimHostFromInstance(
   // `null`) the instant a valid `Hello` clears the join-key/build-hash/capacity checks, resolved
   // in place once the secret's digest (and, for a brand-new secret, the session-table write) has
   // finished -- consumed from the front, in order, only once resolved, at the next tick boundary.
-  // docs/plan/30d-hello-resent-silence.md: each entry is a slot object, filled in place by its own
+  // M30d: each entry is a slot object, filled in place by its own
   // `Hello`'s `settle` below. A slot was once an array index captured at push time, but the drain
   // loop's `shift()` moves every later entry down: a `Hello` still hashing when an earlier entry
   // was shifted off wrote to an index one too high, left its own position empty for good, and the
@@ -805,7 +805,7 @@ export function createSimHostFromInstance(
    * live in a `gc` page: `runOneTick`'s own doc comment already explains why the tick path reads
    * the real clock at most once every `RESYNC_TICKS`, via `resync()`, and never otherwise -- a
    * `clock.now()` call reads a fractional double every time, boxing a fresh `HeapNumber`
-   * regardless of tier, docs/plan/13b-tick-timing-allocation.md's own measurement. Calling it
+   * regardless of tier, M13b's own measurement. Calling it
    * unconditionally from here, once per tick for the connection's *entire life* once settled,
    * would reintroduce exactly the per-tick clock read that ADR amendment was written to eliminate
    * -- `garbagePending`'s own doc comment fixed the `handshakeState` iteration; this fixes the
@@ -836,7 +836,7 @@ export function createSimHostFromInstance(
           } (queue left ${attachQueue.length})`,
         )
       }
-      // Superseded/closed meanwhile. The identity check too (docs/plan/30c-ci-reds-after-m30.md,
+      // Superseded/closed meanwhile. The identity check too (M30c,
       // `mp/hello-resent-after-pre-welcome-drop`): a connection that closed after its `Hello`
       // leaves this entry queued, and its `ConnId` can already belong to a new connection whose
       // own `Hello` is awaiting attach -- attaching the stale entry would send the `Welcome` to
@@ -846,7 +846,7 @@ export function createSimHostFromInstance(
         playerId: entry.playerId,
         epoch,
         joined: entry.joined,
-        // docs/plan/28b-reconnect-and-lifecycle.md step 4: read *before* `lifecycle.
+        // M28b step 4: read *before* `lifecycle.
         // playerAttached` below (which is what clears the very grace timer this checks).
         suppressConnected: lifecycle.isWithinGrace(entry.playerId),
         presence: entry.presence,
@@ -882,7 +882,7 @@ export function createSimHostFromInstance(
       withLen.send(MsgClass.ReliableOrdered, built.bytes, built.len)
       state.status = 'settled'
       state.playerId = entry.playerId
-      // docs/plan/28b-reconnect-and-lifecycle.md step 4: cancels any pending grace timer for this
+      // M28b step 4: cancels any pending grace timer for this
       // player (a within-grace reconnect) and counts them online -- a real join and an ordinary
       // (post-grace or post-`Bye`) reconnect both start from "not currently online", so both count
       // the same way here.
@@ -890,12 +890,12 @@ export function createSimHostFromInstance(
       entry.connection.onMessage = (bytes) => {
         const withLenIn = entry.connection as Connection & { lastMessageLength?: number }
         const len = withLenIn.lastMessageLength ?? bytes.length
-        // docs/plan/37-robustness-events.md step 1: a `Hello` on a settled connection restarts it.
+        // M37 step 1: a `Hello` on a settled connection restarts it.
         if (bytes[0] === HELLO_LEAD_BYTE) {
           reopenOnHello(entry.conn, entry.connection, bytes)
           return
         }
-        // docs/plan/28b-reconnect-and-lifecycle.md step 4 (0013 "an explicit `Bye` skips the
+        // M28b step 4 (0013 "an explicit `Bye` skips the
         // grace"): peeks the one `MsgType` byte every message opens with (`parseBye`'s own doc
         // comment) before falling back to the ordinary admit path -- an explicit `Bye{Leave}` from
         // a settled connection is handled here, not forwarded to `sim_admit`. `bytes`/`len`
@@ -913,7 +913,7 @@ export function createSimHostFromInstance(
     }
   }
 
-  // docs/plan/13b-tick-timing-allocation.md (Deviations; ADR amending M13's per-tick decision):
+  // M13b (Deviations; ADR amending M13's per-tick decision):
   // `runOneTickTimed`'s own two `services.clock.now()` reads and `onFire`'s own one (below) each
   // boxed a fresh `HeapNumber` per tick in the interpreter tier -- a fractional double is never a
   // Smi, so no amount of JS-side care after the read removed it, and even one such read per tick
@@ -948,7 +948,7 @@ export function createSimHostFromInstance(
 
   /** The tick procedure (Scope: "one function, the only caller of the tick exports"): `len =
    * sim_seal_frame()`; if `len > 0` call `logSink`; `sim_tick()`; then the per-connection frame
-   * pass (docs/plan/15b-ring-connection-and-replica-rendering.md Scope: "after each tick
+   * pass (M15b Scope: "after each tick
    * `sim_build_frame(conn)` -> `connection.send(...)` when `len > 0`"), once per accepted
    * connection, in `ConnId` order. No clock read here any more (Deviations): a tick's own overrun
    * is no longer measured individually. */
@@ -959,7 +959,7 @@ export function createSimHostFromInstance(
     // A fatal host runs no tick. A storage failure is the exception: a manual driver that still
     // steps gets `Persistence`'s own "a previous storage error is fatal" throw (M22's contract).
     if (fatal && !storageFatal) return
-    // docs/plan/28-sessions-and-reconnect.md Planning decisions "Async digest, deterministic
+    // M28 Planning decisions "Async digest, deterministic
     // order": consumed at *this* tick boundary, before anything else -- an attach's own
     // `Joined`/`Connected` records must reach `pending_records` before `sim.simTick()` drains it
     // below, the same "queued ... into the frame for T+1" contract every other connection event
@@ -977,7 +977,7 @@ export function createSimHostFromInstance(
     // `seal.bytes` is the whole persistent `Persist` region view (Orchestrator ruling 2), but
     // `logSink`'s own contract (`SimHost.logSink`'s doc comment: "exactly `len` bytes") is fixed at
     // one argument -- unlike `simBuildFrame`'s `bytes`+separate `.len` pair, `Storage.append`
-    // (`Persistence.appendFrame`, docs/plan/22-persistence-log-and-snapshots.md steps 4-6) has no
+    // (`Persistence.appendFrame`, M22 steps 4-6) has no
     // second parameter to carry a real length past the whole-region view, so this is the one place
     // a `subarray()` is unavoidable rather than a `.claude/rules/hot-paths.md` violation waiting to
     // be found: it only ever runs on a tick that actually logged something (`seal.len > 0`), never
@@ -995,12 +995,12 @@ export function createSimHostFromInstance(
     }
     if (status !== Status.Ok) throw new Error(`sim_tick failed: status ${status}`)
     counters.ticksRun++
-    // docs/plan/24-recovery-and-migration.md, Planning decisions 3: "1,200 successfully ticked
+    // M24, Planning decisions 3: "1,200 successfully ticked
     // ticks in between" resets the loop guard's own count -- every real completed tick counts,
     // whether or not it happened to log anything.
     goodTicksSinceRecovery++
     if (goodTicksSinceRecovery >= RECOVERY_GOOD_TICKS_RESET) recoveryCount = 0
-    // docs/plan/22-persistence-log-and-snapshots.md steps 4-6: the tick procedure's own persistence
+    // M22 steps 4-6: the tick procedure's own persistence
     // hook, right after `sim_tick()` succeeds -- `counters.ticksRun` is the same completed-tick
     // count `Persistence.afterTick`'s own doc comment names as its `tick` argument.
     persistence?.afterTick(counters.ticksRun)
@@ -1032,7 +1032,7 @@ export function createSimHostFromInstance(
       }
     }
     if (prof) prof[PROFILE_FRAME] = Math.round((services.clock.now() - tp) * 1000)
-    // docs/plan/28b-reconnect-and-lifecycle.md step 4 (0013 "the tick that applies the last
+    // M28b step 4 (0013 "the tick that applies the last
     // `Disconnected` is the last tick run"): a no-op unless `sim.simTick()` above just applied the
     // world's last `Disconnected` record (queued by `lifecycle.playerLeft`/a grace timeout,
     // strictly *before* this tick started) -- stops ticking and arms the idle timer exactly then,
@@ -1041,7 +1041,7 @@ export function createSimHostFromInstance(
   }
 
   /** Runs the chunk warmer for at most `WARM_BUDGET_MS` from `nowMs` (resync's own reading, already
-   * an integer). docs/plan/16d-sim-pacing-under-external-wakes.md, CI round 3: the first chunk is
+   * an integer). M16d, CI round 3: the first chunk is
    * warmed on that reading rather than a fresh one, and the deadline stays an integer, so a resync
    * with nothing to warm reads the clock once (in `resync`) and boxes nothing else; each chunk
    * actually warmed costs one more read, to police the budget. Before this, every resync also read
@@ -1199,7 +1199,7 @@ export function createSimHostFromInstance(
       await persistence?.flush()
     },
     async pause() {
-      // docs/plan/28b-reconnect-and-lifecycle.md step 4: guarded on `paused`, not `running` --
+      // M28b step 4: guarded on `paused`, not `running` --
       // `lifecycle`'s own idle sequence calls this *after* `stopTicking()` has already disarmed
       // and cleared `running` (so "the tick that applies the last `Disconnected` is the last tick
       // run" holds without waiting for the 30 s idle delay too), so `running` is already `false`
@@ -1227,7 +1227,7 @@ export function createSimHostFromInstance(
     },
     stepTick(n = 1) {
       ensureGenesis()
-      // docs/plan/28b-reconnect-and-lifecycle.md step 4: unchanged by this milestone -- still the
+      // M28b step 4: unchanged by this milestone -- still the
       // unconditional manual/test driver its own doc comment promises (`start()`/`running` are not
       // preconditions: `simhost_seal_precedes_tick` and every other pre-M28b caller never call
       // `start()` first). A harness that wants "tick counter frozen while idle" reads `isTicking`
@@ -1392,7 +1392,7 @@ export function createSimHostFromInstance(
         return conn
       }
 
-      // docs/plan/28-sessions-and-reconnect.md: the real handshake. No `sim_connect`/`sim_attach`
+      // M28: the real handshake. No `sim_connect`/`sim_attach`
       // yet -- this connection has said nothing; `state.status` starts `'garbage'` (Scope: "no
       // Hello within 5s" starts counting from acceptance, 0013 Client policy's own analogue).
       const deps = handshake
@@ -1411,7 +1411,7 @@ export function createSimHostFromInstance(
         }
         if (state?.status === 'settled') {
           detachKeepingPresence(conn, state.playerId)
-          // docs/plan/28b-reconnect-and-lifecycle.md step 4: an ungraceful close (no `Bye` --
+          // M28b step 4: an ungraceful close (no `Bye` --
           // `playerLeft`'s own `onMessage` branch already tore this connection down before any
           // `close`/`onClose` could reach here, so `state` is always still `'settled'` at this
           // point for a genuine drop). Presence and the slot are already gone (`sim.simDetach`,
@@ -1442,7 +1442,7 @@ export function createSimHostFromInstance(
         // `state.status === 'garbage'`: the only message this connection has ever sent that
         // matters is its first well-formed `Hello`.
         //
-        // docs/plan/28b-reconnect-and-lifecycle.md step 4 (0013 "A new connection resumes the
+        // M28b step 4 (0013 "A new connection resumes the
         // timer"): a paused world (zero players, idle) is still listening for new connections --
         // this is the very first message *any* connection can ever send, so it is where "a Hello
         // while paused" is detected, before the handshake bytes themselves are even parsed
@@ -1581,7 +1581,7 @@ export function createSimHostFromInstance(
       return conn
     },
   }
-  // docs/plan/22-persistence-log-and-snapshots.md steps 4-6: `SimHost.logSink` is pointed at
+  // M22 steps 4-6: `SimHost.logSink` is pointed at
   // `Persistence.appendFrame`, a fixed method value (`.claude/rules/hot-paths.md`: no per-call
   // closure), overriding the `null` the object literal above starts with.
   if (persistence) host.logSink = persistence.appendFrame
@@ -1608,7 +1608,7 @@ export function createSimHost(cfg: WorldConfig, services: HostServices): SimHost
 }
 
 // ---------------------------------------------------------------------------------------------
-// `createWorldServer` (docs/plan/27-server-entrypoint-and-netcode-harness.md; 0024 §5, which
+// `createWorldServer` (M27; 0024 §5, which
 // amends 0009 and is implemented here, not re-decided).
 // ---------------------------------------------------------------------------------------------
 
@@ -1622,7 +1622,7 @@ export function createSimHost(cfg: WorldConfig, services: HostServices): SimHost
  * raise (`WorldLoadError`, or any other error `Persistence.open`/`instantiate` throw) surfaces only
  * through `ready` rejecting, never synchronously from this call.
  */
-// `worldServerTestHandle` (docs/plan/27-server-entrypoint-and-netcode-harness.md, M27 gate round
+// `worldServerTestHandle` (M27, M27 gate round
 // 2): the same module-private-`WeakMap`-keyed-by-the-public-object pattern `client.ts`'s
 // `clientTestHandle`/`handles` already uses, so `createNetHarness`/`assertConverged` can read a
 // live `sim_region_hash(conn)` from the *real* `SimHost` a real `createWorldServer` owns, without
@@ -1642,7 +1642,7 @@ export function worldServerTestHandle(server: WorldServer): SimHost {
   return h
 }
 
-/** docs/plan/28-sessions-and-reconnect.md Seams: `serverInternals(server).handshakesSettled()`,
+/** M28 Seams: `serverInternals(server).handshakesSettled()`,
  * used by `createNetHarness`'s own `settle()`. A thin wrapper over `worldServerTestHandle`, kept
  * as its own named function (rather than widening that one's return type) so a reader sees
  * exactly which test-only surface a given call site needs. Test-only, `engine/test`'s own
@@ -1652,14 +1652,14 @@ export function serverInternals(server: WorldServer): {
   readonly isTicking: boolean
   readonly idleCalls: number
   readonly rawInstance: EngineInstance | null
-  /** docs/plan/31b-desync-hashes.md: how many desync reports the host has recorded (`sim_desync`'s
+  /** M31b: how many desync reports the host has recorded (`sim_desync`'s
    * `count`): one per `ResyncChunk` it acted on. `0` when the live instance is unavailable. */
   readonly desyncCount: number
 } {
   const h = worldServerTestHandle(server)
   return {
     handshakesSettled: () => h.handshakesSettled(),
-    // docs/plan/28b-reconnect-and-lifecycle.md Seams: `serverInternals(server).isTicking` -- a thin
+    // M28b Seams: `serverInternals(server).isTicking` -- a thin
     // wrapper over `SimHost.running` (already "whether the pacing timer is currently armed"), the
     // same named seam step 4's idle-world tests need ("the tick counter frozen" is `counters.
     // ticksRun` not advancing; "isTicking" is this: whether the pacing timer would even try).
@@ -1716,7 +1716,7 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
 
   const ready: Promise<void> = Persistence.open(host.storage, cfg, newInstance).then(
     async (opened) => {
-      // docs/plan/28-sessions-and-reconnect.md: loaded once per world, here (not per connection) --
+      // M28: loaded once per world, here (not per connection) --
       // `SimHost.accept`'s own handshake reads/writes it through the same live `SessionTable`.
       const sessions = await loadSessionTable(host.storage, worldKeys(cfg.worldId))
       const h = createSimHostFromInstance(
@@ -1724,7 +1724,7 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
         host,
         opened.persistence,
         opened.tick,
-        // docs/plan/28b-reconnect-and-lifecycle.md step 3: `createWorldServer` itself never wired
+        // M28b step 3: `createWorldServer` itself never wired
         // `recoveryDeps` before this milestone (M27's own Scope stopped at "load, recover or
         // create"; M24 built `SimHost.recover()` against a caller-supplied instance/`newInstance`
         // but the one real production entrypoint, this function, never passed one -- `recover()`
@@ -1751,7 +1751,7 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
         host.onFatal?.(f)
         void worldServer.stop()
       }
-      // docs/plan/28b-reconnect-and-lifecycle.md step 2 (0005 Panic recovery 2: "the host bumps
+      // M28b step 2 (0005 Panic recovery 2: "the host bumps
       // the session epoch; clients see Resyncing ... and take a full resync"): every successful
       // `recover()` bumps the epoch and resyncs every still-open connection with it -- the same
       // per-call-site wiring `onFatal` just above already uses (`createSimHostFromInstance`
@@ -1761,7 +1761,7 @@ export function createWorldServer(cfg: WorldConfig, host: HostServices): WorldSe
         h.bumpEpoch()
         h.resyncAll()
       }
-      // docs/plan/28b-reconnect-and-lifecycle.md step 2 (0013: "`epoch` increments at every host
+      // M28b step 2 (0013: "`epoch` increments at every host
       // start"): a brand-new world (`outcome === 'created'`) starts at the manifest's own initial
       // `0` -- every other outcome (`'loaded'`, `'recovered'`, `'upgraded'`) is *this* process
       // finding an *existing* world on disk, i.e. a real restart, so it bumps once here, before

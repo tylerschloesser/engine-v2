@@ -1,4 +1,4 @@
-// `gc-gen.html`'s script (docs/plan/08b-gen-workers-and-queue.md, Tests added, `gen: zero-GC over a
+// `gc-gen.html`'s script (M08b, Tests added, `gen: zero-GC over a
 // scripted pan`): a real `createClient()` over `fx-worldgen`, `host: { kind: 'remote', ... }` (no
 // `Sim` role), driven by `asHarness`'s `stepFrame`/`stepTick` the same way `gc-topology.ts` does --
 // except the camera pans a little every frame, so the generation queue keeps finding fresh work for

@@ -1,4 +1,4 @@
-// `engine/test`'s pure helpers (docs/plan/09-renderer-terrain.md Seams): `tileCentrePx` and
+// `engine/test`'s pure helpers (M09 Seams): `tileCentrePx` and
 // `expectPixel` need no GPU, so they get a plain unit test even though `terrain-readback.spec.ts`
 // exercises the GPU-backed `renderTo`/`readPixels` end to end instead.
 import { expect, test } from 'vitest'

@@ -1,5 +1,5 @@
 //! The between-tick warmer (docs/decisions/0008-chunk-generation.md §2 "Sim host warmer";
-//! docs/plan/13-sim-host-tick-loop.md Scope): a fixed-capacity list of view rectangles, one per
+//! M13 Scope): a fixed-capacity list of view rectangles, one per
 //! connection slot, fed by [`Warm::set_view`] (M15's connections call it; this milestone's own
 //! native tests call it directly, since no connection exists yet -- Non-scope). [`Warm::warm_one`]
 //! generates at most one uncached chunk across every set view, nearest-to-that-view's-centre-first

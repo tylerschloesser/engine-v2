@@ -1,4 +1,4 @@
-// `reference-server/smoke` (docs/plan/29-net-worker-and-reference-server.md Tests added, Node):
+// `reference-server/smoke` (M29 Tests added, Node):
 // spawns the real `games/reference-server` process against the `puts` fixture, joins it with a
 // real `HeadlessClient` over a real loopback `ws` socket (`wsConnection`, the shipped wrapper --
 // not the netcode harness's own in-memory transport, since this is proving the deployable process

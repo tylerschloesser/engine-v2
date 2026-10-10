@@ -1,5 +1,5 @@
 // Slow-tier benchmark (docs/decisions/0008-chunk-generation.md §6; Planning decisions 6 of
-// docs/plan/08-worldgen-and-gen-worker.md): `fx-worldgen` on the release profile, the warm-up +
+// M08: `fx-worldgen` on the release profile, the warm-up +
 // timed loop of `tests/support/bench-worldgen.ts` in a `gen`-role instance under Node, median
 // ms/chunk printed, the same golden `worldgen-bench.html` checks, and a runner `warn` line (never
 // a failure) above `worldgenMsPerChunkWarn`. `pnpm test:slow wasm -t worldgen-bench`.

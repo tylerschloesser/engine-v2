@@ -8,7 +8,7 @@
 // production-wiring counterpart of `CameraIntegrator.integrate` -- a later range's real DOM wiring
 // calls both from the same `onCamera` hook, `frame-loop.ts`).
 //
-// `pick_id` (docs/plan/18-picking-and-overlay.md Scope, step 2): filled from the optional `pick`
+// `pick_id` (M18 Scope, step 2): filled from the optional `pick`
 // constructor argument -- `input/pick.ts`'s `Picker.at(cssX, cssY)`, `createClient`'s own real one
 // (`src/client.ts`) built over the same `DrawListSlot` the frame loop's `acquire` phase pulls. `emit`
 // takes the computed `pickId` as a plain parameter (not a closure over `pick` inside `emit` itself):
@@ -69,7 +69,7 @@ export interface InputController {
   /** Stops recognition and ring writes entirely (0019 §4: "covers modal UI"). */
   suspend(): void
   resume(): void
-  /** docs/plan/18-picking-and-overlay.md Scope (0024 §7c): the TypeScript-to-`ClientSide` channel
+  /** M18 Scope (0024 §7c): the TypeScript-to-`ClientSide` channel
    * for client-local UI intent -- writes one `InputKind.Game` record into `inputRing` (`code` in
    * `pick_id`, `a`/`b` as `i32` in `tile`, all else zero), which surfaces in Rust's `FrameCx::
    * input()` in ring order and is never delivered to `on`. Returns `false` (nothing written, same
@@ -154,7 +154,7 @@ function makeEvent(type: InputEventType): InputEventTs {
 /** Builds the semantic recognizer + `client.input` API over `inputRingSab` (`SabSet.inputRing`,
  * `sab/layout.ts`). One instance per `Client` (`createClient`, `src/client.ts`). `pick` is optional
  * (omitted by a unit test that never needs a real pick_id): every event's `pickId` is `0` without
- * one, the same value this always had before docs/plan/18-picking-and-overlay.md. */
+ * one, the same value this always had before M18. */
 export function createSemanticRecognizer(
   inputRingSab: SharedArrayBuffer,
   pick?: PickSource,
@@ -182,7 +182,7 @@ export function createSemanticRecognizer(
     dragend: makeEvent('dragend'),
   }
 
-  // docs/plan/18-picking-and-overlay.md step 8 (`gc-anchors.ts`, folding `client.input.emit` into a
+  // M18 step 8 (`gc-anchors.ts`, folding `client.input.emit` into a
   // measured window, found the defect): `writeInputRecord`'s own doc comment already says "pure,
   // allocation-free", but both callers below used to pass it a fresh object literal per call --
   // `.claude/rules/hot-paths.md`: "Preallocate scratch objects at init and mutate them". One
@@ -431,7 +431,7 @@ export function createSemanticRecognizer(
         (heldMs[i] as number) < TAP_MAX_MS
       ) {
         tileUnderPoint(cameraState, viewport, slot.x, slot.y, tileScratch)
-        // docs/plan/18-picking-and-overlay.md (0019 §4 "Cursor tile and ghost"): "touch: tile of the
+        // M18 (0019 §4 "Cursor tile and ghost"): "touch: tile of the
         // last tap" -- a touch pointer has no hover, so a tap is the only way its cursor tile is
         // ever set. Applied for every pointer kind (mouse included): a mouse tap lands on the same
         // tile hover already published, so this is a no-op re-affirmation there, not a behaviour
@@ -500,7 +500,7 @@ export function createSemanticRecognizer(
     clockMs += dtMs
     if (suspended) return
     // A fixed indexed pair, not array destructuring (`.claude/rules/hot-paths.md`: found by the
-    // zero-GC `input` page, docs/plan/11-camera-and-input.md step 7 -- destructuring a plain
+    // zero-GC `input` page, M11 step 7 -- destructuring a plain
     // `Array` still goes through the iterator protocol on a path this milestone is the first to
     // drive hard inside a measured window).
     const p0 = input.pointers.slots[0]

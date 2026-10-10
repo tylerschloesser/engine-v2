@@ -1,4 +1,4 @@
-//! `relay_recipients`, `rerelay_and_gone` (docs/plan/19-presence-channel.md Tests added, steps
+//! `relay_recipients`, `rerelay_and_gone` (M19 Tests added, steps
 //! 4-6): drives `Host<Presence>` directly and decodes `Host::build_frame`'s own bytes through the
 //! real wire readers (`FrameReader` + `wire::read_presence`), so these tests exercise the exact
 //! bytes a client would decode, not an internal accessor.

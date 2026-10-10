@@ -18,7 +18,7 @@ const INPUT_MAX: usize = 16;
 const FRAME_BYTES: usize = 64;
 /// Far more than any arena a test configures.
 const EXHAUST_BYTES: usize = 64 << 20;
-/// `Rx`/`Tx` for the `Client` role only (docs/plan/06b-workers-and-spawn.md, Deviations): the
+/// `Rx`/`Tx` for the `Client` role only (M06b, Deviations): the
 /// `echo` zero-GC page round-trips 10 KiB per frame through these two regions. `Sim`/`Gen` keep the
 /// 64-byte pair below unchanged, so `golden/golden.json` (Sim-role only) stays byte-identical.
 const CLIENT_RX_TX_BYTES: usize = 10 * 1024;
@@ -60,7 +60,7 @@ enum Motion {
 }
 
 /// Part of `HashFixture`'s state, encoded through `engine::codec::Codec` and folded into
-/// [`HashFixture::sim_hash`] with `engine::hash::hash_value` (docs/plan/05-codec-and-state-hash.md
+/// [`HashFixture::sim_hash`] with `engine::hash::hash_value` (M05
 /// Order of work 5): ints, an enum, an `Option`, a fixed array, and finite f32 and f64, the same
 /// byte-level foundation `codec_sample`'s golden exercises, here proven to agree natively, under
 /// Node, under Bun and in three browsers through the fixture's own cross-runtime golden.
@@ -270,7 +270,7 @@ impl Instance for HashFixture {
         h.finish()
     }
 
-    /// docs/plan/06b-workers-and-spawn.md, Tests added `workers.camera_block_reaches_wasm`:
+    /// M06b, Tests added `workers.camera_block_reaches_wasm`:
     /// `centre` (two `f64`) then `frame_time_ms` (one `f64`), raw little-endian bytes, so the
     /// browser test can prove `CameraBlock`'s Rust layout agrees with `camera/block.ts`'s bit for
     /// bit, not just that JS copied bytes into the region (which would be true regardless of layout

@@ -73,7 +73,7 @@ async function main() {
     }
   }
   // Every run, pass or WARN: a step's own wall time, so a slow build is attributable without
-  // re-running under a stopwatch (docs/plan/17d-fast-tier-wall-time.md step 1).
+  // re-running under a stopwatch (M17d step 1).
   mkdirSync(join(results, 'build'), { recursive: true })
   writeFileSync(
     join(results, 'build', 'timings.json'),
@@ -90,7 +90,7 @@ async function main() {
   // suite's own process already finished. `selected`'s own registration order is preserved either
   // way (`suites.mjs` lists every `solo` suite after the ones it must not race), so this changes
   // scheduling, not the reported order. `soloTiers: [<tier>, ...]` (M29b fix round 1,
-  // docs/plan/29-net-worker-and-reference-server.md's own gate) is the same mechanism, scoped to
+  // M29's own gate) is the same mechanism, scoped to
   // only the named tier(s) -- `netcode`'s own fast tier is small and fine concurrent; only its slow
   // tier (real child-process spawns, real loopback-socket handshakes racing a real-wall-clock yield)
   // needs the machine to itself, the same reasoning `frame-bench` already established for real-time
@@ -180,7 +180,7 @@ async function runSuite(suite, opts) {
     tests: parts.reduce((n, part) => n + part.tests, 0),
     failures: parts.flatMap((part) => part.failures),
     warnings: parts.flatMap((part) => part.warnings ?? []),
-    // Deduped again across legs (docs/plan/10-ci-workflow.md): the `chromium` and `gc` legs of the
+    // Deduped again across legs (M10: the `chromium` and `gc` legs of the
     // `browser` suite typically see the same adapter.
     adapters: [...new Set(parts.flatMap((part) => part.adapters ?? []))],
   }
@@ -211,7 +211,7 @@ async function runLeg(suite, leg, opts) {
     },
   })
   const result = adapter.parse({ tier: opts.tier, reportPath: report, exitCode: code, logPath })
-  // Gate round 1 fix (docs/plan/20-reference-game-v0.md): a failure's own `name` (what
+  // Gate round 1 fix (M20: a failure's own `name` (what
   // `formatFailure` prints as `FAIL <suite> <name>`) never otherwise says *which leg* of a
   // multi-leg suite it came from -- `suite` there is always the top-level suite name (`runSuite`'s
   // own `suite.name`), the same for every leg. Tag it here, once, for every leg with its own name

@@ -83,7 +83,7 @@ mod tests {
 
     /// Pinned sequence (computed from this exact implementation with `cargo test -p engine --lib
     /// rng::tests::simrng_golden_sequence -- --nocapture` and printed; see
-    /// docs/plan/12-store-and-game-trait.md Deviations for how). A change here means the PCG32
+    /// M12 Deviations for how). A change here means the PCG32
     /// implementation changed, which changes every RNG-dependent golden.
     #[test]
     fn simrng_golden_sequence() {

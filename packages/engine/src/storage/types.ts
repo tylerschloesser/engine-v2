@@ -1,5 +1,5 @@
 // The 0005 `Storage` contract (docs/decisions/0005-persistence-and-recovery.md "Storage"), declared
-// exactly as there and, until docs/plan/22-persistence-log-and-snapshots.md steps 4-6, only a
+// exactly as there and, until M22 steps 4-6, only a
 // placeholder inline in `server.ts` (M13: "declared, unused"). This is its real home now;
 // `server.ts` re-exports the type unchanged (Seams: no renamed Provides).
 export interface Storage {

@@ -6,7 +6,7 @@
 //! before the log position -- `Store<G>` itself holds neither `tick` nor `SimRng` (M12/M12b: they
 //! are `Authority`'s own driver state), so "the engine section" here is `SimRng` followed
 //! immediately by `Store::encode`'s own bytes (player table onward, already in the order 0005
-//! lists), with no second `tick` field to write (docs/plan/22-persistence-log-and-snapshots.md
+//! lists), with no second `tick` field to write (M22
 //! Deviations has the reasoning).
 //!
 //! **Fix round 2 adds a `log_ref_tick` u32 right after `log_offset`**: the tick of the most
@@ -16,7 +16,7 @@
 //! event); without it, `testing::replay`'s own `Base::Snapshot` path has no way to correctly
 //! interpret the *next* frame's `tick_delta`, which is always relative to that reference tick, not
 //! to the snapshot's own tick. `container_version` stays `1` (an ADR amendment covers this and the
-//! other two additions here together, docs/plan/22-persistence-log-and-snapshots.md Deviations).
+//! other two additions here together, M22 Deviations).
 //!
 //! **A `total_len` varint, not named by 0005, is added right after `container_version`**: it is
 //! the byte length of everything from `identity` through the trailing `crc32`, inclusive. Without
@@ -66,14 +66,14 @@ impl ByteSink for VecSink<'_> {
 /// comment records the one way this deviates from a genuinely incremental per-section walk).
 /// [`SnapshotWriter::begin`] builds the bytes once; [`SnapshotWriter::next`] drains them in
 /// caller-sized blocks, `0` meaning done -- the shape `sim_snapshot_begin`/`sim_snapshot_next`
-/// (docs/plan/22-persistence-log-and-snapshots.md Seams) will call.
+/// (M22 Seams) will call.
 pub struct SnapshotWriter {
     buf: Vec<u8>,
     pos: usize,
 }
 
 impl SnapshotWriter {
-    /// `log_ref_tick` (fix round 2, docs/plan/22-persistence-log-and-snapshots.md): the tick of the
+    /// `log_ref_tick` (fix round 2, M22: the tick of the
     /// most recently *logged* frame in this segment as of `log_segment`/`log_offset` (`Host::
     /// last_logged_tick`'s own value, unchanged by taking a snapshot -- see `Host::
     /// sim_snapshot_begin`'s doc comment for why resetting it there was tried and reverted).
@@ -91,7 +91,7 @@ impl SnapshotWriter {
         log_ref_tick: u32,
         identity: &Identity,
     ) -> Self {
-        // Orchestrator ruling (docs/plan/22-persistence-log-and-snapshots.md, second-half
+        // Orchestrator ruling (M22, second-half
         // delegation prompt): "make its buffer sized exactly once (no doubling growth)". A first,
         // count-only pass over the identical writes (`CountSink`, the same sink `codec::
         // encoded_len` uses) gives the exact payload length up front, so the real pass below
@@ -180,7 +180,7 @@ pub struct SnapshotInfo {
     pub tick: Tick,
     pub log_segment: u32,
     pub log_offset: u32,
-    /// Fix round 2 (docs/plan/22-persistence-log-and-snapshots.md): see [`SnapshotWriter::begin`]'s
+    /// Fix round 2 (M22: see [`SnapshotWriter::begin`]'s
     /// own doc comment for the sentinel (`0` = no frame logged yet in this segment).
     pub log_ref_tick: u32,
     pub rng: SimRng,
@@ -193,7 +193,7 @@ pub enum SnapshotProgress {
 }
 
 /// Container-envelope framing shared by [`SnapshotReader::push`] and [`UpgradeReader::push`]
-/// (docs/plan/24b-upgrade-and-migration.md step 4): magic, `container_version`, the `total_len`
+/// (M24b step 4): magic, `container_version`, the `total_len`
 /// varint, and the trailing crc32 -- returns the crc-verified payload slice (identity through
 /// `state_hash`, inclusive) once a whole container has been buffered, `None` while more bytes are
 /// still needed. Factored out so the two readers' framing cannot drift apart (both call this, rather
@@ -234,7 +234,7 @@ fn take_verified_payload(buf: &[u8]) -> Result<Option<&[u8]>, PersistError> {
     Ok(Some(payload))
 }
 
-/// The envelope-only counterpart to [`SnapshotReader`] (docs/plan/24b-upgrade-and-migration.md step
+/// The envelope-only counterpart to [`SnapshotReader`] (M24b step
 /// 4): buffers exactly the same container bytes (0005 Formats) and performs the exact same
 /// magic/version/total_len/crc checks ([`take_verified_payload`]), but stops short of decoding the
 /// store section into any particular `Store<G>` shell. The upgrade path needs [`crate::persist::

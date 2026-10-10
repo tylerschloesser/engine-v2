@@ -1,4 +1,4 @@
-//! `slow_highwater_large_save` (docs/plan/36-slow-tier-and-benchmarks.md step 4, M07's hand-over):
+//! `slow_highwater_large_save` (M36 step 4, M07's hand-over):
 //! the arena's live-byte peak over the standard large save. The reference `sim` crate installs the
 //! engine's `Arena` as its `#[global_allocator]` (`export_game!`), natively too, so its counters are
 //! live in every test binary of this crate. The arena is preallocated, so `memory.buffer.byteLength` is flat at every scale and

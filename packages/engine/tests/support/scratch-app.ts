@@ -1,4 +1,4 @@
-// `createScratchApp` (docs/plan/35-packaging-and-adapters.md Seams; M38 may reuse it): a Vite game
+// `createScratchApp` (M35 Seams; M38 may reuse it): a Vite game
 // outside both workspaces, built the way an external developer builds one (0017 §8). It lives under
 // `<tmpdir>/engine-tarball-test/`, never inside the repo (0017 §6: an ancestor `[workspace]` would
 // adopt the crate), and installs the engine either from a `pnpm pack` tarball or as a `link:`.

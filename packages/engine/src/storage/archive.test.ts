@@ -1,4 +1,4 @@
-// `storage/archive.ts` (docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Tests added):
+// `storage/archive.ts` (M23 step 5, Tests added):
 // `archive_golden_bytes`, `export_import_roundtrip_node`, `import_refuses_existing_world`.
 // `export_browser_import_node_same_hash` lives in `tests/browser/world-archive.spec.ts` instead
 // (Deviations there: why a single Playwright test, not a Vitest one reading a cross-suite file).

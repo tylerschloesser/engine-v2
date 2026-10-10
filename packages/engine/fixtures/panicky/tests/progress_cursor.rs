@@ -1,4 +1,4 @@
-//! docs/plan/24-recovery-and-migration.md step 2/3: `progress_cursor_written_before_each_phase`.
+//! M24 step 2/3: `progress_cursor_written_before_each_phase`.
 //! Proves, per phase, that `Host<G>` writes a `ProgressCursor` before starting that phase's own
 //! risky work -- for `Admit`/`ApplyRecord`/`Tick` by triggering a *real* panic (via `panicky`'s own
 //! actions) and inspecting `Host::progress()` (the last write standing) once `catch_unwind` catches

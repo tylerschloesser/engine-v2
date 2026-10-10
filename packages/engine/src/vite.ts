@@ -26,7 +26,7 @@ export interface EngineOptions {
   /** Default: `dev` for `vite dev`, `release` for `vite build` (0017 §4). */
   profile?: Profile
   /**
-   * 0017 §5's bindings step (docs/plan/16-action-round-trip.md step 4): a game passes
+   * 0017 §5's bindings step (M16 step 4): a game passes
    * `{ dir: 'src/bindings' }` (0017 §1's layout). Absent by default. The initial `buildStart`
    * build awaits it; a dev rebuild (triggered by a `.rs`/`Cargo.toml` watch) fires it without
    * awaiting it (Deviations: "without gating the reload") so a slow native `cargo test` never
@@ -37,7 +37,7 @@ export interface EngineOptions {
   wasmOpt?: boolean
   /**
    * `buildGame({ features })`: cargo features of the game crate. Only the reference game's bench
-   * build passes one (`vite build --mode bench`, docs/plan/36-slow-tier-and-benchmarks.md step 6);
+   * build passes one (`vite build --mode bench`, M36 step 6);
    * the output's `buildHash` differs from the plain build's, so a bench page never joins a normal
    * server.
    */
@@ -71,7 +71,7 @@ export interface CrateWatcher {
 
 /**
  * Watches `dir` for `.rs` and `Cargo.toml`/`build.rs` changes without ever recursing into
- * `target/` (docs/plan/17d-fast-tier-wall-time.md, CI round 1's fix): a *recursive* `fs.watch` on
+ * `target/` (M17d, CI round 1's fix): a *recursive* `fs.watch` on
  * `src/`, plus a *non-recursive* `fs.watch` on `dir` itself for its root-level files
  * (`Cargo.toml`, `build.rs`). The earlier version watched the whole crate directory recursively
  * and filtered `target/` only inside its callback -- on Linux, `fs.watch(dir, {recursive: true})`

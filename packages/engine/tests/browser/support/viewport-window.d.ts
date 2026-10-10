@@ -1,4 +1,4 @@
-// Ambient `window.__viewport` type (docs/plan/09b-terrain-art-and-lifecycle.md, steps 4-5), shared
+// Ambient `window.__viewport` type (M09b, steps 4-5), shared
 // by `viewport.html`'s page script and `viewport.spec.ts`, the same split `terrain-window.d.ts`
 // already uses for `window.__terrain`.
 export {}

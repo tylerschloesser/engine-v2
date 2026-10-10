@@ -1,4 +1,4 @@
-// `real-camera.html`'s script (docs/plan/11-camera-and-input.md, Order of work step 6): a real
+// `real-camera.html`'s script (M11, Order of work step 6): a real
 // `createClient()` whose canvas is actually attached to the document, so the client's own
 // automatically-installed `installPointerListeners`/`installKeyListeners`/`installWheelListeners`
 // (`src/client.ts`, this range's own production wiring) receive *real* DOM events from Playwright's
@@ -51,7 +51,7 @@ declare global {
     __rcInjectKey?: (code: string, down: boolean) => void
     __rcKeysMask?: () => number
     __rcMountWidget?: (x: number, y: number, w: number, h: number) => void
-    // docs/plan/18-picking-and-overlay.md: picking hooks -- a spec hand-fills the DrawList's own
+    // M18: picking hooks -- a spec hand-fills the DrawList's own
     // back slot and publishes it (the same "hand-built slot" shape `input/pick.test.ts`'s unit
     // tests use, over the real triple-buffer SAB this time), then drives picking exactly the way
     // `frame-loop.ts`'s `acquire` phase and `input/semantic.ts`'s recognizer do.
@@ -68,7 +68,7 @@ declare global {
       }>,
       windowOriginX?: number,
       windowOriginY?: number,
-      // docs/plan/18-picking-and-overlay.md steps 4-6: hand-fills the same header bytes Rust's
+      // M18 steps 4-6: hand-fills the same header bytes Rust's
       // `DrawList::sort_into` would (`cx.follow(..)`'s own `follow_valid`/`follow`, `DrawList::
       // anchor`'s own `anchor_mask`/`anchors`) -- the same "no WASM needed, hand-filled SAB" shape
       // steps 1-3 already used for picking/overlay. `anchors` positions are tiles relative to
@@ -81,13 +81,13 @@ declare global {
     __rcPickAcquire?: () => void
     __rcPickAt?: (cssX: number, cssY: number) => number
     __rcPickScanned?: () => number
-    // docs/plan/18-picking-and-overlay.md: overlay hooks -- `id` names both the DOM element (its own
+    // M18: overlay hooks -- `id` names both the DOM element (its own
     // `id` attribute, so a spec can query it with a Playwright locator, reading layout is allowed
     // there) and the `AnchorHandle` this page keeps.
     __rcOverlayAnchor?: (id: string, worldX: number, worldY: number, align?: AnchorAlign) => void
     __rcOverlaySet?: (id: string, worldX: number, worldY: number) => void
     __rcOverlayRemove?: (id: string) => void
-    // docs/plan/18-picking-and-overlay.md steps 4-6: `overlay.anchorSlot`.
+    // M18 steps 4-6: `overlay.anchorSlot`.
     __rcOverlayAnchorSlot?: (id: string, slot: number) => void
     __rcOverlayAnchorSlotRemove?: (id: string) => void
     __rcOverlayUpdate?: () => void
@@ -117,7 +117,7 @@ window.__rcCreate = (opts = {}) => {
     genWorkers: 1,
     test: { flags: { netNoDial: true } },
     ...(opts.cameraKey !== undefined ? { cameraKey: opts.cameraKey } : {}),
-    // docs/plan/18-picking-and-overlay.md step 8: `overlay.translate_mode_equivalent` opts into
+    // M18 step 8: `overlay.translate_mode_equivalent` opts into
     // `mode: 'translate'` here rather than a new page -- every other overlay hook below already
     // works unmodified in either mode (`Overlay.anchor/anchorSlot/update/styleWrites`'s own public
     // shape does not change with `mode`).
@@ -190,7 +190,7 @@ window.__rcMountWidget = (x, y, w, h) => {
   host.appendChild(widget)
 }
 
-// docs/plan/18-picking-and-overlay.md: picking. `writer` is built once, lazily (the client doesn't
+// M18: picking. `writer` is built once, lazily (the client doesn't
 // exist until `__rcCreate`) -- the *only* `TripleWriter` this page ever builds over `sabs.drawList`,
 // matching production's own "one writer" shape (the client worker's real publish pump).
 let drawListWriter: TripleWriter | undefined
@@ -204,7 +204,7 @@ const HEADER_OFF_FRAME_SEQ = 0
 const HEADER_OFF_RECORD_COUNT = 4
 const HEADER_OFF_WINDOW_ORIGIN = 8
 const HEADER_OFF_LAYER_COUNT = 16
-// docs/plan/18-picking-and-overlay.md steps 4-6: `client/drawlist.rs`'s own `follow_valid`/`follow`/
+// M18 steps 4-6: `client/drawlist.rs`'s own `follow_valid`/`follow`/
 // `anchor_mask`/`anchors` offsets (Deviations "Header, as landed").
 const HEADER_OFF_FOLLOW_VALID = 48
 const HEADER_OFF_FOLLOW = 56
@@ -280,7 +280,7 @@ window.__rcPickAcquire = () => requireClient().pick.acquire()
 window.__rcPickAt = (cssX, cssY) => requireClient().pick.at(cssX, cssY)
 window.__rcPickScanned = () => clientTestHandle(requireClient()).picker.scanned()
 
-// docs/plan/18-picking-and-overlay.md: static overlay anchors.
+// M18: static overlay anchors.
 const overlayHandles = new Map<string, AnchorHandle>()
 
 window.__rcOverlayAnchor = (id, worldX, worldY, align) => {
@@ -301,7 +301,7 @@ window.__rcOverlayRemove = (id) => {
 window.__rcOverlayUpdate = () => requireClient().overlay.update()
 window.__rcOverlayStyleWrites = () => clientTestHandle(requireClient()).overlay.styleWrites()
 
-// docs/plan/18-picking-and-overlay.md steps 4-6: slot anchors.
+// M18 steps 4-6: slot anchors.
 const overlaySlotHandles = new Map<string, SlotAnchorHandle>()
 
 window.__rcOverlayAnchorSlot = (id, slot) => {

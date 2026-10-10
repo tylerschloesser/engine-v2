@@ -1,4 +1,4 @@
-// `reconnect` (docs/plan/28b-reconnect-and-lifecycle.md steps 3-5, Tests added): pending-action
+// `reconnect` (M28b steps 3-5, Tests added): pending-action
 // resend and `Lost` (step 3), grace and its interaction with the logged connection events (step
 // 4), the resume-hint round trip and its own bandwidth cost (step 5). Steps 1-2's own coverage
 // (`epoch-and-resync.test.ts`) is Non-scope here.

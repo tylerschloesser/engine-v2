@@ -1,4 +1,4 @@
-// `refHarness` and `tornStateProbe` (docs/plan/34c-reference-scripted-multiplayer.md Provides): the
+// `refHarness` and `tornStateProbe` (M34c Provides): the
 // boilerplate every scripted multiplayer scenario of the reference game starts with. The netcode
 // suite is one Node process on a virtual clock (`packages/engine/tests/netcode/CLAUDE.md`).
 import {

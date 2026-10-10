@@ -1,4 +1,4 @@
-// Messages between `client.ts` (main) and `worker.ts`'s `run()` (docs/plan/06b-workers-and-spawn.md,
+// Messages between `client.ts` (main) and `worker.ts`'s `run()` (M06b,
 // Seams: "the only steady use of postMessage besides fatal and resume"). Types only, erased at
 // compile time.
 import type { DesyncReport } from '../desync.js'
@@ -12,7 +12,7 @@ import type { WorldConfig } from '../sim-config.js'
 
 export type WorkerKind = 'client' | 'sim' | 'gen' | 'net'
 
-/** The isolate name budgets and controls use (docs/plan/06b-workers-and-spawn.md, orchestrator
+/** The isolate name budgets and controls use (M06b, orchestrator
  * decision 1): `'client' | 'sim' | 'gen0' | 'gen1' | 'net'`; `'main'` is reserved for the page
  * thread. Shared by `worker.ts` (sets `self.__engineIsolateName`) and `test/client.ts`'s
  * `asHarness` (names `Harness.workerNames` the same way), so a CDP `Runtime.evaluate` of
@@ -23,7 +23,7 @@ export function isolateName(kind: WorkerKind, index: number): string {
 }
 
 /** Test-only behaviour carried in the setup message, never read by a production build that omits
- * `engine/test` (docs/plan/06b-workers-and-spawn.md, Consumes: M04's `gcHook`). */
+ * `engine/test` (M06b, Consumes: M04's `gcHook`). */
 export type TestFlags = {
   /** Drives the `echo` zero-GC page's SAB -> region -> region -> SAB round trip (Tests added). */
   echo?: boolean
@@ -37,30 +37,30 @@ export type TestFlags = {
    * runs, read fresh from the control block's `Control` word set up the same way `step-block.ts`
    * does it for the test harness. */
   gcHook?: boolean
-  /** M36's bench HUD (docs/plan/36-slow-tier-and-benchmarks.md step 6): the client worker times each
+  /** M36's bench HUD (M36 step 6): the client worker times each
    * `frame()` call and the sim worker each tick-running pass into `CB_CLIENT_FRAME_*`/
    * `CB_SIM_TICK_US` (`sab/control.ts`), for main to read. Set only by the reference game's bench
    * build; a shipped build never carries it. */
   timing?: boolean
-  /** `worker/sim.ts` only (docs/plan/13b-tick-timing-allocation.md, Order of work 1): arms
+  /** `worker/sim.ts` only (M13b, Order of work 1): arms
    * `simHost.start()` (real-time pacing, `onFire` via `AtomicsTimer`) even though `test` is
    * present, so a zero-GC page can prove the production pacing path itself is allocation-free --
    * distinct from the blanket `!message.test` gate M13 built, which a page still driving ticks
    * deterministically through `CB_SIM_STEP_REQ` (`gc-sim.ts`) must keep clear of (Deviations: why
    * arming both at once is safe for a page that never asserts a resulting hash). */
   pace?: boolean
-  /** `worker/sim.ts` only (docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4,
+  /** `worker/sim.ts` only (M23 steps 3-4,
    * `no_opfs_falls_back_durable_false`): skips the OPFS probe entirely and opens with
    * `memoryStorage()`/`durable: false` directly, the same outcome a real OPFS-less browser would
    * reach -- deterministic (no dependency on whether a test's own OPFS stub reaches the worker's own
    * global scope), unlike stubbing `navigator.storage.getDirectory` from outside the page. */
   noOpfs?: boolean
-  /** `worker/sim.ts` only (docs/plan/23-persistence-opfs-and-lifecycle.md, coordinator fix round
+  /** `worker/sim.ts` only (M23, coordinator fix round
    * 1): overrides `PersistenceOptions.snapshotEveryTicks` (default 1,200, 0005 Cadence) so a real,
    * continuously-paced behavioural test can observe several periodic OPFS snapshots inside a few
    * seconds instead of 1,200 real ticks at 20 Hz. */
   snapshotEveryTicks?: number
-  /** `worker/sim.ts` only (docs/plan/23-persistence-opfs-and-lifecycle.md step 6,
+  /** `worker/sim.ts` only (M23 step 6,
    * `neg_control_snapshot_allocates`): wraps the persisted world's own `Storage.append` so every
    * call also allocates one throwaway object, and forces one synthetic `append` call per real tick
    * (to a dummy debug key `Persistence`/the game never touch) so the control actually trips every
@@ -68,14 +68,14 @@ export type TestFlags = {
    * that never fires is a defect in the instrument, never something to fix by widening). Sim worker
    * only, by construction (no other kind ever gets `message.world`). */
   leakyStorageAppend?: boolean
-  /** `worker/net.ts` only (docs/plan/29-net-worker-and-reference-server.md, this cut's own step 5,
+  /** `worker/net.ts` only (M29, this cut's own step 5,
    * `gc/net-negative-control`): wraps the dialed `Connection` so every downlink message also runs a
    * throwaway `JSON.parse(new TextDecoder().decode(bytes))`, discarded immediately -- a hand-built
    * negative control proving `net`'s own isolate (and no sibling isolate) fails the moment this file
    * starts parsing a message the way the production `grep` exit criterion forbids it from doing.
    * Never true in production. */
   netInjectParse?: boolean
-  /** `worker/net.ts` only (docs/plan/29-net-worker-and-reference-server.md, M29b fix round 1: CI's
+  /** `worker/net.ts` only (M29, M29b fix round 1: CI's
    * slow tier found `terrain-client.html`'s own `@webkit-gpu @slow` test failing deterministically
    * on a genuine `WebSocket` DNS-failure console error). Steps 1-2 made every `{ kind: 'remote' }`
    * host dial for real, but a dozen-plus pre-existing test/device pages use a placeholder
@@ -86,7 +86,7 @@ export type TestFlags = {
    * own `noDialConnection`), so these pages get exactly the pre-M29 behaviour back: never up, never
    * down, no bytes, no timers, no real network attempt. Never true in production. */
   netNoDial?: boolean
-  /** `worker/client.ts` only (docs/plan/37-robustness-events.md step 1, 0014 §6): the client worker
+  /** `worker/client.ts` only (M37 step 1, 0014 §6): the client worker
    * throws a real `EngineTrap` (`worker/test-trap.ts`) in place of its `frame()` call at the N-th
    * frame it runs (1-based, counted across instance rebuilds; an array traps at each listed N). Test
    * only: a shipped build never sets it. */
@@ -118,7 +118,7 @@ export type SetupMessage = {
   sabs: SabSet
   config: InstanceConfig
   test?: TestFlags
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: the real `WorldConfig` a persisted
+  /** M23 steps 3-4: the real `WorldConfig` a persisted
    * single-player world was opened with, present only for the `sim`-kind spawn and only when
    * `ClientOptions.host = { kind: 'local', persist: true, ... }` (`client.ts`'s `start()`) --
    * additive, like `link` below: no existing `sim`-kind test page sets `host.persist`, so none of
@@ -136,7 +136,7 @@ export type SetupMessage = {
     lockWaitMs?: number
   }
   /**
-   * docs/plan/15b-ring-connection-and-replica-rendering.md, Orchestrator ruling 1: whether this
+   * M15b, Orchestrator ruling 1: whether this
    * topology's `sim`/`client` link the uplink/downlink ring pair -- a topology fact carried on
    * the setup message both of them receive identically, not a `test`-scoped flag (`TestFlags`
    * above is explicitly test-only; this is real production config, present or absent whether or
@@ -149,21 +149,21 @@ export type SetupMessage = {
    * poll) only then either. Ignored by `gen`/`net`.
    */
   link?: boolean
-  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2: present only on the `net`-kind
+  /** M29 steps 1-2: present only on the `net`-kind
    * spawn (`ClientOptions.host = { kind: 'remote', url, joinKey? }`) -- the real `wsConnection`
    * endpoint this net worker dials, and the join key (if any) a caller must still carry through
    * `Hello`'s own `join_key` field on the client side (`clientGame.joinKey`, `client.ts`'s
    * `start()`, unchanged by this milestone -- `net` itself never touches `Hello`'s bytes). Absent
    * for every other kind. */
   net?: { url: string; joinKey?: string }
-  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2: `true` only on the `client`-kind
+  /** M29 steps 1-2: `true` only on the `client`-kind
    * spawn of a `{ kind: 'remote' }` topology (never set for a `local` host, where `link` alone
    * already means "linked to the sim worker's own `RingConnection`, always up"). Gates `worker/
    * client-net.ts`'s handshake pump on `CB_LINK_STATE`/`CB_LINK_GEN` (`sab/control.ts`, written by
    * the `net`-kind worker) instead of sending `client_hello()` on this worker's very first wake
    * regardless of whether a real net-worker `Connection` exists yet. */
   remoteLinked?: boolean
-  /** docs/plan/37-robustness-events.md step 2: `true` on the `sim`-kind spawn `client.ts` makes
+  /** M37 step 2: `true` on the `sim`-kind spawn `client.ts` makes
    * after the first sim worker died. The worker's start-up is the ordinary load path (snapshot and
    * log tail), then it bumps the epoch, and its ring connection discards whatever the client pushed
    * while no sim was listening, up to the client's next `Hello`. */
@@ -190,7 +190,7 @@ export type TestCallMessage = {
 
 /**
  * `SIM_COUNTERS_CALL`: the `test-call` `name` `worker/sim.ts`'s own `testCall` handler answers
- * directly instead of forwarding to `handleTestCall` (docs/plan/13-sim-host-tick-loop.md, step 5):
+ * directly instead of forwarding to `handleTestCall` (M13, step 5):
  * `SimHostCounters` is JS-side `SimHost` state, not an ABI export `handleTestCall` could ever reach
  * through `EngineInstance`. Leading double underscore, same convention as `worker.ts`'s own
  * `__engineWorkerKind`/`__engineIsolateName` debug globals: never a real ABI export name, so it can
@@ -201,7 +201,7 @@ export const SIM_COUNTERS_CALL = '__sim_counters'
  * order (`server.ts`). */
 export const SIM_COUNTERS_BYTES = 20
 
-/** `worker/sim.ts`'s own `testCall` handler (docs/plan/15b-ring-connection-and-replica-
+/** `worker/sim.ts`'s own `testCall` handler (M15b
  * rendering.md, `engine/test`'s `netCounters`): the one piece of a linked connection's own JS-side
  * counters with no ABI export at all (`RingConnection.downlinkRetries`) -- `sim_conn_counters`
  * (the `host::ConnCounters` half) is a real ABI export instead, reached through `callParked`
@@ -210,7 +210,7 @@ export const NET_COUNTERS_CALL = '__net_counters'
 /** One little-endian `u32`: `RingConnection.downlinkRetries`. */
 export const NET_COUNTERS_BYTES = 4
 
-/** docs/plan/37-robustness-events.md step 1: `test-call` names the client and gen workers answer
+/** M37 step 1: `test-call` names the client and gen workers answer
  * themselves (like `SIM_COUNTERS_CALL`): how many times that worker replaced a trapped instance,
  * one little-endian `u32` in the reply's `result`. The evidence a recovery test needs that the
  * recovery path ran at all. */
@@ -218,7 +218,7 @@ export const CLIENT_TRAPS_CALL = '__client_traps'
 export const GEN_TRAPS_CALL = '__gen_traps'
 export const TRAPS_BYTES = 4
 
-/** docs/plan/23-persistence-opfs-and-lifecycle.md, coordinator fix round 1: a minimal, page-local
+/** M23, coordinator fix round 1: a minimal, page-local
  * debug call for the periodic-OPFS-snapshot behavioural test (`world.spec.ts`'s own
  * `paced_session_lands_periodic_snapshots`) -- `Persistence.counters` plus the OPFS adapter's own
  * `snapshotDeferred` (`OpfsStorage`, Planning decision 2), neither reachable through an ABI export.
@@ -230,14 +230,14 @@ export const PERSISTENCE_DEBUG_CALL = '__persistence_debug'
  * `snapshots`, `lastSnapshotBytes`, `syncs`), then `snapshotDeferred`. */
 export const PERSISTENCE_DEBUG_BYTES = 24
 
-/** docs/plan/23-persistence-opfs-and-lifecycle.md Seams (Provides): `client.onStorage`'s own
+/** M23 Seams (Provides): `client.onStorage`'s own
  * argument shape, verbatim. Declared here (not in `client.ts`) so `SimLifecycleMessage` below can
  * reference it without `worker/protocol.ts` importing `client.ts` (which already imports this file
  * -- a cycle); `client.ts` re-exports it unchanged, the same "no renamed Provides" convention
  * `sim-config.ts`'s/`storage/types.ts`'s own types already follow. */
 export type StorageStatus = { durable: boolean; persisted: boolean; usage: number; quota: number }
 
-/** Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 2): the one
+/** Gate fix (M23, "Open gate failures" 2): the one
  * `FromWorker` type posted before this worker's blocking loop ever starts (`worker.ts`'s own
  * `post({ type: 'ready' })`, right after `setup()` resolves) -- the worker -> main half of 0015 §2's
  * "setup" phase (the `Module`/SABs/config are the main -> worker half). Checked by
@@ -269,7 +269,7 @@ export const POST_SETUP_MESSAGE_TYPES: readonly string[] = [
   'link',
 ]
 
-/** docs/plan/23-persistence-opfs-and-lifecycle.md Seams (Provides): the sim worker's own lifecycle
+/** M23 Seams (Provides): the sim worker's own lifecycle
  * notifications beyond `ready`/`fatal` (0015 §2: `postMessage` after setup carries lifecycle only --
  * this milestone's own two new types, checked by name against `POST_SETUP_MESSAGE_TYPES` above, an
  * automated allowlist -- not, as an earlier draft of this comment put it, "M06b's grep criterion"
@@ -285,14 +285,14 @@ export const POST_SETUP_MESSAGE_TYPES: readonly string[] = [
  * `fatal` that follows once already settled. */
 export type SimLifecycleMessage =
   | { type: 'storage'; status: StorageStatus; created: boolean }
-  /** docs/plan/37-robustness-events.md step 3 (0005 Panic recovery 4, Storage): the world is wedged
+  /** M37 step 3 (0005 Panic recovery 4, Storage): the world is wedged
    * under this build (a tick that panics again after recovery, a failed `memory.grow`) or its
    * storage failed. The worker stops ticking and stays alive (files untouched, export still
    * reachable); main raises `client.onFatal`. Distinct from a plain `fatal`, which means the
    * worker itself died and main respawns it. */
   | { type: 'sim-fatal'; tick: number; message: string }
   | { type: 'start-failed'; code: 'world-busy' | 'load-failed'; detail: string }
-  /** docs/plan/24b-upgrade-and-migration.md: carved out of `'load-failed'` above -- an identity/
+  /** M24b: carved out of `'load-failed'` above -- an identity/
    * schema/tick-rate/worldgen/chunk-size mismatch that ends in `SaveIncompatible` (`WorldLoadError
    * { kind: 'incompatible' }`). Same degraded-worker fallback as `'load-failed'`
    * (`exportWorld`/`deleteWorld` still work); only the reported code/detail differ. */
@@ -305,7 +305,7 @@ export type SimLifecycleMessage =
       running: IdentityJson
     }
 
-/** docs/plan/28-sessions-and-reconnect.md step 5: the client worker's own one-off lifecycle
+/** M28 step 5: the client worker's own one-off lifecycle
  * notification (0015 §2: "postMessage after setup carries lifecycle only") -- posted exactly once,
  * the instant a linked client worker applies its first `Welcome` (`worker/client-net.ts`'s
  * `NetPumpHandshake.onAttached`), so the main thread can forward the view clamps `Client.camera`
@@ -319,28 +319,28 @@ export type ClientLifecycleMessage =
       viewMaxTilesPerAxis: number
       viewMaxChunks: number
     }
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: the same one-off shape as `client-welcome`
+  /** M28b step 2: the same one-off shape as `client-welcome`
    * above, posted instead when the `Welcome` a linked client worker just applied was a *second*
    * one (a resync, `worker/client-net.ts`'s own `onResyncing` callback) -- `client.ts`'s
    * `onWelcome` dispatches this to `Client.onResyncing`'s own listener list rather than the camera
    * (there is no view-clamp change to forward: the world's own clamps do not move on a resync). */
   | { type: 'client-resyncing' }
-  /** docs/plan/33f (ADR 0042): posted once per client instance, on the `Welcome` that configured a
+  /** M33f (ADR 0042): posted once per client instance, on the `Welcome` that configured a
    * remote client's world (`client_on_welcome`'s `configured` word is `1` exactly once). `config`
    * is `client_world_config`'s JSON, `{"seed":"0x..","params":..}`: the `game` a gen worker's setup
    * message carries. `client.ts` spawns the gen workers on it. Never sent for a client configured
    * at `engine_init`'s own `game` (a local host, `test.game`). */
   | { type: 'client-configured'; config: string }
-  /** docs/plan/37-robustness-events.md step 1 (0014 §6): the client worker's instance trapped and
+  /** M37 step 1 (0014 §6): the client worker's instance trapped and
    * the worker is replacing it (fresh instance, `Hello` without a resume hint). Main fans it out to
    * `onResyncing` and counts it for the loop guard (two within 10 s of the injected clock is fatal).
    * Posted at most once per trap. */
   | { type: 'client-trapped'; message: string }
-  /** docs/plan/37-robustness-events.md step 4: one entry of the client instance's desync report
+  /** M37 step 4: one entry of the client instance's desync report
    * ring (M31b), forwarded to `Client.onDesync` listeners, once per report. */
   | { type: 'client-desync'; report: DesyncReport }
 
-/** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: main -> sim worker, parked-only (like
+/** M23 steps 3-4: main -> sim worker, parked-only (like
  * `TestCallMessage`, whose own doc comment gives the reason: a worker blocked in `Atomics.wait`
  * receives no events, 0015 §2) -- the hidden/visible clean-boundary protocol. `client.ts` parks the
  * sim worker (`W_YIELD` + wake, polling `W_PARKED`) before sending `sim-pause`; the sim worker's own
@@ -352,7 +352,7 @@ export type ClientLifecycleMessage =
 export type SimControlMessage = { type: 'sim-pause' } | { type: 'sim-resume' }
 
 /**
- * docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Rules and traps: main -> sim worker,
+ * M23 step 5, Rules and traps: main -> sim worker,
  * parked-only like `SimControlMessage` (same reason: a blocked worker receives no events, 0015 §2).
  * A *separate* family from `SimControlMessage`, not a third variant of it (Deviations: named here so
  * the choice is on the record) -- `client.ts` funnels *both* families through one FIFO queue on the
@@ -381,7 +381,7 @@ export type SimWorldOpResult =
   | { type: 'world-op-error'; message: string }
 
 /**
- * docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "main -> net `{ type: 'probe'
+ * M29 steps 1-2 (Scope: "main -> net `{ type: 'probe'
  * }` on `visibilitychange -> visible` and `online`, and `{ type: 'retry' }`"): parked-only in
  * spirit but not in mechanism -- a `net`-kind worker is event-driven, never blocked in `Atomics.
  * wait` (0015 §2), so unlike `SimControlMessage`/`TestCallMessage` this is deliverable at any
@@ -394,7 +394,7 @@ export type SimWorldOpResult =
 export type NetControlMessage = { type: 'probe' } | { type: 'retry' }
 
 /**
- * docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "net -> main `{ type: 'link',
+ * M29 steps 1-2 (Scope: "net -> main `{ type: 'link',
  * state, code? }` on transitions"): the net worker's own `createLink`-level view, in `net/link.ts`'s
  * own vocabulary (`DownReason`) -- not yet the richer, main-owned `client.onLink` six-value state
  * (`connecting | online | reconnecting | updating | superseded | rejected`), since the net worker

@@ -1,4 +1,4 @@
-// `reference-server/sigterm-snapshots` (docs/plan/38-hosting-checks.md, Tests added; 0005 Cadence:
+// `reference-server/sigterm-snapshots` (M38, Tests added; 0005 Cadence:
 // snapshot on the server shutdown signal). A real `games/reference-server --data <dir>` process, a
 // headless client over a real socket acts, `SIGTERM`: the process exits 0, and a second process on the
 // same directory comes back at the snapshot's tick with the same replica hash and no log tail to replay

@@ -1,4 +1,4 @@
-// `bench.frame_reference @slow` (docs/plan/36-slow-tier-and-benchmarks.md step 6; 0018 §9, 0020 §9):
+// `bench.frame_reference @slow` (M36 step 6; 0018 §9, 0020 §9):
 // the reference game single-player on the standard large save (`?bench=large-save`, the bench build
 // of `games/reference`), camera at maximum zoom-out over the dense furnace block, a slow pan, real
 // `requestAnimationFrame` under M17b's `frame-bench` project flags. The same measurement as

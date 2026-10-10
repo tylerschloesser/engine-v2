@@ -1,6 +1,6 @@
 //! `Uploader`: the client-role object that turns resident chunks, tile patches and residency
 //! changes into upload-ring records for `worker/client.ts`'s `upload_stage(free)` pump to copy into
-//! the SAB `uploadRing` (docs/decisions/0018-renderer.md §3; docs/plan/09-renderer-terrain.md
+//! the SAB `uploadRing` (docs/decisions/0018-renderer.md §3; M09
 //! Planning decisions "Upload-ring record layout", "Which chunks upload"). `TerrainStore` is never
 //! owned here -- every method that needs one takes `&TerrainStore` (mirrors `TerrainFeed::on_frame`
 //! taking `&TerrainStore`, `client/terrain_feed.rs`), so a fixture's `upload_stage` ABI impl passes
@@ -49,7 +49,7 @@ struct IndirEntry {
     x: u8,
     y: u8,
     value: u16,
-    /// Open gate failures item 4, gate round 1 (docs/plan/09-renderer-terrain.md Deviations "Gate
+    /// Open gate failures item 4, gate round 1 (M09 Deviations "Gate
     /// fix round 1"): `Some(slot)` only for the "none" entry an eviction pushes -- never written to
     /// the wire (the record only ever encodes `x`/`y`/`value`) -- so `stage_indir` can clear
     /// [`Uploader::indir_none_pending`] for exactly the slot this entry frees, once this entry is
@@ -92,9 +92,9 @@ fn chunk_dist_sq(a: ChunkCoord, b: ChunkCoord) -> i64 {
     dx * dx + dy * dy
 }
 
-/// The client-role uploader (Provides of docs/plan/09-renderer-terrain.md). `C: ClientSide<G>` is
+/// The client-role uploader (Provides of M09. `C: ClientSide<G>` is
 /// called generically (`C::tile_visual`, static, no instance). M12 adds the `G: Game` bound to
-/// `ClientSide` (docs/plan/12-store-and-game-trait.md Scope), which forces a concrete `G` here
+/// `ClientSide` (M12 Scope), which forces a concrete `G` here
 /// too: `G`'s own default of `()` predates M12 and is dropped along with `ClientSide`'s, since
 /// `(): Game` does not hold. A caller with no real game yet (a low-level fixture) names a local,
 /// unreachable `Game` shell -- see `fixtures/terrain`'s `NoGame` -- purely to satisfy this bound;
@@ -114,7 +114,7 @@ pub struct Uploader<C: ClientSide<G>, G: crate::game::Game> {
     indir_none_pending: [bool; PAGE_SLOTS as usize],
     /// Chunks queued for a fresh `CHUNK` record, already sorted nearest-first when pushed by
     /// `on_frame` (`enqueue_chunk` appends at the back instead: a dirty-chunk push, not a residency
-    /// scan, docs/plan/09-renderer-terrain.md Deviations).
+    /// scan, M09 Deviations).
     pending_chunks: VecDeque<ChunkCoord>,
     pending_indir: VecDeque<IndirEntry>,
     pending_patches: VecDeque<PatchEntry>,
@@ -170,7 +170,7 @@ impl<C: ClientSide<G>, G: crate::game::Game> Uploader<C, G> {
     /// not-yet-uploaded chunks, nearest first.
     ///
     /// **A same-chunk, same-slot `Evicted`-then-`Loaded` pair inside one drain never stages an
-    /// `INDIR_NONE` at all** (docs/plan/26-prediction-rendering-and-clocks.md Deviations, "Gate fix
+    /// `INDIR_NONE` at all** (M26 Deviations, "Gate fix
     /// round 1", item 1): `TerrainStore::replace_overlay` (a wire `ChunkSnapshots` for a chunk this
     /// client already held -- found live, a real host/client subscription-entry race, not a
     /// prediction bug) now evicts *and immediately re-materializes* the same chunk, synchronously,
@@ -227,7 +227,7 @@ impl<C: ClientSide<G>, G: crate::game::Game> Uploader<C, G> {
 
         // `lookahead_chunks` only reads velocity's sign (`view.rs` doc comment); a plain sign
         // extraction avoids duplicating `TerrainFeed`'s private Q24.8 conversion for no benefit
-        // here (docs/plan/09-renderer-terrain.md Deviations).
+        // here (M09 Deviations).
         let velocity = (sign_i32(camera.velocity[0]), sign_i32(camera.velocity[1]));
         let ring1 = visible.expanded(1);
 
@@ -565,7 +565,7 @@ mod tests {
     }
 
     /// A trivial `Worldgen`/`Game` pair, named only so `Fixture: ClientSide<G>` (below) has a
-    /// concrete `G: Game` to satisfy `Uploader`'s bound (docs/plan/12-store-and-game-trait.md
+    /// concrete `G: Game` to satisfy `Uploader`'s bound (M12
     /// Scope): never driven (no `apply`/`tick`/`genesis` call in this file).
     struct NoGen;
     impl Worldgen for NoGen {

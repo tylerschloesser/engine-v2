@@ -1,4 +1,4 @@
-//! Footprint-straddling delivery, end to end (docs/plan/21-entities-and-timers.md Tests added,
+//! Footprint-straddling delivery, end to end (M21 Tests added,
 //! "loopback"): a real `Host<Machines>` <-> `ClientCore<Machines>` round trip over real wire bytes
 //! (`Loopback`), driving `fx-machines`'s own `Place`/`Move`/`Feed` through the real admit path.
 
@@ -207,7 +207,7 @@ fn moved_entity_enters_and_leaves_subscription() {
     lb.step();
     let id = EntityId(1);
     // `entity(id)`'s `Unknown`-vs-`None` distinction for a real id the client has never been told
-    // about (0022 §7 decision 7): landed by M25 (docs/plan/25-prediction-core.md), which fixed
+    // about (0022 §7 decision 7): landed by M25 ( which fixed
     // `client::Replica::entity` to return `Err(Unknown)` here instead of `Ok(None)` -- the client
     // cannot tell "despawned" from "outside my subscription".
     assert_eq!(lb.client(idx).view().entity(id), Err(Unknown));

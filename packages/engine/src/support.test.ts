@@ -1,4 +1,4 @@
-// docs/plan/06b-workers-and-spawn.md, Tests added: `support.report_shape`.
+// M06b, Tests added: `support.report_shape`.
 import { afterEach, expect, test, vi } from 'vitest'
 import { checkSupport } from './support.js'
 

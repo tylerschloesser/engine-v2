@@ -1,4 +1,4 @@
-// `SimHost` unit coverage (docs/plan/13-sim-host-tick-loop.md Tests added, step 2): pacing, the
+// `SimHost` unit coverage (M13 Tests added, step 2): pacing, the
 // catch-up cap, seal-before-tick ordering, pause/resume and the warmer budget, all against a fake
 // [`SimInstance`] (not a hand-rolled `EngineInstance`: `server.ts`'s own doc comment on
 // `SimInstance` explains why) and a manual clock/timer double -- no real `.wasm` here (step 3
@@ -36,7 +36,7 @@ function manualClock(startMs = 0) {
   }
 }
 
-/** docs/plan/28b-reconnect-and-lifecycle.md step 4: `HostServices.scheduler`'s own test double for
+/** M28b step 4: `HostServices.scheduler`'s own test double for
  * every test here that doesn't itself exercise grace/idle timers -- never fires anything, the same
  * shape `test/headless-client.ts`'s own `noopScheduler` already uses. */
 const noopScheduler: HostServices['scheduler'] = {
@@ -93,7 +93,7 @@ function fakeSim(overrides: Partial<SimInstance> = {}): SimInstance {
 }
 
 test('simhost_paces_one_tick_per_fire', () => {
-  // docs/plan/13b-tick-timing-allocation.md (ADR amending M13): pacing no longer checks a per-fire
+  // M13b (ADR amending M13): pacing no longer checks a per-fire
   // deadline against the clock at all (that check is what boxed on the strict isolate) -- every
   // fire runs exactly one tick, unconditionally. Real accuracy is `resync`'s job, covered below;
   // this test is the "fires unconditionally" half on its own, well under one resync window.
@@ -301,7 +301,7 @@ test('simhost_warmer_respects_budget', () => {
 })
 
 test('simhost_counts_tick_overrun', () => {
-  // docs/plan/13b-tick-timing-allocation.md (ADR amending M13): an overrun is detected once per
+  // M13b (ADR amending M13): an overrun is detected once per
   // resync window, not per tick -- every tick in the window runs `OVERRUN_MS` over its own share,
   // and the window's real elapsed time is only checked once, at the resync RESYNC_TICKS ticks in.
   const clock = manualClock()
@@ -359,7 +359,7 @@ test('simhost_seed_decimal_to_hex_u64', () => {
 })
 
 /**
- * docs/plan/27-server-entrypoint-and-netcode-harness.md, Exit criterion 4: `createWorldServer`'s
+ * M27, Exit criterion 4: `createWorldServer`'s
  * return type and `HostServices.onFatal?` match 0024 §5 (docs/decisions/0024-planning-amendments.md
  * §5) exactly: `createWorldServer(cfg, host): { ready: Promise<void>; accept(c: Connection): void;
  * stop(): Promise<void> }`, `HostServices.onFatal?: (f: { tick: number; message: string }) => void`.

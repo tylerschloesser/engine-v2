@@ -1,6 +1,6 @@
 //! `Tick`, `Ticks`, `TickRate` (docs/decisions/0003-game-facing-api.md `Game::TICK_RATE`,
 //! `WorldRead::tick`). Conversions between `Tick` and `Ticks` (and to/from wall time) are M12b's
-//! (docs/plan/12-store-and-game-trait.md Non-scope): built here per
+//! (M12 Non-scope): built here per
 //! docs/decisions/0006-time-units.md "Conversion rule".
 
 /// A tick index (0003: `u32`).
@@ -50,7 +50,7 @@ pub struct Ticks(pub u32);
 
 /// The sim's tick rate (0006, 0010 own the number; `Game::TICK_RATE` names it), fixed for a
 /// world's life. Only [`TickRate::hz`] can construct one, so a game's `TICK_RATE` is always in
-/// range (docs/plan/12b-world-access-and-sim-driver.md Scope).
+/// range (M12b Scope).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TickRate(u32);
 

@@ -1,4 +1,4 @@
-//! The `ui` call policy and its encode (docs/plan/16b-ui-observation-and-clock.md Scope): when the
+//! The `ui` call policy and its encode (M16b Scope): when the
 //! replica changes or the client-side dirty flag is set, call `ClientSide::ui` into a reused
 //! `G::Ui`, and only if the value differs from the last one emitted, serialise it into a kind-1 UI-
 //! ring record (`[kind u8 = 1][len u32 LE][JSON]`, sharing `RegionId::Ui` with docs/plan/
@@ -9,8 +9,8 @@ use crate::client::ClientSide;
 use crate::client::frame_view::FrameView;
 use crate::game::Game;
 
-/// Kind byte for a UI-ring `Ui` record (docs/plan/16b-ui-observation-and-clock.md Scope). Kind 2
-/// (`ActionResults`) is docs/plan/16-action-round-trip.md's own, sharing this same region and
+/// Kind byte for a UI-ring `Ui` record (M16b Scope). Kind 2
+/// (`ActionResults`) is M16's own, sharing this same region and
 /// buffer.
 const UI_RECORD_KIND_UI: u8 = 1;
 

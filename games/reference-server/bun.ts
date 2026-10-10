@@ -1,5 +1,5 @@
 // `bun games/reference-server/bun.ts --data <dir> [--game <dir>]`: the Bun entry, `engine/server/bun`
-// on `Bun.serve` (docs/plan/35b-bun-and-deno-adapters.md). Same flags, `PORT` and `JOIN_KEY` as
+// on `Bun.serve` (M35b. Same flags, `PORT` and `JOIN_KEY` as
 // `index.mjs` minus `--import` and `--exit-on-idle`; `CLAUDE.md`.
 import { bunHandlers, bunHostServices, fsStorage, loadGame } from 'engine/server/bun'
 import { createServer } from './common.mjs'

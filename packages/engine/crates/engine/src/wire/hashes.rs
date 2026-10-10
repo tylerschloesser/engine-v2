@@ -1,4 +1,4 @@
-//! `Hashes` (section 9) body and the `ResyncChunk` uplink message (docs/plan/31b-desync-hashes.md,
+//! `Hashes` (section 9) body and the `ResyncChunk` uplink message (M31b,
 //! 0013 "Per-chunk desync hashes").
 //!
 //! **`Hashes`**: a flat entry list to the section's end (no leading count), each entry

@@ -1,4 +1,4 @@
-// `createWorldServer` (docs/plan/27-server-entrypoint-and-netcode-harness.md): the three
+// `createWorldServer` (M27: the three
 // `server/*` tests named in its own Tests added list, driven against the real `fx-puts` `.wasm`
 // under Node.
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -211,7 +211,7 @@ test('server/accept-before-ready-waits', async () => {
   await server.stop()
 })
 
-// `nodeHostServices` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Scope): the real,
+// `nodeHostServices` (M27, Scope): the real,
 // wall-clock-paced counterpart to every other test in this file's own `timerDouble()` -- `clock`/
 // `timer` from `systemClock`/`systemScheduler`, ticking for real over a real `setTimeout` chain
 // against real `fsStorage`. `fx-puts` ticks at 20 Hz (50 ms/tick); waiting a few real ticks and

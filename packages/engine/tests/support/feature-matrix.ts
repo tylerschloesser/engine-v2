@@ -1,4 +1,4 @@
-// The build variants of `feature-matrix @slow` (docs/plan/36b-suite-audit-and-measurements.md, M02's
+// The build variants of `feature-matrix @slow` (M36b, M02's
 // hand-over, 0002 Consequences): the reference game and every golden fixture on `release` (a) plain,
 // (b) `wasmOpt: true`, (c) `RUSTFLAGS=-C target-feature=+simd128`, each through `buildGame` with its
 // own `outDir`, so a variant never overwrites the `target/engine/release` directory the plain-module

@@ -1,7 +1,7 @@
 // Minimal 8-bit RGBA PNG encoder (repo-only script utility; no npm dependency, 0017 §7's "npm: zero
 // runtime dependencies" spirit extended to scripts too): used by `scripts/gen-terrain-art.mjs` to
 // write the terrain fixture's flat-colour `tiles.png`, and importable by a browser spec that wants
-// to dump a failing readback as a PNG next to its expected image (docs/plan/09-renderer-terrain.md
+// to dump a failing readback as a PNG next to its expected image (M09
 // Context artifacts: ".claude/skills/run-tests/SKILL.md" names where those land).
 import { deflateSync } from 'node:zlib'
 

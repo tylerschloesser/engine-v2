@@ -47,15 +47,15 @@ pub enum Status {
     Decode = 6,
     OutOfMemory = 7,
     Unsupported = 8,
-    /// `client_chunk_hash` (docs/plan/08b-gen-workers-and-queue.md): the chunk is not resident in
+    /// `client_chunk_hash` (M08b: the chunk is not resident in
     /// the client's cache. Appended, never inserted (0014's numbering rule).
     NotCached = 9,
-    /// `engine_init` (M21, docs/plan/21-entities-and-timers.md): the sim role's computed 0007 §8
+    /// `engine_init` (M21, M21: the sim role's computed 0007 §8
     /// memory split (state budget + cache) exceeds the instance's configured arena -- a clean
     /// startup error instead of an allocator failure partway through the first tick. Appended,
     /// never inserted (0014's numbering rule).
     BudgetExceedsArena = 10,
-    /// `sim_restore_end` (docs/plan/22b-persistence-load-and-fs.md): the decoded snapshot's own
+    /// `sim_restore_end` (M22b: the decoded snapshot's own
     /// `Identity::build_hash` differs from this running build's (0005 "Sim identity" hash). Reported,
     /// not handled -- no migrate path exists here (M24b's own job); `Persistence.open` turns this
     /// into a thrown `WorldLoadError` of kind `'identity'` and touches no storage.
@@ -76,14 +76,14 @@ pub enum Status {
     /// or CRC-failing frame". **Not an error for the last (currently open) segment**: that is simply
     /// how recovery finds the torn tail to truncate. `sim_replay_valid_end()` reports where.
     TornTail = 14,
-    /// `sim_upgrade_end` (docs/plan/24b-upgrade-and-migration.md): the load takes the `Game::migrate`
+    /// `sim_upgrade_end` (M24b: the load takes the `Game::migrate`
     /// path (`persist::Comparison::NeedsMigrate`) and either `Game::migrate` itself declined
     /// (`IncompatReason::MigrateDeclined`, its default `Err(SaveIncompatible)`) or the old-schema
     /// bytes failed to decode (`IncompatReason::Decode`) -- the reason is written to byte 0 of
     /// `Result` (`IncompatReason as u8`). Every stored byte stays untouched on this path (0005
     /// Upgrades; Planning decisions 7): the caller must not write anything after seeing this status.
     SaveIncompatible = 15,
-    /// `client_on_welcome` (docs/plan/33f-client-world-config-from-welcome.md): this client took
+    /// `client_on_welcome` (M33f: this client took
     /// its world from an earlier `Welcome` and this one carries another seed or other params (one
     /// world per server, 0013). Nothing was applied; the page's policy is a reload. Appended,
     /// never inserted (0014's numbering rule).
@@ -91,7 +91,7 @@ pub enum Status {
 }
 
 /// `sim_upgrade_end`'s own `Status::SaveIncompatible` detail, written as one byte at `Result[0]`
-/// (docs/plan/24b-upgrade-and-migration.md Seams). `Schema`/`TickRate`/`Worldgen` mirror `persist::
+/// (M24b Seams). `Schema`/`TickRate`/`Worldgen` mirror `persist::
 /// MismatchReason` 1:1 (kept as separate, wire-stable discriminants here rather than reusing that
 /// type directly, since this enum crosses the ABI boundary and that one does not); `Container` is
 /// reserved for a future container-version-driven incompatibility (never constructed by this
@@ -125,10 +125,10 @@ pub enum RegionId {
     Persist = 6,
     Camera = 7,
     GenOut = 8,
-    /// `genResult` record staging (docs/plan/08b-gen-workers-and-queue.md): `16 + slab_bytes`,
+    /// `genResult` record staging (M08b: `16 + slab_bytes`,
     /// sized by client-role `init` alongside its `TerrainFeed`, same as `GenOut` on the gen role.
     GenIn = 9,
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: the client role's own inbound
+    /// M15b: the client role's own inbound
     /// buffer for one whole host frame (`on_frame`'s `len` bytes) -- distinct from `Rx`, which the
     /// client role already uses for input records (`on_input`, M11): both are "receive" buffers
     /// for the same role but for unrelated message kinds, and `RegionLayout::region` allows only
@@ -136,7 +136,7 @@ pub enum RegionId {
     /// `out`) reuses `Tx`, unclaimed by the client role until now -- the same Rx-in/Tx-out
     /// convention the sim role already has, just declared by a different role.
     Downlink = 10,
-    /// docs/plan/24-recovery-and-migration.md: `ProgressCursor` (`crate::persist::Phase`/`tick`/
+    /// M24: `ProgressCursor` (`crate::persist::Phase`/`tick`/
     /// `record`, 12 B, sim role) -- written by `Host<G>` before starting risky work, readable from
     /// a *dead* instance with no export call at all (0014 §6: `inst.region(id).u8`/`inst.mem`).
     /// Not sim state (never hashed, snapshotted or logged).
@@ -201,7 +201,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: admits `conn` into the sim role's
+    /// M15b: admits `conn` into the sim role's
     /// connection table (`host::Host::connect`). The caller (`SimHost.accept`, TS) picks `conn`;
     /// this export does no allocation of its own. Connecting an already-connected `conn` is left to
     /// the implementor -- `Host<G>` treats it as a fresh join, since Scope names no dedicated error
@@ -210,7 +210,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/24-recovery-and-migration.md, Traps ("Connections stay open across recovery"):
+    /// M24, Traps ("Connections stay open across recovery"):
     /// re-attaches `conn` to the sim role's connection table with the same deterministic `PlayerId`
     /// a live `connect` would assign, but queues no `Record::Player` event and touches no game
     /// state (`host::Host::reattach`'s own doc comment has the full reasoning) -- distinct from
@@ -220,7 +220,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/24-recovery-and-migration.md fix round 1 (Planning decisions 2: an `Admit`-phase
+    /// M24 fix round 1 (Planning decisions 2: an `Admit`-phase
     /// trap "recovers and answers that action `Rejected(Engine(EngineFault))`"): queues that ack
     /// directly on `conn`'s own (already-reattached) `ConnSlot` and raises its `highest_admitted_seq`
     /// floor to at least `seq`, so a resend of the exact `seq` that trapped is dropped at admission
@@ -230,7 +230,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: frees `conn`'s slot (`host::Host::
+    /// M15b: frees `conn`'s slot (`host::Host::
     /// disconnect`). A `conn` that was never connected, or already disconnected, is a no-op, not an
     /// error (untrusted host input never panics, matching `sim_admit`'s own tolerance of a bad
     /// connection id).
@@ -238,7 +238,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 4 (`ABI_VERSION` 30 -> 31): `host::Host::
+    /// M28b step 4 (`ABI_VERSION` 30 -> 31): `host::Host::
     /// log_disconnected` -- queues `Record::Player { Disconnected }` for `player`, delivered at the
     /// next `tick()`. The host-side grace timer's own signal (`host/lifecycle.ts`), independent of
     /// any live `ConnSlot`: by the time this fires the connection is already gone (either the 10 s
@@ -247,7 +247,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 25 -> 26): the real handshake join/
+    /// M28 (`ABI_VERSION` 25 -> 26): the real handshake join/
     /// reconnect path, replacing `sim_connect`'s implicit accept for every connection the host's
     /// own TS handshake (`host/handshake.ts`) drives. `input` is the whole `Rx` region view, first
     /// `len` bytes meaningful (mirrors `sim_admit`): `player_id varint · epoch u32 · joined u8 ·
@@ -258,7 +258,7 @@ pub trait Instance: Sized + 'static {
         Err(Status::Unsupported)
     }
 
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 2 (`ABI_VERSION` 29 -> 30): sends a fresh
+    /// M28b step 2 (`ABI_VERSION` 29 -> 30): sends a fresh
     /// `Welcome` on an already-open connection (`host::Host::resync`), carrying `epoch` (the
     /// host's own new epoch after `SimHost.bumpEpoch()`) -- the resync signal for a live
     /// connection after panic recovery or an upgrade bump (Planning decisions "A second `Welcome`
@@ -268,7 +268,7 @@ pub trait Instance: Sized + 'static {
         Err(Status::Unsupported)
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md: frees `conn`'s slot, the same as `sim_disconnect`
+    /// M28: frees `conn`'s slot, the same as `sim_disconnect`
     /// (`host::Host::disconnect`) -- a distinct export name so the handshake path (`sim_attach`)
     /// and its own teardown pair cleanly, without retiring `sim_disconnect` (still real, still used
     /// by every existing `sim_connect`-based caller: native tests, `testkit::Loopback`, recovery).
@@ -276,7 +276,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md: `host::Host::has_player` -- `1`/`0`, whether this
+    /// M28: `host::Host::has_player` -- `1`/`0`, whether this
     /// world's own `Store` already has a player slot for `player` (0013 Planning decisions: "Joined
     /// vs Connected is decided by the sim, not the table"). The caller (TS handshake) asks this
     /// before `sim_attach`, both to fill that call's own `joined` byte and to find the next free
@@ -286,7 +286,7 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md steps 3-5 (`ABI_VERSION` 27 -> 28): the `ConnId` the
+    /// M28 steps 3-5 (`ABI_VERSION` 27 -> 28): the `ConnId` the
     /// most recent successful `sim_attach` call silently freed because the same `PlayerId` was
     /// already attached elsewhere (0013 "the old connection gets `Bye{Superseded}`"), `u32::MAX`
     /// for "nothing was freed". `abi::mod::sim_attach` reads this right after a successful call
@@ -296,7 +296,7 @@ pub trait Instance: Sized + 'static {
         u32::MAX
     }
 
-    /// docs/plan/34-reference-multiplayer.md (`ABI_VERSION` 37 -> 38): the presence sample the most
+    /// M34 (`ABI_VERSION` 37 -> 38): the presence sample the most
     /// recent `sim_detach` removed with its connection, `G::Presence`'s own codec bytes, copied into
     /// `out`; returns their length, `0` for "none" (no sample, or nothing detached). `abi::mod::
     /// sim_detach` reads it right after a successful call and writes it into `Result` (a LE `u32`
@@ -320,14 +320,14 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// docs/plan/13-sim-host-tick-loop.md: creates the world from the init config (`Sim::genesis`
+    /// M13: creates the world from the init config (`Sim::genesis`
     /// for a real `Game`); M22b adds the load-from-storage path. Called once per instance; a
     /// second call is `Status::AlreadyInitialised`.
     fn sim_genesis(&mut self) -> Status {
         Status::Unsupported
     }
 
-    /// docs/plan/13-sim-host-tick-loop.md: write-ahead log bytes for the frame about to be
+    /// M13: write-ahead log bytes for the frame about to be
     /// applied (0024 §1's export boundary), written into `persist` (the whole `Persist` region --
     /// empty until a role declares it, which none does yet: Non-scope here, M22 gives this real
     /// content and sizes the region). Returns the byte count, or `-(status)` on failure at the
@@ -336,7 +336,7 @@ pub trait Instance: Sized + 'static {
         Err(Status::Unsupported)
     }
 
-    /// docs/plan/13-sim-host-tick-loop.md: generates at most one uncached chunk from the warm
+    /// M13: generates at most one uncached chunk from the warm
     /// list (`host::warm`), nearest-to-view-centre first. `1` if it generated one, `0` if nothing
     /// is cold -- the "always answer, cost nothing" shape of `gen_take`/`upload_stage`: no
     /// `Status` crosses here either.
@@ -344,7 +344,7 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// docs/plan/13-sim-host-tick-loop.md ("20 Hz is hardcoded" gap): the sim role's own tick
+    /// M13 ("20 Hz is hardcoded" gap): the sim role's own tick
     /// rate, read once by `SimHost` at construction instead of assuming 20 unconditionally. A
     /// game exposes its real rate by overriding this to return `G::TICK_RATE.hz_value()`
     /// (`host::Host<G>`, `game_instance::GameInstance<G>`); the default (`20`, `TickRate::HZ_20`'s
@@ -355,7 +355,7 @@ pub trait Instance: Sized + 'static {
         20
     }
 
-    /// docs/plan/24b-upgrade-and-migration.md Scope ("Chunk size recorded in the world params"):
+    /// M24b Scope ("Chunk size recorded in the world params"):
     /// `G::CHUNK_BITS`, read by `Persistence.create`/`Persistence.open` (TS) to stamp/compare
     /// `ManifestV1.params.chunkBits` -- the running build's own value, never derived from stored
     /// data. Same "always answer, cost nothing, role-independent" shape as `tick_hz`: the default
@@ -365,7 +365,7 @@ pub trait Instance: Sized + 'static {
         5
     }
 
-    /// Called only when the client worker saw `CB_FRAME_REQ` advance (docs/plan/06b-workers-and-
+    /// Called only when the client worker saw `CB_FRAME_REQ` advance (M06b
     /// spawn.md, Planning decisions "Worker frame clock"): `t_ms` is that frame's `frame_time_ms`,
     /// taken from `camera` by the shim in `abi::frame` rather than from the export's own raw
     /// argument (decision A of fix round 3; see that function).
@@ -384,11 +384,11 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// `docs/plan/08b-gen-workers-and-queue.md`, ABI role `client`: writes a 16-byte `genRequest`
+    /// `M08b`, ABI role `client`: writes a 16-byte `genRequest`
     /// record into `out` (the first 16 bytes of `Result`) if there is a job to dispatch to
     /// `worker`. `false` when there is nothing (the default, and every fixture with no
     /// `client::TerrainFeed`): `gen_take` must cost nothing and always return 0 on a page whose
-    /// client role has none (`docs/plan/08b-gen-workers-and-queue.md`, orchestrator decisions).
+    /// client role has none (`M08b`, orchestrator decisions).
     fn gen_take(&mut self, _worker: u32, _out: &mut [u8; 16]) -> bool {
         false
     }
@@ -413,7 +413,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// `docs/plan/09-renderer-terrain.md`: stages up to `max_records` upload-ring records (chunk
+    /// `M09`: stages up to `max_records` upload-ring records (chunk
     /// conversions, tile patches, indirection updates -- `client::Uploader::stage`) into `out`
     /// (the whole `ChunkTexels` region), returns the count actually written. `0` on every fixture
     /// with no `Uploader` (a client role that renders no terrain), same "always answer, cost
@@ -422,7 +422,7 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// `docs/plan/11-camera-and-input.md`: decodes whole `client::input::InputEvent` records
+    /// `M11`: decodes whole `client::input::InputEvent` records
     /// (32 bytes each) from `rx` (the first `len` bytes of `Rx`, `abi::on_input`) into whatever
     /// `InputQueue` this instance owns, and may write back anything it wants observable in
     /// `result` (the whole `Result` region) -- this milestone's own fixture writes queue length
@@ -433,7 +433,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: applies one whole host frame
+    /// M15b: applies one whole host frame
     /// (0011) -- the first `len` bytes of `RegionId::Downlink` -- atomically into the client
     /// role's own replica (`client::ClientCore::on_frame`). A malformed frame is `Status::Decode`
     /// and leaves the replica untouched (`ClientCore::on_frame`'s own "validate first" contract);
@@ -442,7 +442,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: writes at most one uplink batch
+    /// M15b: writes at most one uplink batch
     /// (`client::ClientCore::poll_uplink`) into `out` (the whole `Tx` region for the client role),
     /// returning its length, or `0` when nothing is due yet (0010 "Rates"). `t_ms` is already
     /// milliseconds, read by the caller from the just-copied `CameraBlock::frame_time_ms`
@@ -452,7 +452,7 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 25 -> 26): builds `Hello` from the
+    /// M28 (`ABI_VERSION` 25 -> 26): builds `Hello` from the
     /// client role's own config (`secret`/`joinKey`/`buildHash`, `TerrainConfig`'s own doc
     /// comment) into `tx` (the whole `Tx` region, same crossing shape as `client_poll_uplink`),
     /// returning its length. Config -> `Hello`, not a wire decode of anything: this export takes
@@ -462,12 +462,12 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// docs/plan/33f-client-world-config-from-welcome.md: a first `Welcome` configures a client
+    /// M33f: a first `Welcome` configures a client
     /// that has no world (seed and params were absent from `engine_init`): terrain source, `on_init`.
     /// `result` is widened from 16 to 20 bytes: a fifth LE `u32`, `1` when *this* call configured
     /// the client (exactly once per instance), else `0`. `Status::WorldMismatch` when a client that
     /// took its world from an earlier `Welcome` gets another world's; nothing is applied.
-    /// docs/plan/28-sessions-and-reconnect.md: applies one `Welcome` message (`bytes`, the first
+    /// M28: applies one `Welcome` message (`bytes`, the first
     /// `len` bytes of `RegionId::Downlink` -- same region `on_frame` reads, since both are
     /// host-to-client messages) into the client role's own state: `Replica::set_own_player`,
     /// `ClientCore::seed_presence` when `Welcome` carried a sample, and `ClientCore::
@@ -485,7 +485,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/33f-client-world-config-from-welcome.md (`ABI_VERSION` 36 -> 37): the client
+    /// M33f (`ABI_VERSION` 36 -> 37): the client
     /// role's world as JSON, `{"seed":"0x<16 hex>","params":<params JSON>}` -- the shape of the
     /// `game` config's own `seed`/`params` fields, so the caller passes it through unchanged (a gen
     /// worker's setup message, an `engine_init` config) -- into `tx` (the whole `Tx` region, same
@@ -495,7 +495,7 @@ pub trait Instance: Sized + 'static {
         Err(Status::Unsupported)
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`'s `hostRegionHash`:
+    /// M15b, `engine/test`'s `hostRegionHash`:
     /// `host::Host::region_hash(conn)`, crossing as two LE `u32` into `Result` (`sim_hash`'s own
     /// shape). Test/diagnostic only -- no production caller needs this on the wire (0011's own
     /// `Hashes` section is M31b's).
@@ -503,33 +503,33 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`'s `replicaHash`:
+    /// M15b, `engine/test`'s `replicaHash`:
     /// `client::Replica::region_hash()`, same crossing shape as `sim_region_hash`.
     fn client_region_hash(&mut self, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`'s `netCounters`:
+    /// M15b, `engine/test`'s `netCounters`:
     /// `host::ConnCounters` for `conn`, little-endian into `Result` in field-declaration order
     /// (`bytes_down: u64`, `frames: u64`, `chunk_enters_pristine: u64`, `chunk_snapshots: u64`,
     /// `chunk_leaves: u64`, `bytes_up: u64` -- 48 bytes). `Status::NotCached` reused here for "no
     /// such connection" would be misleading (that status is chunk-cache-specific); an unknown
     /// `conn` instead writes every field as 0 and still returns `Status::Ok`, since "never
     /// connected" and "connected with zero traffic so far" cross the wire identically anyway.
-    /// docs/plan/19-presence-channel.md steps 4-6: widened to 56 bytes, a 7th `u64`
+    /// M19 steps 4-6: widened to 56 bytes, a 7th `u64`
     /// (`presence_bytes_up`) -- `engine/test`'s `netCounters`' own `uplinkPresenceBytes`.
     fn sim_conn_counters(&mut self, _conn: u32, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
 
-    /// docs/plan/31-rates-and-integrity.md (`ABI_VERSION` 33 -> 34), `engine/test` only: `host::
+    /// M31 (`ABI_VERSION` 33 -> 34), `engine/test` only: `host::
     /// PacingCounters` for `conn`, sixteen little-endian `u32`s (64 bytes) into `Result`, in the
     /// order `Host::sim_pacing_counters` documents. An unknown `conn` writes zeros and returns `Ok`.
     fn sim_pacing_counters(&mut self, _conn: u32, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
 
-    /// docs/plan/31b-desync-hashes.md (`ABI_VERSION` 34 -> 35), `engine/test` only: the sim role's
+    /// M31b (`ABI_VERSION` 34 -> 35), `engine/test` only: the sim role's
     /// desync report ring, one report per call. `Result` gets 40 little-endian bytes,
     /// `integrity::DesyncLog::write_result`'s layout: `count u32 (total ever) · retained u32 ·`
     /// then the `index`th retained report (oldest first) `tick u32 · scope u32 (0 Chunk, 1 Global,
@@ -538,13 +538,13 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/31b-desync-hashes.md (`ABI_VERSION` 34 -> 35), `engine/test` only: the client
+    /// M31b (`ABI_VERSION` 34 -> 35), `engine/test` only: the client
     /// role's desync report ring, same 40-byte layout as `sim_desync`.
     fn client_desync(&mut self, _index: u32, _result: &mut [u8]) -> Status {
         Status::Unsupported
     }
 
-    /// docs/plan/31b-desync-hashes.md (`ABI_VERSION` 35 -> 36), `engine/test` only: the dump files
+    /// M31b (`ABI_VERSION` 35 -> 36), `engine/test` only: the dump files
     /// of hash-all mode, into `Tx`, returning the byte count (`0` = no completed dump, or `Tx` too
     /// small). `part` 0: the oldest dump's header `tick u32 · cx i32 · cy i32 · client_len u32`;
     /// 1: the client's encoding of the chunk when its hash mismatched; 2: the host's encoding (the
@@ -553,7 +553,7 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// docs/plan/31b-desync-hashes.md (`ABI_VERSION` 34 -> 35), `engine/test` only, fault
+    /// M31b (`ABI_VERSION` 34 -> 35), `engine/test` only, fault
     /// injection: the next frame built for `conn` drops one delta of the chunk packed in `coord`
     /// (`(cx as i16 as u16) | ((cy as i16 as u16) << 16)`: two chunk coordinates in one `u32`,
     /// because the loader has no three-argument call); `0x8000_8000` names the reserved scope
@@ -563,14 +563,14 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/31b-desync-hashes.md (`ABI_VERSION` 34 -> 35), `engine/test` only, fault
+    /// M31b (`ABI_VERSION` 34 -> 35), `engine/test` only, fault
     /// injection: flips one replica byte of the held chunk `(cx as i32, cy as i32)`;
     /// `Status::NotCached` when the client does not hold it.
     fn client_corrupt_chunk(&mut self, _cx: u32, _cy: u32) -> Status {
         Status::Unsupported
     }
 
-    /// docs/plan/16-action-round-trip.md: parses one action-ring record (`[seq u32 LE][len u32
+    /// M16: parses one action-ring record (`[seq u32 LE][len u32
     /// LE][UTF-8 JSON]`) out of `rx` -- the first `len` bytes of `Rx`, shared with `on_input`'s
     /// own, differently-shaped records (a different message kind on the same client-role receive
     /// buffer) -- into `G::Action` (`serde_json`), re-encodes it with `Codec` and queues it for
@@ -582,7 +582,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/16-action-round-trip.md: copies as many whole UI-ring records as fit into `out`
+    /// M16: copies as many whole UI-ring records as fit into `out`
     /// (the whole `Ui` region) -- kind 2, `ActionResults` turned into JSON by `client::ClientCore
     /// ::drain_results` -- returning the byte count. Never splits a record across two calls: what
     /// doesn't fit waits for the next poll (`game_instance::GameInstance::client_poll_ui`'s own
@@ -593,7 +593,7 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// docs/plan/16-action-round-trip.md (`ABI_VERSION` 11 -> 12): the values only Rust knows for
+    /// M16 (`ABI_VERSION` 11 -> 12): the values only Rust knows for
     /// the client-role clock block the client worker mirrors into `SabSet.clockBlock` after each
     /// `on_frame` (0015 §2 "clocks") -- `authoritative_tick` and `ack_seq` from `ClientCore::
     /// last_summary()`, two LE `u32` into `result` (the whole `Result` region), the same crossing
@@ -602,7 +602,7 @@ pub trait Instance: Sized + 'static {
     /// (learned from the first frame's own `ack_seq`, PRE-PLAN §10) are derived entirely on the TS
     /// side.
     ///
-    /// docs/plan/26-prediction-rendering-and-clocks.md steps 4-6 (`ABI_VERSION` 23 -> 24): widened
+    /// M26 steps 4-6 (`ABI_VERSION` 23 -> 24): widened
     /// from 8 to 16 bytes, same call signature (`params: 0`, no new argument): `predicted_tick`
     /// (`ClientCore::predicted_tick`, real from this milestone on -- 0012 "Two clocks") as a third
     /// LE `u32`, then `ClientCore::last_tick_fraction`'s `f32` bits (its own doc comment: cached
@@ -613,7 +613,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/16b-ui-observation-and-clock.md (`ABI_VERSION` 12 -> 13), `engine/test` only:
+    /// M16b (`ABI_VERSION` 12 -> 13), `engine/test` only:
     /// forces the client role's `UiObserver::mark_dirty()` (that milestone's own Deviations,
     /// steps 1-2: "the only setter that exists after this cut ... not yet reachable from
     /// TypeScript or a browser test"). No production caller exists yet -- M18's `FrameCx::
@@ -625,7 +625,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/16b-ui-observation-and-clock.md (`ABI_VERSION` 13 -> 14), `engine/test` only:
+    /// M16b (`ABI_VERSION` 13 -> 14), `engine/test` only:
     /// `UiObserver::{calls, records}` as two LE `u32` into `result` (the whole `Result` region) --
     /// coordinator gate, M16b cut 2: proves "ui ran" (`calls > 0`) and "zero records written"
     /// (`records == 0`) as an assertion, not only a claim in a `budgets.json` `formula` string.
@@ -634,7 +634,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures item 3, gate round 1
+    /// M26, Open gate failures item 3, gate round 1
     /// (`ABI_VERSION` 24 -> 25), `engine/test` only: `ClientCore::predict_applied_ever` as one LE
     /// `u32` into `result` (the whole `Result` region) -- proves "a dispatched action was actually
     /// predicted `Applied`" as a real assertion, the same "coordinator gate" shape `client_ui_
@@ -644,7 +644,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/30-interpolation.md (`ABI_VERSION` 31 -> 32), `engine/test` only
+    /// M30 (`ABI_VERSION` 31 -> 32), `engine/test` only
     /// (`samplePresences`, `interpCounters`): the interpolation view of remote players as of the
     /// last `frame()`. Writes into `Result`, 52 LE bytes: `visible: u32` (remotes visible),
     /// `rendered: u32` and `extrapolated: u32` (cumulative per-frame counters), `delay_ms: f32`,
@@ -656,14 +656,14 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/30-interpolation.md (`ABI_VERSION` 32 -> 33): tab return (0018 section 8), called
+    /// M30 (`ABI_VERSION` 32 -> 33): tab return (0018 section 8), called
     /// by the client worker when main set `FLAG_REBASE`. Snaps the host clock and interpolation
     /// delay to their initial state and drops every remote's samples (`ClientCore::rebase_interp`).
     fn client_rebase(&mut self) -> Status {
         Status::Unsupported
     }
 
-    /// docs/plan/37b-device-loss.md (`ABI_VERSION` 38 -> 39): WebGPU device loss (0018 section 8),
+    /// M37b (`ABI_VERSION` 38 -> 39): WebGPU device loss (0018 section 8),
     /// called by the client worker when main set `FLAG_RENDERER_RESET`. Marks every resident chunk
     /// and the indirection window for re-upload (`Uploader::requeue_all`); the upload ring's byte
     /// budget paces the refill like a join. `Unsupported` on a wrong role.
@@ -671,7 +671,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/17-drawlist-and-sprites.md (`ABI_VERSION` 14 -> 15): how many `Draw` records the
+    /// M17 (`ABI_VERSION` 14 -> 15): how many `Draw` records the
     /// last `frame()` call's own counting sort wrote into `RegionId::DrawList` (`DrawList::
     /// record_count`) -- `0` on a wrong role or before the first `frame()` call, same "always
     /// answer, cost nothing" shape as `sim_warm_one`/`gen_take`/`upload_stage`: no `Status`
@@ -682,7 +682,7 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: encodes a
+    /// M22 (`ABI_VERSION` 15 -> 16), sim role: encodes a
     /// `persist::SegmentHeader` (identity + base) into `persist` (the whole `Persist` region).
     /// `_segment` is unused by the default/`Host<G>` implementation -- a segment's own index lives
     /// in its storage key (Planning decisions 3, 4), never inside the header bytes themselves
@@ -699,7 +699,7 @@ pub trait Instance: Sized + 'static {
         Err(Status::Unsupported)
     }
 
-    /// docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: begins a
+    /// M22 (`ABI_VERSION` 15 -> 16), sim role: begins a
     /// streaming snapshot (`persist::SnapshotWriter::begin`) of the current state at `(log_segment,
     /// log_offset)` (Planning decisions 4: "the host owns the log position"). [`Instance::
     /// sim_snapshot_next`] drains it afterward. `Status::Ok` starts a fresh writer, discarding any
@@ -708,7 +708,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: copies the
+    /// M22 (`ABI_VERSION` 15 -> 16), sim role: copies the
     /// next block of the snapshot [`Instance::sim_snapshot_begin`] started into `persist` (the whole
     /// `Persist` region), `0` meaning fully drained (`persist::SnapshotWriter::next`'s own "0 = done"
     /// shape). Same `len`/`-(status)` crossing shape as `sim_seal_frame`.
@@ -716,7 +716,7 @@ pub trait Instance: Sized + 'static {
         Err(Status::Unsupported)
     }
 
-    /// docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: `1` if any
+    /// M22 (`ABI_VERSION` 15 -> 16), sim role: `1` if any
     /// put or logged record has happened since the last snapshot began draining (Planning decisions
     /// 7), `0` otherwise -- including a wrong role or an instance with no such state, same "always
     /// answer, cost nothing" shape as `sim_warm_one`/`drawlist_len`: no `Status` crosses here either.
@@ -724,7 +724,7 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md (`ABI_VERSION` 16 -> 17), sim role: begins decoding
+    /// M22b (`ABI_VERSION` 16 -> 17), sim role: begins decoding
     /// a snapshot of `total_len` bytes (the whole container, magic through the trailing crc32) fed
     /// in blocks by [`Instance::sim_restore_push`]. Must not require [`Instance::sim_genesis`] to
     /// have run (the whole point: this replaces it for a loaded world). `total_len` is advisory
@@ -733,7 +733,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md: feeds the next block of the snapshot
+    /// M22b: feeds the next block of the snapshot
     /// [`Instance::sim_restore_begin`] started (`bytes`, the first `len` bytes of `Persist`, reused
     /// here as a receive region -- the same region [`Instance::sim_snapshot_next`] writes *out*
     /// through on the save side). `Status::Corrupt`/`Status::ContainerVersion` on a bad block;
@@ -742,7 +742,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md: finishes a restore. `Status::Ok` on success --
+    /// M22b: finishes a restore. `Status::Ok` on success --
     /// builds the live `Sim` from the decoded snapshot and writes `log_segment`, `log_offset` (two
     /// LE `u32`, in that order) into `result` (the whole `Result` region), the position
     /// `Instance::sim_replay_begin` resumes from. `Status::Corrupt` if the snapshot never finished
@@ -752,7 +752,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/24b-upgrade-and-migration.md step 4: begins the 0005 Upgrades sequence -- the same
+    /// M24b step 4: begins the 0005 Upgrades sequence -- the same
     /// block protocol as [`Instance::sim_restore_begin`] (a fresh instance, `pending` still holding
     /// the world's own params), but unlike a plain restore this may finish through `Game::migrate`
     /// rather than a direct `Store<G>` decode: which one it is is not yet known when the first byte
@@ -783,7 +783,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// Gate fix round 2 (docs/plan/24b-upgrade-and-migration.md): `persist::Identity::compare` for
+    /// Gate fix round 2 (M24b: `persist::Identity::compare` for
     /// the genesis-replay fallback, which has no snapshot container to feed
     /// [`Instance::sim_upgrade_begin`]/`push`/`end` at all (no snapshot has ever been written yet,
     /// so there is no 0005-Formats envelope to decode) -- the *only* way that path can reach the
@@ -800,7 +800,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md, sim role: begins replaying a segment's log tail
+    /// M22b, sim role: begins replaying a segment's log tail
     /// from byte `offset` (a `Sim` must already exist -- from [`Instance::sim_restore_end`] or
     /// [`Instance::sim_genesis`]). `segment` is accepted but unused by the default/`Host<G>`
     /// implementation, the same "named because the seam names it, not read" shape as
@@ -809,7 +809,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md: feeds the next block of log bytes (`bytes`, the
+    /// M22b: feeds the next block of log bytes (`bytes`, the
     /// first `len` bytes of `Persist`, reused as a receive region exactly like
     /// [`Instance::sim_restore_push`]): decodes as many whole frames as are buffered, applying each
     /// through the same tick procedure a live host uses (idle ticks implied by `tick_delta` included,
@@ -820,12 +820,12 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md: finishes a replay. `Status::Ok` if every pushed
+    /// M22b: finishes a replay. `Status::Ok` if every pushed
     /// block decoded cleanly (including a genuinely empty tail); `Status::TornTail` if
     /// [`Instance::sim_replay_push`] ever hit a bad block. Either way the `Sim` is left at whatever
     /// tick the last successfully applied frame reached ([`Instance::sim_tick_now`]).
     ///
-    /// docs/plan/24b-upgrade-and-migration.md decision 6 (amending 0024 §3b): also writes, as one LE
+    /// M24b decision 6 (amending 0024 §3b): also writes, as one LE
     /// `u32` at `result[0..4]`, how many `Action` records [`Instance::sim_replay_push`]'s apply pass
     /// dropped because they failed to decode under this build (`persist::FrameRecord::Undecodable`,
     /// warned at the point each is dropped) -- `0` when nothing was dropped, including on every
@@ -834,7 +834,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md: the byte offset, within the segment
+    /// M22b: the byte offset, within the segment
     /// [`Instance::sim_replay_begin`] named, just after the last frame whose CRC verified --
     /// `offset` (the starting point) when nothing at all decoded. `0` on a wrong role or no replay
     /// ever begun, same "always answer, cost nothing" shape as `sim_dirty`/`drawlist_len`.
@@ -842,7 +842,7 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md: the sim's current tick (`Sim::tick`), read after a
+    /// M22b: the sim's current tick (`Sim::tick`), read after a
     /// restore/replay (or a live `sim_genesis`) to learn the resume tick (0005 Loss windows:
     /// "resumes at max(latest snapshot tick, last logged frame tick)"). `0` on a wrong role or before
     /// any world exists, same "always answer, cost nothing" shape as `sim_dirty`.
@@ -850,7 +850,7 @@ pub trait Instance: Sized + 'static {
         0
     }
 
-    /// docs/plan/24-recovery-and-migration.md: begins the **scan pass** -- decodes a segment tail
+    /// M24: begins the **scan pass** -- decodes a segment tail
     /// purely to collect `Skip { segment, offset }` targets, before `sim_replay_begin`/`push`/`end`
     /// (the real apply pass) ever runs. Needs a live `Sim` (like `sim_replay_begin`) even though it
     /// never touches it, so a caller cannot scan before a world exists.
@@ -867,7 +867,7 @@ pub trait Instance: Sized + 'static {
     /// Finishes the scan pass; its own targets stay collected for the `sim_replay_*` calls that
     /// follow.
     ///
-    /// docs/plan/24b-upgrade-and-migration.md decision 6: also writes, as one LE `u32` at
+    /// M24b decision 6: also writes, as one LE `u32` at
     /// `result[0..4]`, the total record count seen across every frame the scan pass decoded (any
     /// kind, `Skip` included) -- the `migrate` path's own "how many records this abandoned tail
     /// held" report (0005 Upgrades: the tail is dropped whole, never replayed, so this is the only
@@ -876,7 +876,7 @@ pub trait Instance: Sized + 'static {
         Status::Unsupported
     }
 
-    /// docs/plan/24-recovery-and-migration.md: appends one frame holding a single `Skip { segment,
+    /// M24: appends one frame holding a single `Skip { segment,
     /// offset }` record (`tick_delta = 0`, never a real elapsed tick) into `Persist` -- the same
     /// "bytes written, or `-(status)`" shape as `sim_seal_frame`. Needs no live `Sim` (like
     /// `sim_segment_header`): recovery calls this on whatever fresh instance is at hand, purely to
@@ -890,7 +890,7 @@ pub trait Instance: Sized + 'static {
         Err(Status::Unsupported)
     }
 
-    /// docs/plan/24-recovery-and-migration.md: panics in whatever `Phase` the previous,
+    /// M24: panics in whatever `Phase` the previous,
     /// successfully-completed export left the `Progress` region in (`Phase::Idle` after any
     /// ordinary call, since this writes nothing of its own before panicking). Test-only by
     /// convention: reached only through `engine/test`'s `trapSim`. The default is a safe no-op
@@ -1229,7 +1229,7 @@ macro_rules! export_instance {
 
 /// The one line of ABI a game writes (0014 §5). Re-points at
 /// [`GameInstance<G>`](crate::game_instance::GameInstance), the engine's generic dispatcher over
-/// the `Game` trait (docs/plan/13-sim-host-tick-loop.md Scope): `Role::Sim` ->
+/// the `Game` trait (M13 Scope): `Role::Sim` ->
 /// [`host::Host<G>`](crate::host::Host), `Role::Gen` -> `worldgen::GenCore<G::Worldgen>`,
 /// `Role::Client` -> [`ClientInstance<G>`](crate::game_instance::ClientInstance). A low-level
 /// fixture that implements `Instance` directly still calls `export_instance!` itself.

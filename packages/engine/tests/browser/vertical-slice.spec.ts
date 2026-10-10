@@ -1,4 +1,4 @@
-// `slice.html`'s test (docs/plan/16-action-round-trip.md, step 6): the vertical slice itself --
+// `slice.html`'s test (M16, step 6): the vertical slice itself --
 // `client.dispatch(action)` -> action ring -> `on_action` -> uplink -> `admit` -> the frame for
 // T+1 -> `apply` -> `Ack` and its deltas in one frame -> `client.onActionResult`. One test, named
 // `vertical_slice` (Verification commands: `pnpm test browser -t vertical_slice`), phased so every
@@ -170,7 +170,7 @@ test('vertical_slice', async ({ page }, testInfo) => {
   // `__sliceSettle` (`engine/test.untilQuiescent`) is deterministic instead: it waits for every SAB
   // ring -- including both gen-worker ring pairs -- to fully drain, so it only resolves once
   // whatever chunk-generation round trip was in flight has actually landed.
-  // docs/plan/16d-sim-pacing-under-external-wakes.md, step 4: passing the tile makes the settle
+  // M16d, step 4: passing the tile makes the settle
   // also wait for that tile's chunk to be resident on the GPU -- the real event this read needs
   // (`slice.ts`'s `__sliceSettle` has the attribution).
   await page.evaluate(() => window.__setCamera?.(20, 20, 8))
@@ -231,7 +231,7 @@ test('vertical_slice', async ({ page }, testInfo) => {
   // figure is `expect(referenceAt100).toBe('8ddca175d11d82e3')`, right below, so a change to the
   // fixture's own genesis/tick rule would be caught here too, not just by `pnpm golden`'s own gate.
   //
-  // docs/plan/16d-sim-pacing-under-external-wakes.md, step 3: the threshold was 50 while the sim
+  // M16d, step 3: the threshold was 50 while the sim
   // stalled under this page's own external wakes (ADR 0032); every tick then arrived in one resync
   // burst, so the number did not matter. Now ticks arrive at 20 Hz and the wait is real time.
   // `__tick` reads the clock block, which only moves when a frame carries content -- here the tick

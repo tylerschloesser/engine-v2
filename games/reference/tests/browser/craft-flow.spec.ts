@@ -1,4 +1,4 @@
-// `reference_craft_flow` (docs/plan/32-reference-crafting.md Tests added): collect to the unlock
+// `reference_craft_flow` (M32 Tests added): collect to the unlock
 // threshold, the crafting menu appears on the step the unlock lands (and not before), craft with a
 // real CSS progress animation, step the duration, and the inventory shows one furnace and the stone
 // cost paid. Stepped ticks only, never real time (0020 §4).

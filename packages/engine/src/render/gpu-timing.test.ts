@@ -1,4 +1,4 @@
-// docs/plan/39k-gpu-exec-metric.md, Tests added: the option off changes nothing (no feature requested, no
+// M39k, Tests added: the option off changes nothing (no feature requested, no
 // `timestampWrites` on a pass), on with the feature both appear, and the timing ring reads back late.
 import { afterEach, expect, test, vi } from 'vitest'
 import { DEVICE_REQUEST, deviceRequestFor, initDevice } from './device.js'

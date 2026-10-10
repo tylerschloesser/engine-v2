@@ -1,7 +1,7 @@
 // The page-CSS helper (docs/decisions/0019-camera-input-and-overlay.md §3: "The engine documents
 // and offers a helper for the page CSS that prevents pull-to-refresh structurally: a `position:
 // fixed; inset: 0; overflow: hidden` root, `overscroll-behavior: none` on `html, body`, `height:
-// 100dvh`, `viewport-fit=cover`."); docs/plan/11-camera-and-input.md Scope: "the helper for 0019
+// 100dvh`, `viewport-fit=cover`."); M11 Scope: "the helper for 0019
 // §3's page CSS (`installPageStyles()`), opt-in". One-time setup, called once by a page (`device.ts`
 // step 8): not a hot path, so a `<style>` element and a fresh `Uint8Array`-free string are fine here
 // (`.claude/rules/hot-paths.md` exempts one-time setup).

@@ -133,7 +133,7 @@ window.__terrainClient = {
   // A custom idle loop, not `engine/test.gen.idle`: that helper ends with `untilQuiescent`, which
   // waits for *every* ring including `uploadRing` to reach `pushed === popped` -- but nothing
   // drains `uploadRing` except this page's own test code, so `untilQuiescent` would poll for the
-  // full 10 s and reject (docs/plan/09-renderer-terrain.md Deviations "Steps 5-7"). This loop
+  // full 10 s and reject (M09 Deviations "Steps 5-7"). This loop
   // drains the ring itself on every step, so residency and upload both converge together.
   //
   // `s.pending === 0 && s.inFlight === 0` alone is not enough to stop: `stepFrame`'s own ack is

@@ -1,4 +1,4 @@
-// The slow-tier-only `reference-bench` build step (docs/plan/39f-device-auto-runner.md, Deviations):
+// The slow-tier-only `reference-bench` build step (M39f, Deviations):
 // the walk browser specs serve `games/reference/dist-bench/`, and the fast tier must never build it.
 import { describe, expect, it } from 'vitest'
 import { buildSteps, buildStepsFor } from '../suites.mjs'

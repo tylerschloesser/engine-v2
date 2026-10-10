@@ -11,7 +11,7 @@
 const SEQ_BYTES = 4
 const MAX_RETRIES = 8
 // An immediate re-check sees only nanoseconds of the writer's begin()/end() window; a real OS
-// scheduler quantum that preempts the writer mid-write is milliseconds long (docs/plan/06-sab-
+// scheduler quantum that preempts the writer mid-write is milliseconds long (M06
 // primitives-and-workers.md Deviations: measured `seqlock.no_torn_read` failures under real
 // multi-thread contention on Tyler's machine, torn counts of 1-3 out of ~2-4 in 200 full-suite
 // runs, all from retries exhausted within microseconds of each other). This spin gives each retry

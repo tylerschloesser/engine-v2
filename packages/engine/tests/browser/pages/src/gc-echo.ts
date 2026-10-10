@@ -1,4 +1,4 @@
-// `gc-echo.html`'s script (docs/plan/06b-workers-and-spawn.md, Tests added): 10 KiB per frame,
+// `gc-echo.html`'s script (M06b, Tests added): 10 KiB per frame,
 // main -> `actionRing` -> client `Rx` region -> `Tx` region -> `uiRing` -> main, through
 // preallocated view pairs -- the SAB -> WASM -> SAB round trip 0014's "WASM -> SAB unmeasured" gap
 // and 0015's "only worker -> main measured" both name. The client worker's own echo of `Rx` into
@@ -18,7 +18,7 @@ declare global {
 }
 
 const DEFAULT_GAME = { seed: '0x1', entities: 4 }
-// Matches `fixtures/hash`'s `CLIENT_RX_TX_BYTES` (docs/plan/06b-workers-and-spawn.md, Deviations):
+// Matches `fixtures/hash`'s `CLIENT_RX_TX_BYTES` (M06b, Deviations):
 // the whole-block copies below (`tryPush`/`popInto`) rely on both ends being exactly this size.
 const ECHO_BYTES = 10 * 1024
 // The spike's ack-timeout guard (`spikes/zero-gc-webgpu/public/main.js`), reused the same way
@@ -29,7 +29,7 @@ const client: Client = createClient({
   canvas,
   wasm,
   // `world` is structurally valid but otherwise inert: `test.game` (below) overrides every
-  // worker's real config (docs/plan/13-sim-host-tick-loop.md, Scope "createClient local host"),
+  // worker's real config (M13, Scope "createClient local host"),
   // same as before this milestone's real `WorldConfig` type replaced the old `{ game }` stub.
   host: { kind: 'local', world: { worldId: 'w', params: { seed: '1', worldgen: DEFAULT_GAME } } },
   genWorkers: 1,
@@ -69,7 +69,7 @@ installGcPage(harness, {
     void dst[0]
     // `sim`/`gen0` have no ring traffic of their own yet (Non-scope): locksteps a synthetic wake
     // with them so their own negative controls trip reliably (`asHarness`'s own comment). Every
-    // frame, not every other (fix round 2, docs/plan/06b-workers-and-spawn.md, Deviations): see
+    // frame, not every other (fix round 2, M06b, Deviations): see
     // `gc-topology.ts`'s own comment on why the mask is no longer needed.
     harness.stepTick()
   },

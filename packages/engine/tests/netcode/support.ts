@@ -31,7 +31,7 @@ function hexEncode(bytes: Uint8Array): string {
   return out
 }
 
-/** docs/plan/28-sessions-and-reconnect.md (`handshake`/`liveness` scenarios): real `client_hello()`
+/** M28 (`handshake`/`liveness` scenarios): real `client_hello()`
  * bytes off a throwaway `Role.Client` instance -- mirrors `src/test/headless-client.ts`'s own
  * `sendHello`, standalone (no ring/pump machinery) so a scenario testing the handshake parser
  * itself (`version-mismatch`/`bad-key`/`garbage-before-hello`/...) can build a deliberately wrong
@@ -68,7 +68,7 @@ export function fixedSecret(fill: number): Uint8Array {
 }
 
 /** A `fx-busy-field` world whose chunks `cx0..=cx1` x `cy0..=cy1` are dense (`Action::Fill`, 200
- * entities and 160 modified tiles each, ~4 KB on the wire, docs/plan/31-rates-and-integrity.md),
+ * entities and 160 modified tiles each, ~4 KB on the wire, M31,
  * filled by client 0 while every client sits far away at `(FAR, FAR)`. */
 export const DENSE_FAR = -3000
 export async function denseWorld(

@@ -2,7 +2,7 @@
 
 /**
  * A tile position, plain data (`Action` must stay `Codec + TS`; not `engine::world::TilePos`,
- * which does not derive `TS`). `#[ts(export)]` (docs/plan/16-action-round-trip.md step 4): named
+ * which does not derive `TS`). `#[ts(export)]` (M16 step 4): named
  * by `Action`'s own two struct-variant fields, so it needs its own generated file too -- ts-rs
  * inlines/imports a referenced type by name but only ever *writes* one for a type that opts in.
  */

@@ -1,4 +1,4 @@
-// `createFurnaceUi` (docs/plan/33b-reference-furnace-operation.md Scope): the furnace panel,
+// `createFurnaceUi` (M33b Scope): the furnace panel,
 // anchored above the open furnace with `client.overlay.anchor`. It holds no state about which
 // furnace is open: `Ui.furnace` (Rust, `RefClient.open`) says, and the panel is hidden while it is
 // `null`. Closing emits `LOCAL.CLOSE_PANEL`; picking an empty furnace up dispatches `FurnacePickUp`

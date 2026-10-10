@@ -1,4 +1,4 @@
-// The client generation queue over real workers and SABs (docs/plan/08b-gen-workers-and-queue.md,
+// The client generation queue over real workers and SABs (M08b,
 // Tests added): `gen.html`'s imperative debug API, the same pattern `topology.ts` uses for
 // `workers.spec.ts`. The zero-GC test lives in `gc-gen.spec.ts` (production-topology page,
 // `gc-gen.html`), matching M06b's own `topology.html`/`gc-topology.html` split (Deviations).
@@ -196,7 +196,7 @@ test('gen: oversize slab is a readable fatal', async ({ page }) => {
   await page.evaluate(() => window.__genClientDestroy?.())
 })
 
-// docs/plan/37-robustness-events.md step 1 (0014 §6, gen role): a trap in the gen instance means a
+// M37 step 1 (0014 §6, gen role): a trap in the gen instance means a
 // fresh instance and the request tried again; the same chunk trapping twice is fatal (worldgen is
 // pure: it would trap forever). `TestFlags.trapGenAtChunk` traps `gen_chunk` for one chunk.
 test('trap: gen instance recovers and chunk arrives', async ({ page }) => {

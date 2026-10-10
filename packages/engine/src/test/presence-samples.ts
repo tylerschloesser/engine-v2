@@ -1,4 +1,4 @@
-// `samplePresences` / `interpCounters` decoding (docs/plan/30-interpolation.md Seams): the 52-byte
+// `samplePresences` / `interpCounters` decoding (M30 Seams): the 52-byte
 // `Result` shape of `client_presence_sample_at` (`Instance::client_presence_sample_at`'s doc in
 // `crates/engine/src/abi/registry.rs`), shared by the browser `Client` hook (`test/client.ts`) and
 // `HeadlessClient` (`test/headless-client.ts`). Test-only: allocation is fine here.

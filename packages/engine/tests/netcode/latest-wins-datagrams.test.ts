@@ -1,4 +1,4 @@
-// `latest-wins-datagrams` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Tests added;
+// `latest-wins-datagrams` (M27, Tests added;
 // Planning decisions: "one scenario runs a datagrams: true memory pair with latest-wins drops").
 // `conditioner.test.ts`'s own unit test (`src/net/conditioner.test.ts`, M27 steps 1-2) already
 // proves the primitive at the TS-unit level; this scenario is the `netcode` suite's own named

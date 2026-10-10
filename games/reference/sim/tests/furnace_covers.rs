@@ -1,4 +1,4 @@
-//! R1 (Tyler, 2026-10-10; docs/plan/39ai-tyler-answers.md): a furnace may stand on a resource tile;
+//! R1 (Tyler, 2026-10-10; M39ai: a furnace may stand on a resource tile;
 //! the covered resource cannot be collected until the furnace is picked up, and then it is
 //! collectable again with its remaining units. The covered state is derived from the furnace's
 //! footprint (`content::COVERS_RESOURCE` on the furnace prototype, read through `traits_at`), never

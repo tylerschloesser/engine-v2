@@ -52,7 +52,7 @@ export type BuildGameOptions = {
    */
   outDir?: string
   /**
-   * 0017 §5's bindings step (docs/plan/16-action-round-trip.md step 4): run, after a successful
+   * 0017 §5's bindings step (M16 step 4): run, after a successful
    * `cargo build`, `cargo test export_bindings` in `crate` with `TS_RS_EXPORT_DIR=dir` (relative
    * to `crate`; ts-rs's own default is `./bindings` when unset, which is exactly a fixture's own
    * top-level `bindings/` convention -- a game passes `'src/bindings'` for 0017 §1's layout).

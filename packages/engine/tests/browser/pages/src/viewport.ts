@@ -1,9 +1,9 @@
-// `viewport.html`: the host for `viewport.spec.ts` (docs/plan/09b-terrain-art-and-lifecycle.md,
+// `viewport.html`: the host for `viewport.spec.ts` (M09b,
 // steps 4-5). A real device, a real `TerrainRenderer` (no tile art loaded: these tests assert canvas
 // size/DPR/render-scale/draw-call timing, never pixel content -- the shader's own correctness is
 // `terrain-readback.spec.ts`'s job, unchanged by this milestone) and a real `createClient()` over
 // `fx-terrain`, wired through `frame-loop.ts`'s `createRealFrameLoop` -- the first page to drive
-// `createFrameLoop` against a real canvas (docs/plan/09-renderer-terrain.md Deviations, "Notes for
+// `createFrameLoop` against a real canvas (M09 Deviations, "Notes for
 // later briefs": "M09b's resize observer is the first real writer of `viewport`").
 import type { Client } from '../../../../src/client.ts'
 import { createClient } from '../../../../src/client.ts'
@@ -95,7 +95,7 @@ window.__viewport = {
       clock,
       scheduler,
       maxTextureDimension2D: opts?.maxTextureDimension2D ?? 8192,
-      // Fix round 1 (docs/plan/09b-terrain-art-and-lifecycle.md Deviations): every test on this page
+      // Fix round 1 (M09b Deviations): every test on this page
       // drives size/DPR exclusively through `setViewport`'s forced override, so a real
       // `ResizeObserver`/`matchMedia` is not just unneeded here, it is actively unsafe -- its own
       // delivery timing is scheduled by the browser's rendering pipeline, not by JS task order, so

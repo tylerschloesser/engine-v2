@@ -1,4 +1,4 @@
-// `ws` (docs/plan/29-net-worker-and-reference-server.md steps 1-2, Tests added): the loopback
+// `ws` (M29 steps 1-2, Tests added): the loopback
 // subset -- `createNetHarness({ transport: 'ws' })` puts `conditionLink` around real sockets on
 // `127.0.0.1:0` (`wsConnection`/`wsSocketConnection`) instead of `memoryConnectionPair()`, so every
 // scenario below is byte-for-byte the same protocol traffic `join-converges`/`reconnect.test.ts`
@@ -11,7 +11,7 @@
 // 0020-testing-strategy.md` §4's demotion rule, named explicitly by this milestone's own "Budgets"
 // section -- "apply the demotion rule ... to `ws` repeats first" -- for exactly this case: a
 // real-socket repeat of an in-memory netcode scenario). Measured: this file alone added ~10 s to
-// the fast `netcode` suite (real per-tick `setTimeout` yields, `docs/plan/29...md` Deviations on
+// the fast `netcode` suite (real per-tick `setTimeout` yields, `M29...md` Deviations on
 // `net-harness.ts`'s own `advanceTicks`), pushing the whole suite over its 10 s budget; demoting
 // these two (the most expensive, and the ones whose own ground -- reconnect, determinism across
 // runs -- `ws/join-converges` and the slow-tier `ws/spike-c` already also cover, `spike-c` at a
@@ -68,7 +68,7 @@ test('ws/join-converges', async () => {
   }
 })
 
-// docs/plan/29-net-worker-and-reference-server.md Tests added: "the negotiated `extensions` of each
+// M29 Tests added: "the negotiated `extensions` of each
 // socket are empty" -- checked directly against a throwaway `attachWebSocketServer`/`WebSocket`
 // pair (not through `createNetHarness`, which has no seam exposing its own internal port or raw
 // sockets): 0009 "no `permessage-deflate`" means neither end should ever negotiate any extension.
@@ -236,7 +236,7 @@ test('ws/version-mismatch', async () => {
   }
 })
 
-// docs/plan/29-net-worker-and-reference-server.md Planning decisions ("Spike C"): the fast-tier
+// M29 Planning decisions ("Spike C"): the fast-tier
 // determinism claim spike C's own slow-tier full run (`ws/spike-c`, `@slow`) scales up -- the same
 // scripted (seed, script) run twice over real loopback sockets must produce byte-identical
 // `trace()` output, proving the harness's own `VirtualClock`-paced determinism survives a real
@@ -273,7 +273,7 @@ test('ws/trace-identical @slow', async () => {
   expect(Array.from(a)).toEqual(Array.from(b))
 })
 
-// docs/plan/29-net-worker-and-reference-server.md Planning decisions ("Spike C (PRE-PLAN §10)"):
+// M29 Planning decisions ("Spike C (PRE-PLAN §10)"):
 // the full spike -- one seed, 3 runs of a 10 s (200-tick, 20 Hz) 4-client session over loopback
 // `ws`, identical `trace()`. `@slow`: not required for this cut's own green gate (`pnpm test`
 // skips it), run by `pnpm test:slow`.

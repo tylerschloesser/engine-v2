@@ -1,4 +1,4 @@
-//! The placement ghost and construction mode in `RefClient` (docs/plan/33-reference-furnace.md
+//! The placement ghost and construction mode in `RefClient` (M33
 //! steps 4-5): tint from the shared `can_place`, the local-intent channel, `Ui.placing`/`can_build`,
 //! and `extract_hash_ghost_and_furnace` (a DrawList golden, 0020 section 6a).
 

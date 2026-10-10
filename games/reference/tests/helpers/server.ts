@@ -1,4 +1,4 @@
-// `startReferenceServer` (docs/plan/34-reference-multiplayer.md Provides): `startTestServer` (M29,
+// `startReferenceServer` (M34 Provides): `startTestServer` (M29,
 // a real `createWorldServer` and a real `ws` server on a loopback port) running the reference game
 // with the reference world (`world.json`). The one place this package's tests reach into
 // `packages/engine/tests/`: a second copy of the server would be a second thing to keep honest.

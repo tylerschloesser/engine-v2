@@ -1,4 +1,4 @@
-//! `drawlist.fixture_hash_golden` (docs/plan/17-drawlist-and-sprites.md, Tests added; M17 cut-1
+//! `drawlist.fixture_hash_golden` (M17, Tests added; M17 cut-1
 //! gate: "native-vs-`.wasm` equality, not self-consistency" -- `tests/golden/drawables_hash.hash`
 //! is read by *both* this native test and `tests/wasm/drawlist.test.ts`'s own `drawlist_hash_
 //! matches_native_golden`, exactly the `puts_idle_100`/`puts_script_a` shape: one committed golden
@@ -180,7 +180,7 @@ fn drawlist_fixture_hash_is_pure_function_of_replica_and_camera() {
     );
 }
 
-/// Fix round 1 (docs/plan/17-drawlist-and-sprites.md, coordinator review): the version of this test
+/// Fix round 1 (M17, coordinator review): the version of this test
 /// that used to live in `crates/engine/src/client/frame_view.rs` built a `FrameView` by hand and
 /// read `zoom()` straight back -- it proved the accessor exists, never the *wiring*
 /// (`game_instance.rs`'s `camera_view.zoom = camera.tiles_across`, `px_per_tile` derived from

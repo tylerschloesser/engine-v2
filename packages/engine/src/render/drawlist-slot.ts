@@ -1,4 +1,4 @@
-// The frame's one acquired DrawList slot (docs/plan/18-picking-and-overlay.md Scope, step 1: "a new
+// The frame's one acquired DrawList slot (M18 Scope, step 1: "a new
 // first phase `acquire` (take the newest DrawList slot once per rAF; camera, picking, overlay and
 // render all read that same slot)"). `createDrawListSlot` builds three long-lived typed views (one
 // `DataView` header + one `Uint8Array`/`DataView` body pair per triple-buffer slot, `sab/triple.ts`'s
@@ -9,14 +9,14 @@
 // "reused, mutated in place" shape `CameraState`/`ClockSnapshot` already use.
 //
 // One `DrawListSlot` owns the *only* `TripleReader` over a given `drawList` SAB for the life of a
-// `Client` (docs/plan/17-drawlist-and-sprites.md Deviations, "Two-reader torn read": `TripleReader.
+// `Client` (M17 Deviations, "Two-reader torn read": `TripleReader.
 // acquire()` mutates shared triple-buffer state on every call, so two independent readers racing it
 // tear the handoff) -- `createClient` builds exactly one, in `src/client.ts`.
 import { DRAWLIST_BODY_BYTES, DRAWLIST_HEADER_BYTES } from '../sab/layout.js'
 import { TripleReader } from '../sab/triple.js'
 
-// `client/drawlist.rs`'s own header layout (docs/plan/17-drawlist-and-sprites.md Deviations,
-// "Header, as landed"; docs/plan/18-picking-and-overlay.md steps 4-6 add `follow_valid`/`follow`):
+// `client/drawlist.rs`'s own header layout (M17 Deviations,
+// "Header, as landed"; M18 steps 4-6 add `follow_valid`/`follow`):
 // the scalar fields this slot reads out. Duplicated here the same way `render/drawables.ts`'s own
 // `OFF_*` constants mirror the Rust layout (that file's own precedent).
 const OFF_FRAME_SEQ = 0
@@ -45,7 +45,7 @@ export type DrawListSlot = {
   frameSeq: number
   /** `header`'s own `dropped` counter. */
   dropped: number
-  /** docs/plan/18-picking-and-overlay.md steps 4-6: `header`'s own `follow_valid`/`follow` (0019
+  /** M18 steps 4-6: `header`'s own `follow_valid`/`follow` (0019
    * §1) -- absolute world tiles, the same unit `camera.setFollow(x, y, valid)` takes. `client.ts`'s
    * `camera.tick(dtMs)` reads these straight off the acquired slot before `integrate()` runs, so a
    * target set this frame centres this same frame. */

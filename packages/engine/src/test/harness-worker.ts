@@ -1,4 +1,4 @@
-// The test-only harness worker (docs/plan/03-browser-harness.md, Planning decisions: "The harness
+// The test-only harness worker (M03, Planning decisions: "The harness
 // worker is its own module under src/test/, not a kind of the production worker"). Spawned by
 // `harness.ts` with `new Worker(new URL('./harness-worker.js', import.meta.url), { type: 'module',
 // name })` (pattern A shape, 0017 §3). Receives the compiled `Module` by `postMessage`, instantiates
@@ -22,12 +22,12 @@ const scope = self as unknown as {
 
 let inst: EngineInstance | undefined
 let sab: Int32Array | undefined
-// M18c (docs/plan/18c-stepping-hash-under-load.md): a plain counter, incremented once per
+// M18c ( a plain counter, incremented once per
 // `coreTick()` call (both the SAB step protocol and the `post-message` `pmTick` path), never
 // inferred from `Req`/`Ack` -- those are set unconditionally by the loop regardless of how many
 // times `coreTick()` actually ran, so this is the only way a lost or duplicated tick is visible.
 let ticksRun = 0
-// M04 (docs/plan/04-zero-gc-harness.md, Seams): preallocated views over the fixed-block SABs, when
+// M04 ( Seams): preallocated views over the fixed-block SABs, when
 // this worker was set up with `rxTx`. Never `subarray()`/re-created per tick (.claude/rules/hot-paths.md).
 let rxView: Uint8Array | undefined
 let txView: Uint8Array | undefined
@@ -52,12 +52,12 @@ const ARMED: FromWorker = { type: 'armed' }
 const PARKED: FromWorker = { type: 'parked' }
 
 /** One tick's engine work, shared by the SAB step protocol and the `post-message` control's message
- * handler (docs/plan/04-zero-gc-harness.md, Seams): copy the fixed block SAB -> `Rx`, `sim_admit`,
+ * handler (M04, Seams): copy the fixed block SAB -> `Rx`, `sim_admit`,
  * `sim_tick`, `sim_build_frame`, copy the fixed frame block `Tx` -> SAB, through the view pairs
  * above (0014 §4: whole-block copies, no `subarray()`). A worker set up without `rxTx` (M03's
  * `stepping.html`) just ticks.
  *
- * `applyStepControl` fires as this function's own first statement (docs/plan/10-ci-workflow.md,
+ * `applyStepControl` fires as this function's own first statement (M10,
  * orchestrator's decision 1, 2026-09-21), not as a call sibling to it in `runOp` (where it lived
  * before and why `gc-loop`'s software-mode B never saw a worker control: `attributionRoots` names
  * `coreTick`, and a sibling call is not nested inside it). Mirrors `src/worker/{client,gen,sim}.ts`'s
@@ -89,7 +89,7 @@ function runOp(op: number, seq: number): void {
       coreTick(seq)
     }
     // Client-role stepping arrives with the client instance in M06b; nothing to do yet
-    // (docs/plan/03-browser-harness.md, "What stepFrame means before a client worker exists").
+    // (M03, "What stepFrame means before a client worker exists").
   } catch (e) {
     post({ type: 'error', message: e instanceof Error ? e.message : String(e) })
   }
@@ -99,10 +99,10 @@ function runOp(op: number, seq: number): void {
  * Blocks the worker thread in `Atomics.wait`, serving step requests until yielded (0015 §2).
  *
  * Checks `Yield` *before every wait, including this loop's own first one* -- fixed M17c step 3,
- * fix round 3 (docs/plan/17c-client-park-stall.md). That closed the *wide* gap (a park request
+ * fix round 3 (M17c. That closed the *wide* gap (a park request
  * landing before this loop's own first wait of a `resume()` cycle, invisible until a further wake
  * that was never coming), but a narrower one stayed open and was found live (M19b step 2,
- * docs/plan/19b-sim-park-while-armed.md, Deviations: `park('sim')` timing out with `Req === Ack`
+ * M19b, Deviations: `park('sim')` timing out with `Req === Ack`
  * and `State: Armed` -- this loop genuinely asleep in `Atomics.wait` with nothing outstanding): the
  * gap between the `Yield` check just above and the moment `Atomics.wait` itself actually registers
  * this thread as a waiter. `harness.ts`'s `parkOne` used to store `Yield = 1` then call
@@ -125,7 +125,7 @@ function runOp(op: number, seq: number): void {
  * `testHooks.beforeWait`, present only for `tests/browser/pages/src/park-notify-race-worker.ts`
  * (M19b step 3): fires on every pass, on this loop's own thread, immediately before the
  * `Atomics.wait` call -- the only way to construct the gap above deterministically instead of
- * timing a real `parkOne` round trip against real OS scheduling luck (docs/plan/19b, Deviations).
+ * timing a real `parkOne` round trip against real OS scheduling luck (M19b, Deviations).
  *
  * Exported for `armed-loop-race-worker.ts` and `park-notify-race-worker.ts` (`tests/browser/pages/
  * src/`), which call it directly against a caller-constructed block to prove each fix

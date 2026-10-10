@@ -1,4 +1,4 @@
-//! Fixture game `fx-drawables` (docs/plan/17-drawlist-and-sprites.md, steps 2 and 6; docs/plan/
+//! Fixture game `fx-drawables` (M17, steps 2 and 6; docs/plan/
 //! 17b-sprites-and-frame-budget.md fix round 1): a `Game` whose only interesting behaviour is
 //! `ClientSide::extract` -- one circle (or, for an entity with `sprite: true`, one `sprite_id::QUAD`
 //! sprite instead) per replica entity, skipping the smallest ones above a zoom threshold
@@ -18,7 +18,7 @@ use engine::worldgen::Worldgen;
 use std::cell::Cell;
 use ts_rs::TS;
 
-/// Sprite ids this fixture's own atlas holds (docs/plan/17b-sprites-and-frame-budget.md Scope:
+/// Sprite ids this fixture's own atlas holds (M17b Scope:
 /// "add `SpriteId` constants helper for fixtures only"; `scripts/gen-sprite-art.mjs`'s own
 /// `sprites.json` output, `tests/browser/pages/public/drawables/`). Fixtures-only, not part of the
 /// engine crate's own `client` module: `SpriteId` itself and `DrawList::sprite` already exist (M17),
@@ -38,7 +38,7 @@ pub mod sprite_id {
 }
 
 thread_local! {
-    /// Test-only observation hook (docs/plan/17-drawlist-and-sprites.md, fix round 1):
+    /// Test-only observation hook (M17, fix round 1):
     /// `extract` records `view.px_per_tile()` here on every call, so a native test can observe
     /// the real `game_instance.rs` wiring end to end (`GameInstance::frame` -> `extract`) without
     /// touching any `Draw` record -- `drawlist_fixture_hash_golden` is unaffected, since nothing
@@ -78,10 +78,10 @@ impl Pos {
 
 /// One drawable entity: a fixed position, whether it is the "small" kind `extract` hides once
 /// `FrameView::zoom()` climbs past [`SMALL_ZOOM_THRESHOLD`], which DrawList layer it draws to
-/// (fix round 1, `docs/plan/17-drawlist-and-sprites.md`: `gc-drawables.ts`'s own population spreads
+/// (fix round 1, `M17`: `gc-drawables.ts`'s own population spreads
 /// entities across several layers, including a gap, so `counters.draws_equal_nonempty_layers` has
 /// more than one non-empty layer to prove against), and whether `extract` draws it as a sprite
-/// (`sprite_id::QUAD`) instead of a circle (docs/plan/17b-sprites-and-frame-budget.md fix round 1:
+/// (`sprite_id::QUAD`) instead of a circle (M17b fix round 1:
 /// "the drawables zero-GC page loads sprites and draws some"). `false`/`0`/`false` for every
 /// genesis entity (unchanged -- `drawlist_fixture_hash_golden`'s own three `circle(0, ...)` calls
 /// are byte-identical either way).
@@ -93,8 +93,8 @@ pub struct Entity {
     pub sprite: bool,
 }
 
-/// One action, `Spawn` (docs/plan/17-drawlist-and-sprites.md step 6, `layer` added fix round 1,
-/// `sprite` added docs/plan/17b-sprites-and-frame-budget.md fix round 1): the zero-GC `drawables`
+/// One action, `Spawn` (M17 step 6, `layer` added fix round 1,
+/// `sprite` added M17b fix round 1): the zero-GC `drawables`
 /// page's own way to reach a few hundred entities without hand-writing them into `genesis` (which
 /// stays fixed at its original three, module doc comment -- `drawlist_fixture_hash_golden` and
 /// `drawlist_zoom_threshold_hides_only_the_small_entity` both depend on that exact count). Same
@@ -235,7 +235,7 @@ impl Game for Drawables {
     /// `fx-presence`, `fx-machines`, `fx-panicky`, `fx-migrate-v1`, `fx-predict`). `Player = ()`
     /// made that look harmless -- there is no per-player state to initialize -- but
     /// `Store::apply`'s `Delta::Ack` arm (`store/mod.rs`) is a no-op when `self.players.get_mut
-    /// (who)` finds no slot (docs/plan/12-store-and-game-trait.md Planning decisions: "`on_player
+    /// (who)` finds no slot (M12 Planning decisions: "`on_player
     /// (.., Joined)` always `put_player`s first"), so skipping `put_player` here silently broke
     /// `Store::last_seq`/`ack_seq` for every connection this fixture ever serves: `host::Host::
     /// build_frame`'s `ack_seq = store.last_seq(slot.player).unwrap_or(0)` read `unwrap_or(0)`

@@ -1,4 +1,4 @@
-// `reference_ui_smoke_collect_and_inventory` (docs/plan/20b-reference-player-and-collect-ui.md
+// `reference_ui_smoke_collect_and_inventory` (M20b
 // steps 3-4, this cut's own short check -- Verification: "add at most a short check of your own if
 // a step needs one"): a minimal end-to-end pass through the new DOM wiring (`game.ts`'s own
 // `createCollectUi`/`createInventoryUi`), not the scripted `reference_collect_flow`/

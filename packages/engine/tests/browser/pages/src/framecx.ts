@@ -1,4 +1,4 @@
-// `framecx.html`'s script (docs/plan/18-picking-and-overlay.md Tests added: `framecx.
+// `framecx.html`'s script (M18 Tests added: `framecx.
 // tap_visible_in_frame`, `framecx.emit_visible_in_frame`): the one browser page that needs a real
 // WASM `ClientSide::frame` to prove `cx.input()`/`client.input.emit` actually reach Rust -- every
 // other picking/overlay/follow browser test in this milestone gets by on a hand-filled DrawList SAB

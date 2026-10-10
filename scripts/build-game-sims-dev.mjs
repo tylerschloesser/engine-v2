@@ -3,7 +3,7 @@
 // scripts/build-fixtures.mjs` for fixtures. Needed because the `reference` build step (below it in
 // `buildSteps`) runs a plain `vite build`, which defaults to the *release* profile -- release
 // strips the `target_features` custom section the `wasm` suite's "target features" test reads
-// (docs/plan/20-reference-game-v0.md, orchestrator ruling: "the M02 import-allowlist test and
+// (M20, orchestrator ruling: "the M02 import-allowlist test and
 // clippy bans run against reference-sim"), so that test needs its own guaranteed-fresh dev build,
 // not the browser suite's release one. No bindings step here: a game's own `vite.config.ts` already
 // wires that (0017 §5), and running it a second time from this script would just race the same

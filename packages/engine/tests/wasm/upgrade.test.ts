@@ -1,4 +1,4 @@
-// docs/plan/24b-upgrade-and-migration.md, Order of work steps 4-5: the 0005 Upgrades sequence
+// M24b, Order of work steps 4-5: the 0005 Upgrades sequence
 // (`sim_upgrade_begin/push/end`, `host/upgrade.ts`, `Persistence.open`/`loadLatest`) driven through
 // the real pipeline over the three fixture builds (`fx-migrate-v1`/`fx-migrate-v2`/
 // `fx-migrate-v2-hz30`), never a hand-built container except where a scenario has no other way to
@@ -506,7 +506,7 @@ describe('0005 Upgrades over the real fx-migrate-* pipeline', () => {
     expect(opened.upgrade?.reason).toBe('migrated')
   })
 
-  /** Gate fix (docs/plan/24b-upgrade-and-migration.md "known gap"): a world with no snapshot yet
+  /** Gate fix (M24b "known gap"): a world with no snapshot yet
    * (played for less than the first 1,200-tick dirty snapshot) still checks identity on its
    * genesis-replay fallback. `Comparison::Direct` (same schema/tick-rate/worldgen, different build
    * hash): the whole log tail (there is no snapshot to resume from -- everything after segment 0's
@@ -543,7 +543,7 @@ describe('0005 Upgrades over the real fx-migrate-* pipeline', () => {
     expect(manifest.segments[1]?.identity.buildHash).toBe('bb'.repeat(16))
   })
 
-  /** Gate fix (docs/plan/24b-upgrade-and-migration.md "known gap"): a schema bump on a world with no
+  /** Gate fix (M24b "known gap"): a schema bump on a world with no
    * snapshot yet is `Comparison::NeedsMigrate(Schema)`, but there is no old snapshot to decode an
    * `OldStore` from -- rejected outright as `SaveIncompatible { Schema }`, never attempting
    * `Game::migrate` (which would report `MigrateDeclined` instead), with every stored byte

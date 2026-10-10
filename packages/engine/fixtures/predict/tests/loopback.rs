@@ -1,4 +1,4 @@
-//! Ported from `spikes/prediction-api/game/tests/prediction.rs` (docs/plan/25-prediction-core.md
+//! Ported from `spikes/prediction-api/game/tests/prediction.rs` (M25
 //! Tests added), driving `fx-predict`'s own `Place`/`Deposit`/`Collect` through the real
 //! `Host<Predict>` <-> `ClientCore<Predict>` round trip (`Loopback`) instead of the spike's own
 //! simplified harness. What each test would still pass without (the repo's own recurring-defect
@@ -511,7 +511,7 @@ fn predict_provisional_id_is_not_the_overflow_placeholder() {
     assert_ne!(id, EntityId(EntityId::PROVISIONAL_BIT));
 }
 
-/// docs/plan/25-prediction-core.md Budgets: `predict_replays_per_frame` (`ClientCore::
+/// M25 Budgets: `predict_replays_per_frame` (`ClientCore::
 /// predict_replays_last_frame()`) is live -- non-zero on a frame that actually replays a pending
 /// action -- and stays within its own exact `budgets.json` ceiling (`counters.predict.
 /// replaysPerFrame`, equal to the pending-queue capacity).
@@ -736,7 +736,7 @@ fn count_contradicted(statuses: &[Prediction<Reject>], host_ok_second: bool) -> 
         .count() as u32
 }
 
-/// **`taint_dependency`** (docs/plan/25-prediction-core.md Planning decisions "Taint rule",
+/// **`taint_dependency`** (M25 Planning decisions "Taint rule",
 /// verbatim scenario): A (`Place`) declines via `Unknown` at the subscription edge, before any
 /// write; B (`Deposit`, addressed by tile, 0022 §6) depends on A's furnace; the host accepts both.
 /// Counts *contradicted verdicts* while both are pending. The shipped rule (R1) measures 0: B is
@@ -931,7 +931,7 @@ fn predict_taint_independence() {
     );
 }
 
-/// `ClientCore::overlay_diff_entries()` (docs/plan/26-prediction-rendering-and-clocks.md Budgets):
+/// `ClientCore::overlay_diff_entries()` (M26 Budgets):
 /// non-zero right after a predicted `set_tile`, and within `counters.predictRender.
 /// overlayDiffEntries` -- asserted against that exact key, never a literal number (the same
 /// discipline as `predict_replays_per_frame_counter_is_live`, above).

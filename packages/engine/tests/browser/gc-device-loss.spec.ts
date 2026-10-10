@@ -1,4 +1,4 @@
-// `device loss then zero-GC window @slow` (docs/plan/37b-device-loss.md step 5, Exit criteria 3): a
+// `device loss then zero-GC window @slow` (M37b step 5, Exit criteria 3): a
 // real connected client panning under a real renderer (`gc-device-loss.ts`), the device lost on
 // purpose and rebuilt, then the standard M04 window (two 600-frame windows, 0016/0028) on `main` and
 // every worker isolate against `gc.pages.device-loss` in `budgets.json` -- the `connected-terrain`

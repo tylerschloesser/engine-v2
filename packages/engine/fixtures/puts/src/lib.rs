@@ -1,4 +1,4 @@
-//! Fixture game `fx-puts` (docs/plan/12-store-and-game-trait.md, docs/plan/
+//! Fixture game `fx-puts` (M12, docs/plan/
 //! 12b-world-access-and-sim-driver.md): the fixture 0003's Consequences names ("the puts cover
 //! every replicated scope of 0011"). M12 declared the replicated types only; M12b adjusts them
 //! (M12 Deviations: "M12b may adjust; nothing here is a fixed seam beyond 'these types exist and
@@ -6,7 +6,7 @@
 //! (`register`/`prototype`/`anchor`/`genesis`/`on_player`/`apply`/`tick`) against real `Sim`/
 //! `Authority` machinery.
 //!
-//! Handlers (docs/plan/12b-world-access-and-sim-driver.md Scope): `Paint` is the chunk-scoped tile
+//! Handlers (M12b Scope): `Paint` is the chunk-scoped tile
 //! put; `Spawn` is the chunk-scoped entity put (anchored at its own position, 0024 §7); `Bump`/
 //! `Remove` look an entity up by position through `WorldRead::entity_at`, which this milestone
 //! never populates (occupancy tracking is M21, Non-scope) -- so both always reject `NotFound`,
@@ -17,7 +17,7 @@
 //! a `Global` counter and paints the next tile of a fixed walk near the origin once per simulated
 //! second, independent of any action (M15b needs an overlay that changes on its own).
 //!
-//! `export_game!(Puts)` (M13, docs/plan/13-sim-host-tick-loop.md) re-points at
+//! `export_game!(Puts)` (M13, M13 re-points at
 //! `engine::game_instance::GameInstance<Puts>`, the engine's generic `Instance` dispatcher: the
 //! `.wasm` this fixture builds now has a real sim role (`sim_genesis`/`sim_tick`/`sim_hash`, driving
 //! the same `Sim<Puts>` native tests already drove directly through `tests/*.rs`), so
@@ -31,7 +31,7 @@ use engine::world::{Footprint, Tile, WorldPos};
 use engine::world::{PrototypeId, Registry, TilePos, TraitSet};
 use ts_rs::TS;
 
-/// docs/plan/19-presence-channel.md steps 4-6: the zero-GC scene's own fixture gains a real
+/// M19 steps 4-6: the zero-GC scene's own fixture gains a real
 /// presence type, so `gc-connected-terrain.html`'s existing panning window (docs/plan/
 /// 15c-terrain-visibility-and-cache-invalidation.md step 4) also exercises presence sampling,
 /// uplink and host decode allocation-free -- this game never spawns a player entity, so a
@@ -55,7 +55,7 @@ impl engine::game::Presence for PutsPresence {
     }
 }
 
-/// docs/plan/15b-ring-connection-and-replica-rendering.md, Provides: "the visible overlay comes
+/// M15b, Provides: "the visible overlay comes
 /// from the puts tick rule's once-per-second `set_tile`" -- a pixel-readback test needs the tick
 /// rule's own tile to render *differently* from a pristine one, but `tick`'s `set_tile` only ever
 /// changes `aux` (`Tile::new(1, 0, g.day as u16)`, above), never `base`/`resource`, and the default
@@ -81,13 +81,13 @@ pub struct PutsClient;
 const OVERLAY_VISUAL_ID: u16 = 2;
 
 impl ClientSide<Puts> for PutsClient {
-    /// docs/plan/19-presence-channel.md steps 4-6: samples the camera's own position every client
+    /// M19 steps 4-6: samples the camera's own position every client
     /// frame (0001 Decision: "the spring lives here, in ordinary floats, with variable `dt`;
     /// nothing depends on its bits" -- presence never enters `Store`/the log/a hash, so this file's
     /// own `.claude/rules/determinism.md` coverage does not bind this one method the way it binds
     /// `apply`/`tick` above). This fixture spawns no player entity, so the camera centre is the
     /// only "where is this player" signal available; `gc-connected-terrain.html`'s own scripted pan
-    /// (docs/plan/15c-terrain-visibility-and-cache-invalidation.md step 4) already moves it every
+    /// (M15c step 4) already moves it every
     /// frame, which is exactly what exercises the sampler's 10 Hz on-change path continuously.
     fn frame(&mut self, cx: &mut FrameCx<'_, Puts>, presence: &mut PutsPresence) {
         let c = cx.camera();
@@ -106,7 +106,7 @@ impl ClientSide<Puts> for PutsClient {
         texel
     }
 
-    /// docs/plan/16b-ui-observation-and-clock.md Scope: "what the DOM overlay observes". `motd`/
+    /// M16b Scope: "what the DOM overlay observes". `motd`/
     /// `global_ticks` mirror `Global` (visible to every client, 0011 "Scopes"); `note`/
     /// `note_until` mirror the caller's own `Player` slot (`SetNote`'s own player-scoped put,
     /// cleared by `Puts::tick`) -- `0`/`0` before the caller's own slot has replicated at all
@@ -132,7 +132,7 @@ impl ClientSide<Puts> for PutsClient {
     }
 }
 
-/// docs/plan/16b-ui-observation-and-clock.md Scope: "`puts` gets `type Ui = PutsUi { motd, note,
+/// M16b Scope: "`puts` gets `type Ui = PutsUi { motd, note,
 /// note_until, global_ticks }`". `global_ticks` mirrors `Global::day` (the tick rule's own
 /// once-a-simulated-second counter, module doc comment) -- named `_ticks` here, not `_day`, since
 /// the DOM-facing name is this milestone's own to choose and a plain "day" reads oddly as a page
@@ -148,7 +148,7 @@ pub struct PutsUi {
 }
 
 /// A tile position, plain data (`Action` must stay `Codec + TS`; not `engine::world::TilePos`,
-/// which does not derive `TS`). `#[ts(export)]` (docs/plan/16-action-round-trip.md step 4): named
+/// which does not derive `TS`). `#[ts(export)]` (M16 step 4): named
 /// by `Action`'s own two struct-variant fields, so it needs its own generated file too -- ts-rs
 /// inlines/imports a referenced type by name but only ever *writes* one for a type that opts in.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
@@ -164,10 +164,10 @@ impl Pos {
     }
 }
 
-/// One action per handler this fixture exercises (docs/plan/12b-world-access-and-sim-driver.md
+/// One action per handler this fixture exercises (M12b
 /// Scope): `Paint`/`Spawn` are chunk-scoped puts, `Bump`/`Remove` exercise the reject path
 /// (occupancy is Non-scope, see the module doc comment), `SetNote` is player-scoped, `SetMotd` is
-/// global-scoped, `Roll` reads `SimRng`. `#[ts(export)]` (docs/plan/16-action-round-trip.md step
+/// global-scoped, `Roll` reads `SimRng`. `#[ts(export)]` (M16 step
 /// 4, 0017 §5's bindings step): without it ts-rs's derive macro emits no `export_bindings_action`
 /// test at all, so `cargo test export_bindings` would silently write nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
@@ -191,7 +191,7 @@ pub enum Reject {
     Unknown,
     /// `Bump`/`Remove`: no entity at that position (always, until M21's occupancy index exists).
     NotFound,
-    /// `Paint`: `pos` outside `PAINT_BOUND` (docs/plan/16-action-round-trip.md, `vertical_slice`'s
+    /// `Paint`: `pos` outside `PAINT_BOUND` (M16, `vertical_slice`'s
     /// own "out-of-range Paint" test). A fixture-only demo bound for `G::admit`'s rejection path,
     /// not a world-model rule: `docs/spec/world.md` ("coordinates are unbounded; the cap applies
     /// to *materialized* chunks held in memory") is unaffected -- this never touches `apply`/
@@ -286,7 +286,7 @@ impl Game for Puts {
 
     fn genesis(w: &mut dyn WorldWrite<Self>) {
         // Puts global first (mirrors `on_player(Joined)`'s own put-player-first convention,
-        // docs/plan/12-store-and-game-trait.md Planning decisions), overwriting `Sim::genesis`'s
+        // M12 Planning decisions), overwriting `Sim::genesis`'s
         // `Default` placeholder with the game's real initial value.
         w.put_global(Global::default());
     }
@@ -428,7 +428,7 @@ mod tests {
         );
     }
 
-    /// docs/plan/16-action-round-trip.md step 4 (0017 §5's bindings step): `EngineReject` is
+    /// M16 step 4 (0017 §5's bindings step): `EngineReject` is
     /// defined in `engine`, not here, so ts-rs's own derive-generated `export_bindings_*` test for
     /// it lives in `engine`'s own test binary -- never run by `cargo test export_bindings` scoped
     /// to this crate (0017 §5's exact command, no `-p`/`--workspace`). This hand-written test makes

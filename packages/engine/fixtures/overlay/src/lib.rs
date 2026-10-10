@@ -1,4 +1,4 @@
-//! Fixture game `fx-overlay` (docs/plan/18-picking-and-overlay.md, Files touched: "`fixtures/
+//! Fixture game `fx-overlay` (M18, Files touched: "`fixtures/
 //! overlay/`: pickable circles, slot anchors, a ghost and a follow toggle"). Steps 4-6 built the
 //! minimal `ClientSide::frame`/`cx.input()`/`cx.ui_dirty()` proof (module doc comment history:
 //! `genesis` spawns no entities, `extract` was still the default no-op). Step 7-8 fill `extract`
@@ -6,7 +6,7 @@
 //! presentation, not sim/apply code, so `std::f32::sin/cos` below is fine, unlike `.claude/rules/
 //! determinism.md`'s ban inside the deterministic core) with three unconditional, always-drawn
 //! groups every page that loads this fixture shares: `RING_COUNT` pickable rings on a fixed grid
-//! (`pick_id` 1..=50, `docs/plan/18-picking-and-overlay.md` step 8's device-page/GC-page "50
+//! (`pick_id` 1..=50, `M18` step 8's device-page/GC-page "50
 //! pickables" requirement), `ANCHOR_SLOT_COUNT` small circles orbiting the origin whose position is
 //! *also* published through `DrawList::anchor` (0019 §5's own "a moving position the game's Rust
 //! publishes"), and a cursor-anchored ghost (`ANCHOR_CURSOR_TILE`, 0019 "Cursor tile and ghost") that
@@ -35,7 +35,7 @@ const RING_SPACING_TILES: i32 = 3;
 const RING_SIZE_TILES: f32 = 1.2;
 const RING_COLOR: u32 = 0xffaa33ff;
 
-/// 0019 §5's own "4 slots" precedent (`docs/plan/18-picking-and-overlay.md` step 8, GC page
+/// 0019 §5's own "4 slots" precedent (`M18` step 8, GC page
 /// `anchors`' own "4 slot anchors"): small circles orbiting the origin, `DrawList::anchor`
 /// published every frame so `client.overlay.anchorSlot` has something moving to follow.
 const ANCHOR_SLOT_COUNT: u8 = 4;
@@ -66,7 +66,7 @@ impl From<Unknown> for Reject {
     }
 }
 
-/// What `client.onUi` observes (docs/plan/18-picking-and-overlay.md Tests added: `framecx.
+/// What `client.onUi` observes (M18 Tests added: `framecx.
 /// tap_visible_in_frame`, `framecx.emit_visible_in_frame`): the last `cx.input()` event's own raw
 /// fields, whichever kind it was -- a real tap (`kind == 1`, `pick_id`/`tile` are that event's own
 /// pick id and tile) or a `client.input.emit` record (`kind == 7`, the same two fields carrying

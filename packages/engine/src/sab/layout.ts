@@ -16,7 +16,7 @@ export { WORKER_CLIENT, WORKER_GEN0, WORKER_GEN1, WORKER_HOST } from './control.
 
 export const MAX_GEN_WORKERS = 2
 
-/** `Int32Array[8]` control words per ring (docs/plan/06-sab-primitives-and-workers.md, ring.ts). */
+/** `Int32Array[8]` control words per ring (M06, ring.ts). */
 const RING_CONTROL_BYTES = 32
 
 /** 0015 §2 "clocks": `authoritative_tick, predicted_tick, ticks_per_second, session_state,
@@ -37,7 +37,7 @@ export const RING_DEFAULTS = {
   downlink: { slotBytes: 1024, slots: 512 },
   uplink: { slotBytes: 1024, slots: 64 },
   actionRing: { slotBytes: 1024, slots: 64 },
-  // docs/plan/11-camera-and-input.md (M11, steps 4-5): `slotBytes` is the ring's own per-slot size
+  // M11 ( steps 4-5): `slotBytes` is the ring's own per-slot size
   // (its own 8-byte header, `sab/ring.ts`, plus payload), and the payload must hold a whole
   // `inputRing` record -- 32 bytes (Seams: `input/record.ts`'s `INPUT_RECORD_BYTES`). This was
   // `{ slotBytes: 32, slots: 256 }` (a 32-byte *slot*, leaving only 24 payload bytes -- 8 short),
@@ -46,13 +46,13 @@ export const RING_DEFAULTS = {
   // left the fix for this one. 32 + 8 = 40.
   inputRing: { slotBytes: 40, slots: 256 },
   uiRing: { slotBytes: 1024, slots: 256 },
-  // docs/plan/09-renderer-terrain.md, Planning decisions "Upload-ring record layout": one fixed
+  // M09, Planning decisions "Upload-ring record layout": one fixed
   // 4,112-byte record (16-byte header + 4,096-byte payload) per ring slot, never spanning -- the
   // ring's own 8-byte slot header (`sab/ring.ts`) is on top of that, so `slotBytes` must be
   // 4,112 + 8 = 4,120, not 4,112 (M06's own value here predated the record layout; this is the
   // "an owning milestone may revise its own row" case its comment names).
   uploadRing: { slotBytes: 4120, slots: 256 },
-  // Revised by docs/plan/08b-gen-workers-and-queue.md (M06's own allowance: "an owning milestone
+  // Revised by M08b (M06's own allowance: "an owning milestone
   // may revise its row in its Deviations"). M06 sized these before the record shapes existed;
   // `slotBytes` here is the *ring's* total per-slot size (its own 8-byte header + payload,
   // `sab/ring.ts`), and the payload must hold a whole record: 16 bytes for a request, `16 +
@@ -83,7 +83,7 @@ function ringBytes(spec: { slotBytes: number; slots: number }): number {
 
 /** Allocates every SAB a topology needs. `hostKind` (single-player `sim`, multiplayer `net`) is
  * carried for M06b's spawn logic; it does not currently change what is allocated here, since
- * `uplink`/`downlink` are the same shape either way (docs/plan/06-sab-primitives-and-workers.md
+ * `uplink`/`downlink` are the same shape either way (M06
  * Consumes; recorded in this milestone's Deviations). */
 export function createSabSet(hostKind: 'sim' | 'net', genWorkers: number): SabSet {
   void hostKind

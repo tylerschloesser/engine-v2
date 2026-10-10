@@ -1,4 +1,4 @@
-//! `idle_world_visits_zero_entities` (docs/plan/21b-timers-wakeups-and-tickcx.md Tests added): a
+//! `idle_world_visits_zero_entities` (M21b Tests added): a
 //! world of 10k sleeping machines -- placed directly via `testkit::fill_world` (bypassing
 //! `Authority`, so none of them is ever auto-woken, scheduled, or put on an active list) -- costs
 //! zero per tick, proving tick cost is O(active entities), not O(entities) (0007 §7).

@@ -5,7 +5,7 @@
 import type { Storage } from './types.js'
 
 /** `crashClone`'s own option: for each key, how many trailing bytes to drop (simulating a crash
- * mid-`append`/`write` -- docs/plan/22-persistence-log-and-snapshots.md Seams). Keys not named
+ * mid-`append`/`write` -- M22 Seams). Keys not named
  * keep their full value. */
 export interface CrashCloneOptions {
   dropTailBytes?: Record<string, number>
@@ -26,7 +26,7 @@ function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
 }
 
 /**
- * `backing` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Deviations: the fsStorage
+ * `backing` (M27, Deviations: the fsStorage
  * durability conformance check needs "a fresh instance over the same backing store" for *every*
  * adapter, memory included) -- optional, additive: every existing no-argument call keeps its own
  * fresh, empty `Map` (`durable: false`'s own "never" row is otherwise unaffected). Given the same

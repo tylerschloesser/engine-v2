@@ -1,4 +1,4 @@
-// `input` zero-GC page (docs/plan/11-camera-and-input.md, Tests added: "Zero-GC: page id `input`
+// `input` zero-GC page (M11, Tests added: "Zero-GC: page id `input`
 // through `zeroGcSuite` (600 frames of injected drag, pinch, wheel and WASD with a `tap` every 30
 // frames; chunk streaming and the renderer active; isolates `main`, `client`, `gen0`)"). Same
 // production-topology shape as `terrain.spec.ts` (real `createClient()`, real WebGPU adapter, no

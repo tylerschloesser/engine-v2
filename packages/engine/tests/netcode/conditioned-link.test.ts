@@ -1,4 +1,4 @@
-// `conditioned-link` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Tests added): latency,
+// `conditioned-link` (M27, Tests added): latency,
 // jitter and stall on a real client<->host link, and the same seed's `trace()` compared byte for
 // byte across two independent runs (0020 §7's own reproducibility guarantee, "a run is reproducible
 // from (seed, scenario) even over real sockets" -- proven here for the in-memory transport).

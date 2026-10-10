@@ -1,5 +1,5 @@
 // The Node `fs` adapter (docs/decisions/0005-persistence-and-recovery.md Storage table, `fs` row;
-// docs/plan/22b-persistence-load-and-fs.md Planning decisions 6): built-in `node:fs` only, zero npm
+// M22b Planning decisions 6): built-in `node:fs` only, zero npm
 // dependencies (0005 "Server"). Exported from `engine/server/node` only (`server-node.ts`) -- the
 // name M27/M35b use.
 //

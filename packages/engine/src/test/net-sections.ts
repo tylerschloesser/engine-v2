@@ -1,4 +1,4 @@
-// Per-section wire accounting for the netcode harness (docs/plan/31-rates-and-integrity.md step 1).
+// Per-section wire accounting for the netcode harness (M31 step 1).
 // Pure functions over delivered downlink messages: no clock, no host state, so every number here is a
 // function of `(seed, scenario)` and `trace()` stays deterministic.
 

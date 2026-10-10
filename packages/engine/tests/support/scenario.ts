@@ -15,14 +15,14 @@ export type SimScenario = {
   checkpointEvery: number
   /** Before tick t (1-based) when t % everyTicks == 0; the byte rule is in the JSON. Absent means
    * no admit traffic at all -- a real `Game`'s sim role with no connections yet (`fixtures/puts`,
-   * docs/plan/13-sim-host-tick-loop.md: connections are M15, Non-scope there). */
+   * M13: connections are M15, Non-scope there). */
   input?: { everyTicks: number; bytes: number; rule: string }
-  /** Calls `sim_genesis()` once before ticking (docs/plan/13-sim-host-tick-loop.md): a real
+  /** Calls `sim_genesis()` once before ticking (M13: a real
    * `Game`'s sim role needs a world before `sim_tick` does anything but `Status.NotInitialised`;
    * a low-level fixture like `fixtures/hash` builds its state in `Instance::init` instead and
    * leaves this absent. */
   genesis?: boolean
-  /** docs/plan/15b-ring-connection-and-replica-rendering.md, Orchestrator ruling 1: calls
+  /** M15b, Orchestrator ruling 1: calls
    * `sim_connect(0)` once, right after `genesis` and before ticking -- the same "once, before the
    * loop" shape `genesis` above already has. `Host::connect`'s own `Record::Player{Joined,
    * Connected}` queue changes `sim_hash()` from the very first tick, which is exactly why
@@ -33,7 +33,7 @@ export type SimScenario = {
 
 /**
  * `fixtures/worldgen/golden/scenario.json`: a gen-role chunk-list scenario
- * (docs/plan/08-worldgen-and-gen-worker.md Seams). One checkpoint per 64 chunks, each the
+ * (M08 Seams). One checkpoint per 64 chunks, each the
  * `fnv1a64Hex` of the concatenated `GenOut` bytes.
  */
 export type WorldgenScenario = {
@@ -56,7 +56,7 @@ export type ScriptAction = { seq: number; action: unknown }
 export type ScriptEntry = { tick: number; connect?: boolean; actions?: ScriptAction[] }
 
 /**
- * `fixtures/puts/golden/scenario-script-a.json` (docs/plan/16-action-round-trip.md step 5): a
+ * `fixtures/puts/golden/scenario-script-a.json` (M16 step 5): a
  * sim-role script of real per-tick actions, driven through the real admit pipeline (`sim_connect`/
  * `sim_admit`) rather than `SimScenario.input`'s synthetic byte fill. No TS postcard encoder exists
  * (0003: rejected) or is needed: `encoderConfig` is a second, client-role instance of the *same*
@@ -135,7 +135,7 @@ function runSimScenario(inst: EngineInstance, scenario: SimScenario): string[] {
 const scriptEncoder = new TextEncoder()
 
 /**
- * docs/plan/16-action-round-trip.md step 5: `sim`'s own admit pipeline driven by real per-tick
+ * M16 step 5: `sim`'s own admit pipeline driven by real per-tick
  * actions, each turned into wire bytes by `encoder` (a second, client-role instance of the same
  * `.wasm`) rather than a hand-written postcard encoder. Mirrors `engine::testing::testkit::
  * run_script`'s own contract exactly: a `ScriptEntry`'s `tick` names the ordinal `sim_tick()` call

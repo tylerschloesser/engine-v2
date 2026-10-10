@@ -1,5 +1,5 @@
 //! Client-side prediction (docs/decisions/0012-prediction-and-reconciliation.md;
-//! docs/plan/25-prediction-core.md): the reset-and-replay overlay, the client's own `Predicting`
+//! M25: the reset-and-replay overlay, the client's own `Predicting`
 //! `WorldRead`/`WorldWrite` implementor, and the pending queue. `client::core::ClientCore` is the
 //! one production caller (`on_action`/`on_frame`); `.claude/rules/prediction.md` has the
 //! validate-first/`?`-on-every-read/never-encode-a-provisional-id rules this module exists to keep.

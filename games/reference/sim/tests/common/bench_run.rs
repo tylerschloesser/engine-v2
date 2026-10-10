@@ -1,4 +1,4 @@
-//! Release-profile re-runs and the bench gate for the wall-clock benchmarks (docs/plan/36-slow-tier-
+//! Release-profile re-runs and the bench gate for the wall-clock benchmarks (M36
 //! and-benchmarks.md steps 4-5). The slow nextest profile builds the dev profile, so a benchmark
 //! compiled without optimisation (`cfg!(debug_assertions)`) re-runs itself as `cargo test --release
 //! --test <file> -- --exact <name>` ([`run_in_release`]; the inner run prints one `BENCH_SAMPLE

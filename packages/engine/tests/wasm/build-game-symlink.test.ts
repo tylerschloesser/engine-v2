@@ -1,4 +1,4 @@
-// M35 (docs/plan/35-packaging-and-adapters.md, Planning decisions): `buildGame` accepts a crate path
+// M35 ( Planning decisions): `buildGame` accepts a crate path
 // that goes through a symlink. `cargo metadata` reports the resolved `manifest_path`, which
 // `artifactPath()` matched by exact string, so a symlinked crate dir (macOS `$TMPDIR`, a symlinked
 // home) failed with the misleading "has no cdylib target". The link points at the real `fx-hash`

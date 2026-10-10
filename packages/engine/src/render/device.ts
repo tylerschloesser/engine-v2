@@ -1,4 +1,4 @@
-// Device init (docs/decisions/0018-renderer.md §1, §7; docs/plan/09-renderer-terrain.md Scope):
+// Device init (docs/decisions/0018-renderer.md §1, §7; M09 Scope):
 // adapter + device requests, the `GPUTexture`-as-view startup probe (0018 §1), and
 // `uncapturederror`/`getCompilationInfo()` surfaced as errors instead of silent GPU validation
 // failures (docs/decisions/0020-testing-strategy.md §6: "every browser test also fails on
@@ -13,7 +13,7 @@
 // checking `adapter.limits`" -- this milestone needs none).
 export const ADAPTER_REQUEST: GPURequestAdapterOptions = { featureLevel: 'compatibility' }
 export const DEVICE_REQUEST: GPUDeviceDescriptor = {}
-/** `DEVICE_REQUEST` plus `timestamp-query` (docs/plan/39k-gpu-exec-metric.md): the only feature this
+/** `DEVICE_REQUEST` plus `timestamp-query` (M39k: the only feature this
  * engine ever requests, and only for `ClientOptions.render.gpuTiming`, built once. */
 export const DEVICE_REQUEST_GPU_TIMING: GPUDeviceDescriptor = {
   requiredFeatures: ['timestamp-query' as GPUFeatureName],
@@ -44,7 +44,7 @@ export type AdapterInfo = {
   isFallbackAdapter: boolean | null
 }
 
-/** `checkSupport()`'s `no-adapter` failure (docs/plan/06b-workers-and-spawn.md, `support.ts`'s own
+/** `checkSupport()`'s `no-adapter` failure (M06b, `support.ts`'s own
  * "filled in by M09" note) and `initDevice`'s own rejection both throw this. */
 export class NoAdapterError extends Error {
   constructor(reason: string) {
@@ -144,7 +144,7 @@ async function probeViewAsAttachment(device: GPUDevice): Promise<boolean> {
   return error === null
 }
 
-/** docs/plan/09-renderer-terrain.md, Planning decisions "`writeTexture` from a SAB view is
+/** M09, Planning decisions "`writeTexture` from a SAB view is
  * unverified": inside a validation error scope, `writeTexture` a throwaway `rg16uint` 1x1 texture
  * from a `Uint16Array` view backed by a `SharedArrayBuffer`; `true` iff `popErrorScope()` reports
  * nothing. Runs once at startup, never per frame -- `render/upload.ts` reads the result to choose

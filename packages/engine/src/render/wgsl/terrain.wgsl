@@ -1,5 +1,5 @@
-// Terrain fragment shader (docs/decisions/0018-renderer.md §3, §5; docs/plan/09-renderer-terrain.md
-// Planning decisions "Bind group layout"; docs/plan/09b-terrain-art-and-lifecycle.md Scope): one
+// Terrain fragment shader (docs/decisions/0018-renderer.md §3, §5; M09
+// Planning decisions "Bind group layout"; M09b Scope): one
 // full-viewport triangle, the fragment maps pixel -> tile -> chunk -> slot -> texel -> art. Final
 // form (M09b): a PCG hash of (tile_x, tile_y, seed) picks a variant and flip/rotate/brightness
 // jitter; stateless edge dithering blends a higher-priority neighbour's art in over `band` art
@@ -34,7 +34,7 @@ struct VisualTable {
 @group(0) @binding(4) var art_tex: texture_2d_array<f32>;
 @group(0) @binding(5) var art_sampler: sampler;
 
-// 0007 §3 ("CHUNK_BITS is 5 here", docs/plan/09-renderer-terrain.md Planning decisions): every
+// 0007 §3 ("CHUNK_BITS is 5 here", M09 Planning decisions): every
 // chunk/page/indirection size below is derived from this one constant.
 const CHUNK_BITS: u32 = 5u;
 const CHUNK_MASK: i32 = 31; // (1 << CHUNK_BITS) - 1
@@ -45,7 +45,7 @@ const INDIR_NONE: u32 = 0xFFFFu;
 // visual id (0018 §4 caps those at 1,024).
 const VISUAL_MISSING: u32 = 0xFFFFu;
 
-// A colour no tile-art cell in this milestone's fixture uses (docs/plan/09-renderer-terrain.md
+// A colour no tile-art cell in this milestone's fixture uses (M09
 // Deviations): 32/255 exactly, so the `rgba8unorm` readback round-trips bit-for-bit.
 const NEUTRAL_COLOR: vec4<f32> = vec4<f32>(32.0 / 255.0, 32.0 / 255.0, 32.0 / 255.0, 1.0);
 
@@ -55,7 +55,7 @@ const FLAG_FLIP_X: u32 = 1u;
 const FLAG_FLIP_Y: u32 = 2u;
 const FLAG_ROTATE: u32 = 4u;
 
-// Brightness jitter's amplitude (docs/plan/09b-terrain-art-and-lifecycle.md Deviations: 0018 §3
+// Brightness jitter's amplitude (M09b Deviations: 0018 §3
 // names the feature, not a magnitude): chosen small enough that every flat-colour probe in this
 // milestone's fixture stays inside 0020 §6's 2/255 tolerance without a test needing to model it.
 const JITTER_AMPLITUDE: f32 = 1.0 / 255.0;
@@ -88,7 +88,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VOut {
 
 // Euclidean remainder for a power-of-two `m` (`m - 1` passed as `mask`): equal to Rust's
 // `rem_euclid` for any `i32`, including negative values, because two's-complement `&` already wraps
-// toroidally (docs/plan/09-renderer-terrain.md Deviations: proved by `terrain.far_from_origin_exact`
+// toroidally (M09 Deviations: proved by `terrain.far_from_origin_exact`
 // -- chunk (1<<18, 1<<18) and chunk (0, 0) share the same masked cell since 2^18 is a multiple of 64).
 fn wrap_mask(v: i32, mask: i32) -> u32 {
   return u32(v & mask);
@@ -96,7 +96,7 @@ fn wrap_mask(v: i32, mask: i32) -> u32 {
 
 // One PCG3D permutation round (Mark Jarzynski & Marc Olano, "Hash Functions for GPU Rendering",
 // JCGT 2020): u32-only add/mul/xor/shift, so it wraps identically here and in a JS reference built
-// with `Math.imul`/`>>> 0` (docs/plan/09b-terrain-art-and-lifecycle.md Planning decisions
+// with `Math.imul`/`>>> 0` (M09b Planning decisions
 // "Reference implementation of the hash in the test, not a golden image").
 fn pcg3d(v_in: vec3<u32>) -> vec3<u32> {
   var v = v_in * vec3<u32>(1664525u) + vec3<u32>(1013904223u);
@@ -143,7 +143,7 @@ fn lookup_visual(tile: vec2<i32>) -> u32 {
 // (explicit level, the seam formula's own snap), or the minified trilinear mip level otherwise --
 // always a value derived purely from `frame.tiles_per_px` (uniform across the whole draw call), so
 // every texture-sample call below uses an *explicit* level and never an implicit-derivative
-// `textureSample`/`fwidth` (docs/plan/09b-terrain-art-and-lifecycle.md Deviations: this sidesteps
+// `textureSample`/`fwidth` (M09b Deviations: this sidesteps
 // WGSL's uniform-control-flow restriction on implicit derivatives entirely, rather than relying on
 // it being satisfied).
 fn sample_tile_art(tile: vec2<i32>, visual_id: u32, uv_in: vec2<f32>, lod: f32) -> vec4<f32> {
@@ -177,7 +177,7 @@ fn sample_tile_art(tile: vec2<i32>, visual_id: u32, uv_in: vec2<f32>, lod: f32) 
     // art_size` w.r.t. screen pixels is the *same uniform constant* everywhere -- computed here in
     // closed form rather than with the `fwidth` builtin.
     //
-    // docs/plan/09b-terrain-art-and-lifecycle.md Deviations "Fix round 2: magnified sampling was
+    // M09b Deviations "Fix round 2: magnified sampling was
     // inverted": an earlier draft anchored on `floor(texel)` and added `+ 0.5` *after* the clamp,
     // which saturates to a texel's own *edge* (shared with a neighbour) instead -- a 50/50 neighbour
     // blend almost everywhere a texel is sampled, the opposite of this formula's purpose.

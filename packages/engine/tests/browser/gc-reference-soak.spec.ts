@@ -1,4 +1,4 @@
-// `soak-browser @slow` (docs/plan/36-slow-tier-and-benchmarks.md step 7): the reference game's
+// `soak-browser @slow` (M36 step 7): the reference game's
 // single-player zero-GC page (`gc-single-player.html`, M34b: the state of the script's middle, then
 // the camera panning and a collect or a deposit dispatched every 100 frames, every frame one stepped
 // tick) measured over 12,000 frames in each of 0028's two windows instead of 600, so the M04 assertion

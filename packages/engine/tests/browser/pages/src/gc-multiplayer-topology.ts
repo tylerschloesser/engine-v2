@@ -1,4 +1,4 @@
-// `gc-multiplayer-topology.html`'s script (docs/plan/29-net-worker-and-reference-server.md, this
+// `gc-multiplayer-topology.html`'s script (M29, this
 // cut's own step 5): a real `createClient()` **multiplayer** topology (`host: { kind: 'remote' }`
 // -- client + gen0 + net, no sim worker) against a real `ws://` server (`?url=`, a `startTestServer`
 // this page's own spec starts before navigating), driven the same `stepFrame`/`stepTick` lockstep
@@ -96,7 +96,7 @@ await untilConfigured(client)
 // `asHarness` snapshots the worker set: build it again now that gen0 exists.
 harness = asHarness(client)
 
-// docs/plan/30-interpolation.md: the spec's own moving remote (a second client on the same server,
+// M30: the spec's own moving remote (a second client on the same server,
 // driven from Node) is only relayed to a client whose camera subscribes the chunk it stands in, so
 // this page holds a small camera around the origin, where that remote walks.
 const { cameraState } = client

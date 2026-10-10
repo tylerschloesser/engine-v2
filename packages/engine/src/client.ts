@@ -1,4 +1,4 @@
-// Main-thread entrypoint (`engine`): `createClient`'s spawn path (docs/plan/06b-workers-and-spawn.md).
+// Main-thread entrypoint (`engine`): `createClient`'s spawn path (M06b.
 // Checks isolation, compiles the module once, creates the `SabSet`, spawns the worker set for the
 // chosen topology, and posts each worker its `Module` (or `wasmUrl`), its SABs and its config.
 
@@ -73,14 +73,14 @@ export type {
   SupportWarningCode,
 } from './support.js'
 export { checkSupport } from './support.js'
-// docs/plan/23-persistence-opfs-and-lifecycle.md Seams (Provides): `StorageStatus` is declared in
+// M23 Seams (Provides): `StorageStatus` is declared in
 // `worker/protocol.ts` (so `SimLifecycleMessage` can reference it without a `client.ts` import
 // cycle) and re-exported here unchanged -- the same "no renamed Provides" convention `sim-config.ts`/
 // `storage/types.ts` already follow.
 export type { StorageStatus } from './worker/protocol.js'
 
 /**
- * The real shape (docs/plan/13-sim-host-tick-loop.md, Scope "`createClient` local host"): `server.
+ * The real shape (M13, Scope "`createClient` local host"): `server.
  * ts`'s own `WorldConfig` (0009), minus `buildHash` -- `createClient` fills that itself, from
  * `ClientOptions.wasm.buildHash`, the same build the worker set it spawns is instantiated from (a
  * caller would otherwise have to keep two copies of one hash in sync). `Params` defaults to
@@ -89,7 +89,7 @@ export type { StorageStatus } from './worker/protocol.js'
  */
 export type WorldConfig<Params = unknown> = Omit<ServerWorldConfig<Params>, 'buildHash'>
 
-/** docs/plan/09b-terrain-art-and-lifecycle.md, Seams (Provides): `ClientOptions.render`'s exact
+/** M09b, Seams (Provides): `ClientOptions.render`'s exact
  * shape. Defaults (per that brief's own Seams line): `scale` per 0018 §8 (`render/viewport.ts`'s
  * `computeRenderScale`, undefined here means "derive from DPR"), `scaleCap` none (undefined means
  * the derivation's own built-in 2x cap, not a narrower one), `neighbourCutoffPx` 0 ("always read
@@ -102,25 +102,25 @@ export type RenderOptions = {
   scaleCap?: number
   neighbourCutoffPx?: number
   /** Default off. On: `initDevice` requests `timestamp-query` when the adapter has it and the terrain
-   * pass is timed (`renderer.gpuTimer`, `render/gpu-timing.ts`; docs/plan/39k-gpu-exec-metric.md). Read
+   * pass is timed (`renderer.gpuTimer`, `render/gpu-timing.ts`; M39k. Read
    * by `createGpuResources`; the device page passes it to `initDevice` and `createTerrainRenderer`. */
   gpuTiming?: boolean
 }
 
-/** `sim::EngineReject`'s TS shape, hand-mirrored here (docs/plan/16-action-round-trip.md step 4):
+/** `sim::EngineReject`'s TS shape, hand-mirrored here (M16 step 4):
  * `engine` itself has no game to run `export_bindings` against, so this one small, stable enum is
  * kept in sync by hand rather than generated -- `fixtures/puts/bindings/EngineReject.ts` (and any
  * later game's own copy) must read the same three variants. */
 export type EngineRejectReason = 'RateLimited' | 'StateBudgetFull' | 'EngineFault'
 
-/** `game_instance::push_result_record`'s exact JSON shape (docs/plan/16-action-round-trip.md
+/** `game_instance::push_result_record`'s exact JSON shape (M16
  * Deviations, "The exact JSON"): `Rejected<G>`'s `Game`/`Engine` tag is preserved, not flattened.
  * `Reject` is the game's own `G::Reject` TS type (`fixtures/puts/bindings/Reject.ts`, or a later
  * game's own); `onActionResult`'s caller supplies it as a type parameter for full typing on both
- * halves. `'NotPredictable'` (docs/plan/25-prediction-core.md, `game_instance::
+ * halves. `'NotPredictable'` (M25, `game_instance::
  * push_not_predictable_record`): a declined prediction, surfaced once at dispatch (0003, 0012) --
  * never a local `Rejected`, which is a hint and is not surfaced this way at all. `'Lost'`
- * (docs/plan/28b-reconnect-and-lifecycle.md step 3, `game_instance::push_lost_record`): a pending
+ * (M28b step 3, `game_instance::push_lost_record`): a pending
  * action `Welcome.last_processed_action_seq` proves the host already processed, but whose own ack
  * died with the old connection before it arrived -- the host keeps no per-session state to replay
  * one from (0013), so neither `Confirmed` nor `Rejected` is knowable; the resync already shows the
@@ -132,7 +132,7 @@ export type ActionOutcome<Reject = unknown> =
   | { Rejected: { Game: Reject } }
   | { Rejected: { Engine: EngineRejectReason } }
 
-/** `Client.onLink`'s own state (docs/plan/29-net-worker-and-reference-server.md steps 1-2, Scope):
+/** `Client.onLink`'s own state (M29 steps 1-2, Scope):
  * see `Client.onLink`'s own doc comment for what each value means. Module-scope (not declared
  * inside `createClient`) so the exported `Client` interface can name it. */
 export type LinkState =
@@ -145,7 +145,7 @@ export type LinkState =
 /** `Client.onLink`'s own `reason`, set only for `state: 'rejected'`. */
 export type LinkReason = 'BadKey' | 'Full' | 'WorldMismatch'
 
-/** `Client.debug.linkLog()`'s own entry shape (docs/plan/29-net-worker-and-reference-server.md
+/** `Client.debug.linkLog()`'s own entry shape (M29
  * Scope, `mp.html?linklog=1`'s own on-page log columns, reused by M38's hosted log): `event` --
  * `'open'` (the net worker's `Link` reported `up`), `'silence'` (`down`, reason `'dead'`: no
  * message for the 0013 dead timeout), `'close'` (`down`, any other reason -- a real socket close,
@@ -166,11 +166,11 @@ export type LinkLogEntry = {
   discarded: boolean
 }
 
-/** `Client.clock()`'s own return shape (docs/plan/16b-ui-observation-and-clock.md Scope): tick
+/** `Client.clock()`'s own return shape (M16b Scope): tick
  * counts, not seconds (0006 "On the client": "the UI never counts ticks itself" -- a page derives
  * remaining seconds from a replicated `done_at` tick and this pair). Returned as the same reused
  * object on every call (Planning decisions: "`clock()` returns a reused object"). `predicted`
- * differs from `authoritative` from docs/plan/26-prediction-rendering-and-clocks.md on (0012 "Two
+ * differs from `authoritative` from M26 on (0012 "Two
  * clocks": `predicted = authoritative + lead`). `tickFraction` (that milestone's own addition,
  * Seams: "a `tickFraction` field if M16b's object lacks one"): progress into the current tick,
  * `0..1`, for a smooth animation between two ticks. */
@@ -181,7 +181,7 @@ export type ClockSnapshot = {
   tickFraction: number
 }
 
-/** `client::core::OUTBOX_CAPACITY` (docs/plan/16-action-round-trip.md Deviations): the 0012
+/** `client::core::OUTBOX_CAPACITY` (M16 Deviations): the 0012
  * pending-queue figure, mirrored here so `dispatch` can enforce the same "queue full" backstop
  * Rust's own `on_action` re-checks (defence in depth, not the primary enforcement point either
  * side of the boundary). */
@@ -203,7 +203,7 @@ export interface ClientOptions {
     | {
         kind: 'local'
         world: WorldConfig
-        /** docs/plan/15b-ring-connection-and-replica-rendering.md, Orchestrator ruling 1: links
+        /** M15b, Orchestrator ruling 1: links
          * the sim and client workers over the uplink/downlink ring pair (`SimHost.accept`, the
          * client's own net pump) -- the real single-player topology this milestone lands. Default
          * `false` (unset), by design: every existing `sim`-kind test page constructs `host`
@@ -211,7 +211,7 @@ export interface ClientOptions {
          * flag to remember to turn off (Planning decisions). A page that wants a real connected
          * session sets this `true`. */
         connect?: boolean
-        /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: the sim worker's own startup
+        /** M23 steps 3-4: the sim worker's own startup
          * order becomes Web Lock -> OPFS probe -> `Persistence.open` -> tick loop (a world survives
          * tab close/reload, and a second tab opening the same `worldId` gets `WorldBusy`) instead of
          * the M13 in-memory-only stub. Default `false` (unset), the same "no flag to remember to
@@ -226,11 +226,11 @@ export interface ClientOptions {
   arenas?: { sim?: number; client?: number; gen?: number }
   /** Default per 0008: 2 when `navigator.hardwareConcurrency >= 8`, else 1. */
   genWorkers?: number
-  /** docs/plan/11-camera-and-input.md Seams (Provides): the `localStorage` persistence suffix (a
+  /** M11 Seams (Provides): the `localStorage` persistence suffix (a
    * game passes its world id, so each world keeps its own camera). `camera/persistence.ts`'s
    * `cameraStorageKey` turns this into the actual key; omitted means `'default'`. */
   cameraKey?: string
-  /** docs/plan/09-renderer-terrain.md, Seams (Provides): URL of `tiles.json`; `sprites` (docs/plan/
+  /** M09, Seams (Provides): URL of `tiles.json`; `sprites` (docs/plan/
    * 17b-sprites-and-frame-budget.md Seams, Provides) is URL of `sprites.json`. Not read by
    * `createClient` itself -- rendering is main-thread-only and owns no WASM instance (0018 §1) --
    * kept here so a caller's one `ClientOptions` object is also what it hands `render/art.ts`'s
@@ -240,10 +240,10 @@ export interface ClientOptions {
    * reference, rather than typing the same URL a second time (every other real-client page still
    * does the latter, unchanged by this cut). */
   assets?: { tiles: string; sprites?: string }
-  /** docs/plan/09b-terrain-art-and-lifecycle.md, Seams (Provides). See `RenderOptions`'s own doc
+  /** M09b, Seams (Provides). See `RenderOptions`'s own doc
    * comment for defaults and why `createClient` doesn't read this itself. */
   render?: RenderOptions
-  /** docs/plan/18-picking-and-overlay.md Seams (Provides): default root is the canvas's own parent
+  /** M18 Seams (Provides): default root is the canvas's own parent
    * element (the engine appends one anchor-layer element there and re-parents each anchored `el`
    * into it, lazily, on the first `client.overlay.anchor` call -- `overlay/anchors.ts`'s own doc
    * comment). `mode: 'translate'` is accepted for the full type but not built by this cut (Non-scope:
@@ -258,13 +258,13 @@ export interface ClientOptions {
      * M07's; tests need to reach a real fixture's config today). */
     game?: unknown
     flags?: TestFlags
-    /** Delays the late gen-worker spawn of a remote client by this many ms (docs/plan/33f: lets a
+    /** Delays the late gen-worker spawn of a remote client by this many ms (M33f: lets a
      * test fill the gen request rings before any gen worker exists). */
     genSpawnDelayMs?: number
   }
 }
 
-/** `client.onFatal`'s argument (docs/plan/37-robustness-events.md): the same shape as
+/** `client.onFatal`'s argument (M37: the same shape as
  * `HostServices.onFatal`'s (0024 §5). */
 export type FatalEvent = { tick: number; message: string }
 
@@ -274,7 +274,7 @@ export type { DesyncReport } from './desync.js'
 export type RendererLostReason = 'no-adapter' | 'repeated-loss'
 
 export interface Client {
-  /** docs/plan/16-action-round-trip.md Scope: "M06b's `Client.ready` now also waits for
+  /** M16 Scope: "M06b's `Client.ready` now also waits for
    * `session_state = 1`" -- but only for `{ kind: 'local', connect: true }`. Every other topology
    * (no `connect`, none at all, or `{ kind: 'remote' }`) keeps `ready`'s pre-M16 meaning, "the
    * worker set is up": a `local` host's own "server" is the sim worker in the same tab (a
@@ -282,12 +282,12 @@ export interface Client {
    * Client policy: "the game stays interactive on last known state ... no modal and no error for
    * outages under ~10 s") -- blocking `ready` itself on a `Welcome` that may never arrive would
    * contradict that policy and hang forever on a bad join key, no server yet, or a real outage
-   * (docs/plan/29-net-worker-and-reference-server.md steps 1-2, Deviations: found live -- every
+   * (M29 steps 1-2, Deviations: found live -- every
    * pre-existing test/device page built on a placeholder, never-dialing `{ kind: 'remote' }` host
    * hung the instant `remote` started dialing for real). Use `client.onLink`'s own `'online'` event
    * to know when a multiplayer session is actually live. */
   readonly ready: Promise<void>
-  /** docs/plan/16-action-round-trip.md Scope: JSON-encodes `action` into the action ring and
+  /** M16 Scope: JSON-encodes `action` into the action ring and
    * returns its `seq`. Throws `Error("engine: dispatch before ready")` before the session is live
    * (`ready`'s own extended meaning), and `Error("engine: action queue full")` once ready when
    * either the 0012 pending-queue backstop (`seq - ack_seq > `[`OUTBOX_CAPACITY`]) or the action
@@ -297,7 +297,7 @@ export interface Client {
    * method is not part of the zero-GC surface -- `engine/test.dispatchRaw` is, for a measured
    * window. */
   dispatch(action: unknown): number
-  /** docs/plan/16-action-round-trip.md Scope: fires once per drained kind-2 (`ActionResults`) UI-
+  /** M16 Scope: fires once per drained kind-2 (`ActionResults`) UI-
    * ring record, in ring order, on a per-rAF poll this `Client` runs on its own (no page wiring
    * needed). Returns an unsubscribe function. `Reject` is the game's own `G::Reject` TS type,
    * supplied by the caller for full typing (Deviations: "onActionResult's reason is fully typed on
@@ -305,22 +305,22 @@ export interface Client {
   onActionResult<Reject = unknown>(
     cb: (seq: number, result: ActionOutcome<Reject>) => void,
   ): () => void
-  /** docs/plan/16b-ui-observation-and-clock.md Scope: fires with the decoded JSON of the *latest*
+  /** M16b Scope: fires with the decoded JSON of the *latest*
    * kind-1 (`Ui`) UI-ring record in a drain, at most once per per-rAF poll (Planning decisions:
    * "`Ui` is coalesced to the newest value per rAF; action results are never coalesced"), and
    * always before any `onActionResult` callback of that same drain (Provides: the delivery-order
    * rule "`onUi` then results", enforced natively by `game_instance::GameInstance::on_frame`,
-   * docs/plan/16b Deviations "Delivery order"). No record in a drain, no call. Returns an
+   * M16b Deviations "Delivery order"). No record in a drain, no call. Returns an
    * unsubscribe function. `Ui` is the game's own `G::Ui` TS type, supplied by the caller for full
    * typing, the same convention `onActionResult<Reject>` already uses; default `unknown` when
    * omitted. */
   onUi<Ui = unknown>(cb: (ui: Ui) => void): () => void
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams: fires with the persisted world's own
+  /** M23 Seams: fires with the persisted world's own
    * `StorageStatus` at load, after the `persist()` answer (Planning decision 5), and after each
    * hidden-boundary snapshot -- `host: { kind: 'local', persist: true }` only; never fires otherwise.
    * Returns an unsubscribe function, the same convention as `onActionResult`/`onUi`. */
   onStorage(cb: (status: StorageStatus) => void): () => void
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 2 (Seams: "a per-event subscription in the
+  /** M28b step 2 (Seams: "a per-event subscription in the
    * style of `client.onUi`; there is no `EngineEvent` union"): fires once, with no payload, the
    * instant this client's own linked connection detects a *second* `Welcome` on an already-`Online`
    * session (0013 Reconnect / 0005 Panic recovery: after a host restart, panic recovery, or an
@@ -329,7 +329,7 @@ export interface Client {
    * for a topology with no linked client worker (`host.kind !== 'local'`, or M29's net worker,
    * Non-scope here). Returns an unsubscribe function. */
   onResyncing(cb: () => void): () => void
-  /** docs/plan/37-robustness-events.md (0005 Panic recovery 4, Storage; 0014 §6): the world cannot
+  /** M37 (0005 Panic recovery 4, Storage; 0014 §6): the world cannot
    * continue under this build, and no recovery is left. Fires at most once, with the tick the
    * engine had reached and a readable message: a tick that panics again after recovery, a failed
    * `memory.grow`, a failed or lost storage write, the client instance trapping twice (or the sim
@@ -340,7 +340,7 @@ export interface Client {
    * per-event subscription in the style of `onUi`; returns an unsubscribe function. On a server the
    * same event reaches `HostServices.onFatal`. */
   onFatal(cb: (e: FatalEvent) => void): () => void
-  /** docs/plan/37-robustness-events.md (0013 "Per-chunk desync hashes", M31b): this client's replica
+  /** M37 (0013 "Per-chunk desync hashes", M31b): this client's replica
    * disagreed with the host's hash of a chunk, `Global` or its own player. Called once per report,
    * in order, right after the frame that carried the hash (the report ring's entry:
    * `{ tick, scope, cx, cy, hostHash, clientHash }`); the engine has already asked for the resync,
@@ -350,7 +350,7 @@ export interface Client {
    * host-side twin is a counter on the server's stats, not an event. A per-event subscription in
    * the style of `onUi`; returns an unsubscribe function. */
   onDesync(cb: (r: DesyncReport) => void): () => void
-  /** docs/plan/37b-device-loss.md (0018 §8): fires once when the renderer gave up recovering --
+  /** M37b (0018 §8): fires once when the renderer gave up recovering --
    * `'no-adapter'` (the rebuild found no adapter) or `'repeated-loss'` (a second device loss within
    * 10 s of the previous one, on the injected clock). The renderer then makes no further attempt;
    * sim, storage and link continue, so a reload loses nothing. A per-event subscription in the style
@@ -359,7 +359,7 @@ export interface Client {
   /** Raises `onRendererLost` listeners (called by `GpuHost`, `render/gpu-host.ts`, the only
    * caller). */
   raiseRendererLost(reason: RendererLostReason): void
-  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "Link events"): a per-event
+  /** M29 steps 1-2 (Scope: "Link events"): a per-event
    * subscription in the style of `onUi`/`onResyncing`, fired with this client's own multiplayer
    * link state (`connecting | online | reconnecting | updating | superseded | rejected`) --
    * `reason` is set only for `'rejected'` (`'BadKey' | 'Full'`; a version mismatch is handled by
@@ -368,7 +368,7 @@ export interface Client {
    * interactive on last-known state throughout. Never fires for a `{ kind: 'local' }` host (no net
    * worker). Returns an unsubscribe function. */
   onLink(cb: (e: { state: LinkState; reason?: LinkReason }) => void): () => void
-  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope): replaces the default
+  /** M29 steps 1-2 (Scope): replaces the default
    * build-hash-mismatch handler outright (0013 "Build-hash handshake": reload once, guarded by
    * `sessionStorage['engine.reloadedFrom']`; a mismatch that survives a reload of the same hash
    * goes `updating` and retries on 0013's own backoff schedule) -- one override, not a listener
@@ -377,7 +377,7 @@ export interface Client {
    * restores the default handler when called (a no-op if a later `onVersionMismatch` call already
    * replaced this one). Never fires for a `{ kind: 'local' }` host. */
   onVersionMismatch(cb: () => void): () => void
-  /** docs/plan/29-net-worker-and-reference-server.md Scope (`mp.html?linklog=1`): test/diagnostic
+  /** M29 Scope (`mp.html?linklog=1`): test/diagnostic
    * entrypoints, outside the zero-GC rule, kept directly on the public shape (like `ClientOptions.
    * test`) rather than the `clientTestHandle` `WeakMap` since a production-shaped page (not a
    * harness-driven one) is meant to read them. */
@@ -387,7 +387,7 @@ export interface Client {
      * for a `{ kind: 'local' }` host (no net worker, `onLink`'s own doc comment). */
     linkLog(): LinkLogEntry[]
   }
-  /** docs/plan/33c-drawables-on-real-pages.md Scope 1: the client's own single `DrawListSlot`
+  /** M33c Scope 1: the client's own single `DrawListSlot`
    * (`Client.pick.acquire()` is what advances it), public and read-only so `engine/render`'s
    * `attachClientDrawables` can build the drawables renderer over it without importing this file.
    * Chosen over an internal-only slot behind the `clientTestHandle` `WeakMap`: that would make
@@ -397,14 +397,14 @@ export interface Client {
   /** The `ClientOptions.assets` this client was created with (same object), so a renderer helper
    * reads the one asset config instead of a second, separately threaded copy. */
   readonly assets: ClientOptions['assets']
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: packs the running world's own
+  /** M23 step 5, Seams: packs the running world's own
    * key set (0005 Storage) into a gzip archive (`storage/archive.ts`) and resolves with it as a
    * `Blob`. Parks the sim worker, pauses it (snapshot-if-dirty, flush) only if it was not already
    * paused, packs, resumes it back to exactly the state it was in before (Planning decision 6;
    * Deviations "well-defined under an overlapping hidden-boundary pause"). Rejects with
    * `NotSinglePlayer` when there is no sim worker (`host.kind !== 'local'`). */
   exportWorld(): Promise<Blob>
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: writes `bytes` (a previously
+  /** M23 step 5, Seams: writes `bytes` (a previously
    * exported archive) under `opts.worldId` or the archive's own id. Refuses the running world's own
    * id and refuses an existing id without `opts.overwrite` (`WorldExistsError`, `storage/
    * archive.ts`). Never loads the imported world itself (Planning decision 6): the caller starts it
@@ -413,27 +413,27 @@ export interface Client {
     bytes: Blob | Uint8Array,
     opts?: { worldId?: string; overwrite?: boolean },
   ): Promise<{ worldId: string }>
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: deletes every key of `worldId`
+  /** M23 step 5, Seams: deletes every key of `worldId`
    * (`storage/archive.ts`'s `deleteWorld`). Refuses the running world's own id (Deviations: the same
    * safety rule Planning decision 6 gives `importWorld`, extended here since deleting a world's
    * storage out from under its own live `Persistence` is undefined). Rejects with `NotSinglePlayer`
    * when there is no sim worker. */
   deleteWorld(worldId: string): Promise<void>
-  /** docs/plan/16b-ui-observation-and-clock.md Scope: `client.clock()` exposes the clock block --
+  /** M16b Scope: `client.clock()` exposes the clock block --
    * `authoritative`/`predicted` tick counts (`predicted` equals `authoritative` until M26 gives
    * prediction a real lead, 0012) and the game's own `ticksPerSecond` -- refreshed from the clock
    * block on every call and returned as the *same* reused object (Planning decisions: "a fresh
    * object per call would put game-UI polling on the main isolate's budget"): read the fields, do
    * not keep the object past the next call. */
   clock(): ClockSnapshot
-  /** docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): `ClientCore::
+  /** M29 Scope ("Reveal gate"): `ClientCore::
    * revealed()`'s own value off the clock block (`CLOCK_FIELD.Revealed`, M28) -- true once every
    * chunk of the visible rectangle is both held by the replica and locally generated. A page's own
    * frame loop reads this to gate terrain drawing (`FrameLoopOptions.revealed`, `frame-loop.ts`)
    * so a join over a slow link never shows a half-populated view (0013); `client.ready` itself is
    * unchanged (Deviations, steps 1-2: `ready` never waits for a remote session to go live). */
   revealed(): boolean
-  /** docs/plan/09-renderer-terrain.md, Non-scope ("here the camera is set by `engine/test.
+  /** M09, Non-scope ("here the camera is set by `engine/test.
    * setCamera` or a fixed `CameraState`"): a plain mutable object, later milestones add members to
    * the public `Client` shape (this comment's own precedent) as production features need direct
    * access instead of the test-only `clientTestHandle`. Mutate its fields directly, then call
@@ -446,23 +446,23 @@ export interface Client {
    * concern. */
   readonly uploadRing: SharedArrayBuffer
   /** Writes the whole camera block from `cameraState`, bumps `CB_FRAME_REQ` and wakes the client
-   * worker (docs/plan/09-renderer-terrain.md Scope: `frame-loop.ts`'s "writeCameraBlock +
+   * worker (M09 Scope: `frame-loop.ts`'s "writeCameraBlock +
    * CB_FRAME_REQ + wake" phase calls this directly). Returns the new `CB_FRAME_REQ` value (`engine/
    * test`'s `stepFrame` uses it to spin on the worker's own ack; production code ignores it). */
   writeCameraAndWake(): number
   /** Sets bits of `mask` in the global `CB_FLAGS` word (`sab/control.ts`) without clearing any
-   * other bit already set there. docs/plan/09b-terrain-art-and-lifecycle.md Scope/Seams:
+   * other bit already set there. M09b Scope/Seams:
    * `frame-loop.ts`'s `resume()` calls this with `FLAG_REBASE` on a real return-from-background
    * ("on visible ... tell the client worker to re-base interpolation"); M30 is the one that clears
    * and consumes the flag, not this milestone. */
   setFlags(mask: number): void
-  /** docs/plan/11-camera-and-input.md Seams (Provides): `client.input.{on, setMode, suspend,
+  /** M11 Seams (Provides): `client.input.{on, setMode, suspend,
    * resume}` with 0019's signatures, plus `recognize(...)` (Deviations: this range's own addition,
    * the production-wiring seam a later range calls once per rAF -- mirroring `CameraIntegrator.
    * integrate`, from the same externally-owned `pointers`/`keys`/`wheel` bundle -- rather than a
    * pinned Seam name). */
   readonly input: SemanticRecognizer
-  /** docs/plan/18-picking-and-overlay.md Seams (Provides): `pick.acquire()` pulls the newest
+  /** M18 Seams (Provides): `pick.acquire()` pulls the newest
    * DrawList slot (called once per rAF by `frame-loop.ts`'s new `acquire` phase, or directly by a
    * page not built on `frame-loop.ts`); `pick.at(cssX, cssY)` is `input/pick.ts`'s internal
    * `pickAt`, the same function `input.{on, recognize}` uses to fill every event's own `pickId`.
@@ -474,7 +474,7 @@ export interface Client {
      * once the atlas has loaded); until then a sprite picks by its record's own (size 0) point. */
     setSpriteTable(table: Float32Array | undefined): void
   }
-  /** docs/plan/18-picking-and-overlay.md Seams (Provides): `overlay.anchor`/`overlay.anchorSlot`
+  /** M18 Seams (Provides): `overlay.anchor`/`overlay.anchorSlot`
    * (0019 §5's own signatures). `update()` is this cut's own addition (Deviations: not itself a
    * pinned Seam name, mirroring `camera.tick`/`input.recognize`'s own precedent) -- a page's
    * `onOverlay` hook (`frame-loop.ts`) calls it once per rAF. */
@@ -483,7 +483,7 @@ export interface Client {
     anchorSlot: Overlay['anchorSlot']
     update(): void
   }
-  /** docs/plan/11-camera-and-input.md Seams (Provides): `camera.{setConstraints, moveTo, read,
+  /** M11 Seams (Provides): `camera.{setConstraints, moveTo, read,
    * worldToScreen, screenToWorld}` with 0019's signatures, plus `camera.restored: boolean` and,
    * internal (Seams: "Internal"), `setViewClamp`/`setFollow`. `tick(dtMs)` is this range's own
    * addition (Deviations: not itself a pinned Seam name, mirroring `input.recognize`'s own
@@ -513,11 +513,11 @@ export class EngineStartError extends Error {
     | 'abi-mismatch'
     | 'arena-config'
     | 'worker-fatal'
-    /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams: a second tab (or any other running
+    /** M23 Seams: a second tab (or any other running
      * process) already holds the persisted world's own Web Lock (`world:<worldId>`) -- a start
      * failure, not a trap (`SimLifecycleMessage`'s `start-failed` variant carries it). */
     | 'world-busy'
-    /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5 (Deviations: an addition beyond the
+    /** M23 step 5 (Deviations: an addition beyond the
      * brief's own pinned Seams, needed for `export_works_after_load_failure`): `Persistence.open`
      * threw a `WorldLoadError` this milestone does not attempt to handle (Non-scope: the upgrade/
      * `SaveIncompatible` path is M24b's) -- the world cannot be played, but its sim worker stays
@@ -525,12 +525,12 @@ export class EngineStartError extends Error {
      * same, already-open OPFS handles afterward. Distinct from `'world-busy'`, whose worker really
      * does die (another process owns the lock, no handles to offer). */
     | 'load-failed'
-    /** docs/plan/24b-upgrade-and-migration.md: carved out of `'load-failed'` -- an identity/schema/
+    /** M24b: carved out of `'load-failed'` -- an identity/schema/
      * tick-rate/worldgen/chunk-size mismatch that ends in `SaveIncompatible` (0005 Upgrades: every
      * stored byte stays untouched). `detail` carries `{ reason, stored, running }`;
      * `exportWorld()`/`deleteWorld()` stay usable, same as `'load-failed'`. */
     | 'save-incompatible'
-  /** docs/plan/24b-upgrade-and-migration.md: structured detail for `'save-incompatible'` only --
+  /** M24b: structured detail for `'save-incompatible'` only --
    * every other code keeps using `.message` (a plain string) as before. */
   readonly detail?: { reason: IncompatReasonName; stored: IdentityJson; running: IdentityJson }
   constructor(
@@ -598,7 +598,7 @@ export function totalArenaBytes(
 }
 
 /** Throws `EngineStartError('arena-config', ...)` when the chosen topology's arenas sum past
- * `arenaBudgetBytes()`. Exported for `arena.sum_rule` (docs/plan/06b-workers-and-spawn.md, Tests
+ * `arenaBudgetBytes()`. Exported for `arena.sum_rule` (M06b, Tests
  * added): a pure check, callable without a DOM (`Worker`, `fetch`) or cross-origin isolation. */
 export function checkArenaBudget(
   arenas: { sim: number; client: number; gen: number },
@@ -616,7 +616,7 @@ export function checkArenaBudget(
   }
 }
 
-/** docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Seams: `client.exportWorld`/`importWorld`/
+/** M23 step 5, Seams: `client.exportWorld`/`importWorld`/
  * `deleteWorld`'s own shared rejection for "no sim worker" (`options.host.kind !== 'local'`, or a
  * local host whose sim worker never came up at all). */
 export class NotSinglePlayer extends Error {
@@ -642,20 +642,20 @@ export interface ClientTestHandle {
   readonly clock: Clock
   readonly scheduler: Scheduler
   readonly workers: WorkerEntry[]
-  /** docs/plan/11-camera-and-input.md, step 6 (Deviations): the *same* `PointerSlots`/`KeyState`/
+  /** M11, step 6 (Deviations): the *same* `PointerSlots`/`KeyState`/
    * `WheelState` the client's own real listeners write into and `camera.tick()` reads from --
    * exposed so a test/dev page can pair it with `engine/test.attachCameraInputTestHooks` (the
    * existing, pinned `injectPointer`/`injectWheel`/`injectKey` seam) instead of driving a second,
    * unrelated bundle no real listener or `camera.tick()` call ever reads. */
   readonly cameraBundle: CameraInput
   readonly cameraIntegrator: CameraIntegrator
-  /** docs/plan/18-picking-and-overlay.md: the client's own single `DrawListSlot`/`Picker`/`Overlay`
+  /** M18: the client's own single `DrawListSlot`/`Picker`/`Overlay`
    * -- full test access (`.scanned()`/`.styleWrites()`, `engine/test`'s own counters) beyond the
    * public `Client.pick`/`Client.overlay` surface. */
   readonly drawListSlot: DrawListSlot
   readonly picker: Picker
   readonly overlay: Overlay
-  /** docs/plan/16-action-round-trip.md Provides: `engine/test.dispatchRaw`'s own low-level
+  /** M16 Provides: `engine/test.dispatchRaw`'s own low-level
    * primitive -- writes one pre-encoded `[seq][len][jsonBytes]` record through `dispatch`'s own
    * `RingProducer` (never a second, independent one over the same `actionRing` SAB: an SPSC ring
    * has exactly one producer). Skips the seq-counter/session-state bookkeeping `dispatch` itself
@@ -663,7 +663,7 @@ export interface ClientTestHandle {
    * measured window (0016 §2). Returns `false` (nothing written) when the record cannot fit the
    * ring right now, the same "full" condition `dispatch` itself throws on. */
   writeActionRecord(seq: number, jsonBytes: Uint8Array): boolean
-  /** docs/plan/16-action-round-trip.md, gate-round fix: resolves once every spawned worker has
+  /** M16, gate-round fix: resolves once every spawned worker has
    * posted its own `{ type: 'ready' }` -- `ready`'s own earlier, `start()`-only phase, well before
    * `ready` itself (which, for a linked topology, also waits for `session_state = 1`). The one
    * thing safe to await before calling anything that blocks the main thread on a worker's own ack
@@ -672,7 +672,7 @@ export interface ClientTestHandle {
    * worker setup it is waiting for (measured: an 11.28 s spin ending exactly when every worker's
    * `engine_init ok` finally logged, immediately after the spin gave up and yielded the thread). */
   readonly workersReady: Promise<void>
-  /** docs/plan/33f (ADR 0042): resolves once the gen workers exist and have posted `ready`. For a
+  /** M33f (ADR 0042): resolves once the gen workers exist and have posted `ready`. For a
    * client whose world is known at start (a local host, `test.game`) that is `workersReady`'s own
    * moment; for a remote client without `test.game` it is after the first `Welcome` configured the
    * client and main spawned them. Never resolves if no `Welcome` arrives or the client is
@@ -684,13 +684,13 @@ export interface ClientTestHandle {
    * a test reads it once, after its own measured window, and compares against whatever it read
    * before that window. */
   uiDrainStats(): { recordsSeen: number; onUi: number }
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5 (Rules and traps, "serialize them"): one
+  /** M23 step 5 (Rules and traps, "serialize them"): one
    * FIFO lock shared by `attachHostLifecycle`'s own hidden/visible park+message calls and
    * `exportWorld`/`importWorld`/`deleteWorld`'s -- whichever acquires it first fully completes
    * (including whatever park/unpark it does around the host worker) before the other runs, so the
    * two families are never interleaved on the same worker. */
   hostWorkerLock<T>(fn: () => Promise<T>): Promise<T>
-  /** docs/plan/37-robustness-events.md step 2: how many times a dead sim worker has been replaced and
+  /** M37 step 2: how many times a dead sim worker has been replaced and
    * the new one reported `ready` (the client has been told to say `Hello` again at that point). */
   simRespawns(): number
   /** M37 fix: whether `onFatal` has fired (`raiseFatal` parked every worker on purpose). */
@@ -706,7 +706,7 @@ export function clientTestHandle(client: Client): ClientTestHandle {
 }
 
 /**
- * docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4, Scope: "Browser clean boundaries:
+ * M23 steps 3-4, Scope: "Browser clean boundaries:
  * `visibilitychange -> hidden` and `pagehide` -> `SimHost.pause()`; `visible -> resume()`" -- a
  * page-invoked wiring function, `frame-loop.ts`'s own `attachVisibilityHandling`/`input/focus.ts`'s
  * `installBlurAndVisibilityReset` precedent (an injectable `doc`, default the real `document`):
@@ -748,7 +748,7 @@ export function attachHostLifecycle(
     return h.workers.find((w) => w.index === WORKER_HOST)
   }
 
-  /** Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 1): `W_PARKED`
+  /** Gate fix (M23, "Open gate failures" 1): `W_PARKED`
    * reads `1` for two different reasons -- a worker that yielded from `W_YIELD` (a real park), *or*
    * one that is mid-`shell.runAsync` (an OPFS rename still queued from `worker/sim.ts`'s own
    * `pendingAsync()` poll, unrelated to this call). This poll cannot tell them apart, and does not
@@ -808,7 +808,7 @@ export function attachHostLifecycle(
         for (;;) {
           if (desiredHidden && state === 'running') {
             state = 'pausing'
-            // docs/plan/23-persistence-opfs-and-lifecycle.md step 5 (Rules and traps, "serialize
+            // M23 step 5 (Rules and traps, "serialize
             // them"): the same lock `exportWorld`/`importWorld`/`deleteWorld` use, so a request
             // racing this pause is always well-defined -- whichever gets here first (this pause, or
             // a world-op already queued ahead of it) finishes before the other starts.
@@ -848,7 +848,7 @@ export function attachHostLifecycle(
 /** 0008 §2: 1 worker by default, 2 when `hardwareConcurrency >= 8`. `requested` (`ClientOptions.
  * genWorkers`) overrides the default when given, clamped to `[1, MAX_GEN_WORKERS]` --
  * `createSabSet`'s own worst-case sizing (`sab/layout.ts`), which the whole-tab arena and SAB
- * budgets (0015 §5) already assume. A pure function (docs/plan/08b-gen-workers-and-queue.md,
+ * budgets (0015 §5) already assume. A pure function (M08b,
  * Seams) so `genWorkerCount rule` can drive it without `navigator`. */
 export function genWorkerCount(hardwareConcurrency: number, requested?: number): number {
   if (requested !== undefined) return Math.min(Math.max(requested, 1), MAX_GEN_WORKERS)
@@ -881,44 +881,44 @@ function setupWorker(
   test: TestFlags | undefined,
   link: boolean,
   world: { worldId: string; buildHash: string; params: ServerWorldConfig['params'] } | undefined,
-  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2: the `net`-kind spawn's own real
+  /** M29 steps 1-2: the `net`-kind spawn's own real
    * `wsConnection` dial target, present only for a `{ kind: 'remote' }` host. */
   net: { url: string; joinKey?: string } | undefined,
-  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2: `true` only for the `client`-kind
+  /** M29 steps 1-2: `true` only for the `client`-kind
    * spawn of a `{ kind: 'remote' }` host (`SetupMessage.remoteLinked`'s own doc comment). */
   remoteLinked: true | undefined,
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: forwards every `SimLifecycleMessage`
+  /** M23 steps 3-4: forwards every `SimLifecycleMessage`
    * this worker ever posts, for the life of the worker -- not only during this handshake window
    * (`storage` fires again after the `persist()` answer and after every hidden-boundary snapshot,
    * long after `ready`/`reject` have already settled this function's own promise). Only the `sim`
    * worker ever posts one; harmless to wire for every kind. */
   onLifecycle: (m: SimLifecycleMessage) => void,
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5: forwards every `SimWorldOpResult` this
+  /** M23 step 5: forwards every `SimWorldOpResult` this
    * worker ever posts, the same "not only during this handshake window" convention `onLifecycle`
    * already uses -- an export/import/delete request can arrive long after `ready`/`reject` settled
    * this function's own promise. Only the `sim` worker ever posts one. */
   onWorldOp: (m: SimWorldOpResult) => void,
-  /** docs/plan/28-sessions-and-reconnect.md step 5: forwards the one `client-welcome` message a
+  /** M28 step 5: forwards the one `client-welcome` message a
    * linked `client`-kind worker ever posts (`ClientLifecycleMessage`), same "not only during this
    * handshake window" convention as `onLifecycle`/`onWorldOp` -- `Welcome` can apply well after
    * `ready` settled (`ready` itself waits for it, for a linked topology, but this callback exists
    * so a redundant `if (settled) return` isn't needed here either). Only the `client` worker ever
    * posts one. */
   onWelcome: (m: ClientLifecycleMessage) => void,
-  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2: forwards every `{ type: 'link',
+  /** M29 steps 1-2: forwards every `{ type: 'link',
    * ... }` message a `net`-kind worker ever posts (`NetLinkMessage`, `worker/net.ts`'s own
    * `createLink` transitions), same "not only during this handshake window" convention as
    * `onLifecycle`/`onWorldOp`/`onWelcome` -- a real reconnect can happen years into a session, long
    * after `ready` settled. Only the `net` worker ever posts one. */
   onLink: (m: NetLinkMessage) => void,
-  /** docs/plan/33f: a `fatal` posted after `ready` settled whose message names a world mismatch
+  /** M33f: a `fatal` posted after `ready` settled whose message names a world mismatch
    * (`worker/client.ts`'s `onWorldMismatch`); every other late `fatal` stays ignored here. */
   onWorldMismatch: () => void,
-  /** docs/plan/37-robustness-events.md step 2: the worker ended after `ready` -- an `error` event, or
+  /** M37 step 2: the worker ended after `ready` -- an `error` event, or
    * a `fatal` message that is not a world mismatch. The sim worker is respawned, any other kind is
    * fatal (`client.ts`'s `onWorkerDeath`). */
   onDeath: (why: string) => void,
-  /** docs/plan/37-robustness-events.md step 2: this is the respawn of a dead sim worker. */
+  /** M37 step 2: this is the respawn of a dead sim worker. */
   respawn: boolean,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -1037,7 +1037,7 @@ function setupWorker(
 }
 
 /**
- * `readInvite(location)` (docs/plan/29-net-worker-and-reference-server.md Scope; M28's own Planning
+ * `readInvite(location)` (M29 Scope; M28's own Planning
  * decisions "the invite fragment is parsed as `#k=<joinKey>` with unknown parameters ignored, so
  * `&p=<secret>` can be added without breaking old links"): the URL fragment's own `k` parameter as
  * `ClientOptions.host.joinKey` (`{ kind: 'remote', joinKey? }`), or `{}` when the fragment carries
@@ -1053,7 +1053,7 @@ export function readInvite(location: { hash: string }): { joinKey?: string } {
 }
 
 /**
- * `wsUrl(location)` (docs/plan/29-net-worker-and-reference-server.md Scope): `ws(s)://<host>/ws`
+ * `wsUrl(location)` (M29 Scope): `ws(s)://<host>/ws`
  * -- `wss:` when the page itself is `https:` (a mixed-content browser refuses a plain `ws:` socket
  * dialled from an `https:` page), `ws:` otherwise; `<host>` is `location.host` verbatim (hostname
  * plus port, if any), so a page proxied onto its own origin (`pnpm device:serve --ws`, `preview.
@@ -1074,7 +1074,7 @@ export function createClient(options: ClientOptions): Client {
   // (`createSabSet`): on a page the browser never made cross-origin isolated, the global does not
   // exist at all, so `new SharedArrayBuffer(...)` throws a bare `ReferenceError` synchronously out
   // of `createClient` itself instead of the readable, awaitable `EngineStartError` `client.ready` is
-  // meant to reject with (0015 §3; docs/plan/06b-workers-and-spawn.md, Tests added
+  // meant to reject with (0015 §3; M06b, Tests added
   // `start.not_isolated_error`, Deviations).
   if (!globalThis.crossOriginIsolated) {
     const err = new EngineStartError(
@@ -1251,7 +1251,7 @@ export function createClient(options: ClientOptions): Client {
   // (`ResizeObserver`), never per frame -- `getBoundingClientRect()` allocates a `DOMRect`, and
   // `camera.tick()` runs on the strict per-rAF path this milestone's own zero-GC page proves
   // (`.claude/rules/hot-paths.md`; 0016 §2 exempts a real resize as a rare discontinuity). Moved
-  // above `input`/`picker` (docs/plan/18-picking-and-overlay.md): both need it too, and `input`'s
+  // above `input`/`picker` (M18: both need it too, and `input`'s
   // own `pick` argument needs a real `picker` in hand before it is constructed.
   const cameraViewport: CameraViewport = { widthPx: 1, heightPx: 1 }
   function refreshCameraViewport(): void {
@@ -1266,7 +1266,7 @@ export function createClient(options: ClientOptions): Client {
     cameraResizeObserver.observe(options.canvas)
   }
 
-  // docs/plan/18-picking-and-overlay.md, Order of work step 1: the client's own single
+  // M18, Order of work step 1: the client's own single
   // `DrawListSlot` (the only `TripleReader` over `sabs.drawList` for this client's whole life,
   // `render/drawlist-slot.ts`'s own doc comment) and the `Picker` built over it -- `input`'s own
   // `pick` argument below is this same instance, so `client.input.on('tap', ...)`'s own `pickId`
@@ -1285,7 +1285,7 @@ export function createClient(options: ClientOptions): Client {
   if (options.overlay !== undefined) overlayDeps.options = options.overlay
   const overlay: Overlay = createOverlay(overlayDeps)
 
-  // docs/plan/11-camera-and-input.md, step 6 (Deviations: "engine-owned camera", 0019 §1): the one
+  // M11, step 6 (Deviations: "engine-owned camera", 0019 §1): the one
   // real `PointerSlots`/`KeyState`/`WheelState` bundle this client's own real DOM listeners write
   // into and `camera.tick()`/`input.recognize` both read from every rAF. Built here (not per-page)
   // so `client.camera.{setConstraints, moveTo}` always affects the one camera actually driven by
@@ -1341,7 +1341,7 @@ export function createClient(options: ClientOptions): Client {
       cameraIntegrator.setFollow(x, y, valid)
     },
     tick(dtMs) {
-      // docs/plan/18-picking-and-overlay.md steps 4-6 (0019 §1): "the main thread centres on it in
+      // M18 steps 4-6 (0019 §1): "the main thread centres on it in
       // the frame that draws that DrawList" -- reads the *acquired* slot's own header (the `acquire`
       // phase already ran this rAF, `frame-loop.ts`'s `FRAME_PHASES`), so a target the Rust side set
       // this frame takes effect in this same `integrate()` call, not one rAF later.
@@ -1355,10 +1355,10 @@ export function createClient(options: ClientOptions): Client {
     },
   }
 
-  // docs/plan/16-action-round-trip.md, step 3: `dispatch`/`onActionResult`/the extended `ready`.
+  // M16, step 3: `dispatch`/`onActionResult`/the extended `ready`.
   // `linked` decides whether the client worker sets up its net pump at all (`start()` below's own
   // `link` field, computed once here so the two cannot drift) -- true for `local` only when
-  // `connect: true`, and always true for `remote` (docs/plan/29-net-worker-and-reference-server.md
+  // `connect: true`, and always true for `remote` (M29
   // steps 1-2, Scope: "the remote host option ... becomes real: multiplayer topology of 0015 §1, no
   // sim worker" -- there is no `connect` flag to opt out of for that `kind`).
   const linked =
@@ -1386,7 +1386,7 @@ export function createClient(options: ClientOptions): Client {
   // seven-slot scratch array, the first six in `CLOCK_FIELD`'s own order (a torn read -- every
   // retry raced the writer -- leaves it holding whatever the previous successful read saw: stale,
   // never garbage, always a real snapshot the writer actually published at some point). The
-  // seventh (docs/plan/26-prediction-rendering-and-clocks.md steps 4-6) is `tickFraction`'s own
+  // seventh (M26 steps 4-6) is `tickFraction`'s own
   // raw bits, sized only so `readClockBlockInto`'s own `.set()` has room -- `CLOCK_FIELD` has no
   // entry for it on purpose (`clock-block.ts`'s own doc comment): read it back through
   // `clockView.scratchFieldsFloatView()` after the same call, never through `clockScratch` itself.
@@ -1439,7 +1439,7 @@ export function createClient(options: ClientOptions): Client {
       fatalRejectSeqs.push(seq)
       return seq
     }
-    // docs/plan/23-persistence-opfs-and-lifecycle.md Planning decision 5: "or the first
+    // M23 Planning decision 5: "or the first
     // `client.dispatch`, whichever comes first" -- `tryPersist` itself no-ops outside a `persist:
     // true` local host (`persistWorldCreated` never becomes `true` there).
     persistGestureSeen = true
@@ -1509,7 +1509,7 @@ export function createClient(options: ClientOptions): Client {
   // `client_poll_ui` can ever produce, the same bound `uiScratch` itself already uses.
   const lastUiScratch = new Uint8Array(UI_POLL_BYTES)
 
-  // docs/plan/16b-ui-observation-and-clock.md Scope: "keep only the last kind-1 record ... call
+  // M16b Scope: "keep only the last kind-1 record ... call
   // onUi(ui) before any onActionResult of the same drain". A kind-1 record can land anywhere in
   // the byte stream relative to a kind-2 one (more than one `on_frame` call can land between two
   // drains), so every kind-2 record's own `{seq, result}` must be held until the whole drain has
@@ -1538,7 +1538,7 @@ export function createClient(options: ClientOptions): Client {
     }
   }
 
-  // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: `client.onStorage` (Seams), fired by
+  // M23 steps 3-4: `client.onStorage` (Seams), fired by
   // `setupWorker`'s own `onLifecycle` callback below whenever the sim worker posts a `storage`
   // `SimLifecycleMessage` -- at load, after the `persist()` answer, and after each hidden-boundary
   // snapshot (Planning decision 5). Never fires for a topology with no persisted sim worker.
@@ -1554,7 +1554,7 @@ export function createClient(options: ClientOptions): Client {
     }
   }
 
-  // docs/plan/28b-reconnect-and-lifecycle.md step 2: `client.onResyncing` (Seams: "a per-event
+  // M28b step 2: `client.onResyncing` (Seams: "a per-event
   // subscription in the style of `client.onUi`") -- fired by `onWelcome` below whenever the linked
   // client worker posts `client-resyncing` (a second `Welcome` on an already-`Online` connection).
   // There is no `EngineEvent` union (Scope): this is its own dedicated subscription, the same
@@ -1571,7 +1571,7 @@ export function createClient(options: ClientOptions): Client {
     }
   }
 
-  // docs/plan/37-robustness-events.md step 4: `client.onDesync`, fed by the client worker's
+  // M37 step 4: `client.onDesync`, fed by the client worker's
   // `client-desync` message (one per report of the instance's ring).
   const desyncListeners: Array<(r: DesyncReport) => void> = []
 
@@ -1583,7 +1583,7 @@ export function createClient(options: ClientOptions): Client {
     }
   }
 
-  // docs/plan/37b-device-loss.md: `client.onRendererLost`, raised by `GpuHost` (0018 §8).
+  // M37b: `client.onRendererLost`, raised by `GpuHost` (0018 §8).
   const rendererLostListeners: Array<(e: { reason: RendererLostReason }) => void> = []
 
   function onRendererLost(cb: (e: { reason: RendererLostReason }) => void): () => void {
@@ -1599,7 +1599,7 @@ export function createClient(options: ClientOptions): Client {
     for (const l of rendererLostListeners.slice()) l(e)
   }
 
-  // docs/plan/37-robustness-events.md step 3: `client.onFatal` and everything that ends the engine.
+  // M37 step 3: `client.onFatal` and everything that ends the engine.
   // Sources: the sim worker's own `sim-fatal` (`SimHost.onFatal`: a tick that panics again after
   // recovery, a failed `memory.grow`; `Storage.onError`), and, decided here on main, the loop guards
   // below and any worker other than the sim that ends after `ready`.
@@ -1722,7 +1722,7 @@ export function createClient(options: ClientOptions): Client {
     return left.length > 0 ? { ...rest, killSimWorkerAtTick: left } : rest
   }
 
-  // docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "Link events"): `client.
+  // M29 steps 1-2 (Scope: "Link events"): `client.
   // onLink` -- a per-event subscription in the style of `onUi`/`onResyncing`, the public six-value
   // state this milestone's own net worker traffic (`NetLinkMessage`, `net/link.ts`'s own
   // `DownReason`) is translated into here on main, since only main knows the two things the net
@@ -1751,7 +1751,7 @@ export function createClient(options: ClientOptions): Client {
     for (const l of linkListeners) l(e)
   }
 
-  // docs/plan/29-net-worker-and-reference-server.md Scope (`mp.html?linklog=1`): `client.debug.
+  // M29 Scope (`mp.html?linklog=1`): `client.debug.
   // linkLog()`'s own backing store, newest first, capped (`LINK_LOG_CAPACITY`) so a long-running
   // dev session or a flapping connection during a device check never grows this unboundedly. Not a
   // hot path (0013 events are human-timescale, at most a few per minute even on a bad connection):
@@ -1776,7 +1776,7 @@ export function createClient(options: ClientOptions): Client {
     if (linkLogEntries.length > LINK_LOG_CAPACITY) linkLogEntries.length = LINK_LOG_CAPACITY
   }
 
-  // docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "the default handler reloads
+  // M29 steps 1-2 (Scope: "the default handler reloads
   // once, guarded by `sessionStorage['engine.reloadedFrom'] = <own build hash>`; if the reloaded
   // bundle has the same hash, state `updating` and `link.retry()` on the backoff schedule").
   // `client.onVersionMismatch(cb)` replaces this default outright (Scope), the same "one override,
@@ -1820,7 +1820,7 @@ export function createClient(options: ClientOptions): Client {
     scheduleVersionMismatchRetry()
   }
   const VERSION_MISMATCH_BACKOFF_MS = [0, 500, 1000, 2000, 5000]
-  // docs/plan/30c-ci-reds-after-m30.md (red C): one retry at a time, each scheduled by the
+  // M30c (red C): one retry at a time, each scheduled by the
   // rejection of the one before. The retry used to reschedule itself unconditionally, and every
   // rejection started another such chain at step 0 -- harmless only while a retry never actually
   // said `Hello` (it did not, `worker/client-net.ts`), and the missing backpressure M29's fix round
@@ -1842,7 +1842,7 @@ export function createClient(options: ClientOptions): Client {
     }, delay)
   }
 
-  // docs/plan/29-net-worker-and-reference-server.md steps 1-2: `session_state` polling off the
+  // M29 steps 1-2: `session_state` polling off the
   // clock block (the same `readClockBlockInto`/`clockScratch` `dispatch`/`waitForLive` already use)
   // -- the one thing that turns a net-level `up` into the public `online` state, since the net
   // worker itself never parses a message and so cannot know whether a session actually went live.
@@ -1920,7 +1920,7 @@ export function createClient(options: ClientOptions): Client {
     }, RECONNECT_INDICATOR_DELAY_MS)
   }
 
-  // docs/plan/23-persistence-opfs-and-lifecycle.md Planning decision 5: `navigator.storage.persist()`
+  // M23 Planning decision 5: `navigator.storage.persist()`
   // called exactly once, from the first engine-observed `pointerdown`/`keydown` or the first
   // `client.dispatch`, whichever comes first -- and only when `Persistence.open` reported `created`
   // (a reopened world never calls it). `persistWorldCreated` is `undefined` until the sim worker's
@@ -1946,10 +1946,10 @@ export function createClient(options: ClientOptions): Client {
     }
   }
 
-  // docs/plan/28-sessions-and-reconnect.md step 5: the linked client worker's own one-off
+  // M28 step 5: the linked client worker's own one-off
   // `client-welcome` message (`worker/client-net.ts`'s `NetPumpHandshake.onAttached`) -- only main
   // can call `cameraIntegrator.setViewClamp` (0019 §1), so this is the one place `Welcome`'s own
-  // view clamps actually reach the camera. docs/plan/28b-reconnect-and-lifecycle.md step 2:
+  // view clamps actually reach the camera. M28b step 2:
   // `client-resyncing` (a *second* `Welcome`, posted instead of `client-welcome`) has no view
   // clamps to forward -- it fans out to `onResyncing`'s own listeners instead.
   function onWelcome(m: ClientLifecycleMessage): void {
@@ -1972,7 +1972,7 @@ export function createClient(options: ClientOptions): Client {
     cameraIntegrator.setViewClamp(m.viewMaxTilesPerAxis)
   }
 
-  // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: `exportWorld`/`importWorld`/`deleteWorld`
+  // M23 step 5: `exportWorld`/`importWorld`/`deleteWorld`
   // (Seams), plus the shared lock `attachHostLifecycle` also uses (Rules and traps, "serialize
   // them"). `hostOpChain` is the lock's own FIFO promise chain; `.catch(() => {})` on the *stored*
   // chain keeps it alive after a rejected job without ever swallowing that job's own caller-visible
@@ -2099,7 +2099,7 @@ export function createClient(options: ClientOptions): Client {
     persistGestureDisposers.push(() => window.removeEventListener('keydown', onGesture))
   }
 
-  // docs/plan/29-net-worker-and-reference-server.md Scope: "main -> net `{ type: 'probe' }` on
+  // M29 Scope: "main -> net `{ type: 'probe' }` on
   // `visibilitychange -> visible` and `online`". Installed unconditionally for a remote host
   // (unlike `attachHostLifecycle`'s own opt-in persistence wiring, this is core 0013 reconnect
   // behaviour, not a feature a page chooses to wire in) -- `document`'s own `visibilitychange`
@@ -2189,7 +2189,7 @@ export function createClient(options: ClientOptions): Client {
     }
   }
 
-  // docs/plan/16b-ui-observation-and-clock.md Scope: "`client.clock()` returns a reused object
+  // M16b Scope: "`client.clock()` returns a reused object
   // `{ authoritative, predicted, ticksPerSecond }` refreshed from the clock block on call (no
   // allocation per call)". Reuses `clockScratch` (above): `dispatch`/`waitForLive`'s own reads and
   // this one never run inside the same call, so sharing the one scratch array costs nothing.
@@ -2208,14 +2208,14 @@ export function createClient(options: ClientOptions): Client {
     clockSnapshot.authoritative = at(clockScratch, CLOCK_FIELD.AuthoritativeTick)
     clockSnapshot.predicted = at(clockScratch, CLOCK_FIELD.PredictedTick)
     clockSnapshot.ticksPerSecond = at(clockScratch, CLOCK_FIELD.TicksPerSecond)
-    // docs/plan/26-prediction-rendering-and-clocks.md steps 4-6: the one field `CLOCK_FIELD` has
+    // M26 steps 4-6: the one field `CLOCK_FIELD` has
     // no plain-`u32` entry for (`clock-block.ts`'s own doc comment) -- read back through the same
     // reinterpreting view `readClockBlockInto` just refreshed, not through `clockScratch`.
     clockSnapshot.tickFraction = at(clockView.scratchFieldsFloatView(), 0)
     return clockSnapshot
   }
 
-  // docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): a plain boolean read,
+  // M29 Scope ("Reveal gate"): a plain boolean read,
   // no reused-object concern (`ClockSnapshot`'s own doc comment) since there is nothing to keep
   // past the call either way. Shares `clockScratch`/`clockView` with `dispatch`/`waitForLive`/
   // `readClockSnapshot` above -- none of these ever run inside the same call, so one scratch array
@@ -2261,7 +2261,7 @@ export function createClient(options: ClientOptions): Client {
     scheduler.cancelFrame(resultsFrameHandle)
   }
 
-  /** docs/plan/09-renderer-terrain.md Scope: "writeCameraBlock + CB_FRAME_REQ + wake" as one
+  /** M09 Scope: "writeCameraBlock + CB_FRAME_REQ + wake" as one
    * seam (`Client.writeCameraAndWake`, Deviations). No spin/wait here (production never blocks
    * main, 0015 §2): `engine/test`'s `stepFrame` is the one that spins on the returned value. */
   function writeCameraAndWake(): number {
@@ -2271,7 +2271,7 @@ export function createClient(options: ClientOptions): Client {
     return req
   }
 
-  /** docs/plan/09b-terrain-art-and-lifecycle.md Scope: "set `CB_FLAGS.REBASE`". `Atomics.or`, not a
+  /** M09b Scope: "set `CB_FLAGS.REBASE`". `Atomics.or`, not a
    * load-then-store: another flag bit set by something else between the load and the store would
    * otherwise be clobbered. */
   function setFlags(mask: number): void {
@@ -2291,7 +2291,7 @@ export function createClient(options: ClientOptions): Client {
     resolveGenUp = resolve
   })
 
-  /** docs/plan/33f: spawns the gen workers of a remote client, once, from the JSON the client
+  /** M33f: spawns the gen workers of a remote client, once, from the JSON the client
    * worker posted on the `Welcome` that configured it. A reconnect's `Welcome` never posts one
    * (the configured word is 0), and `genSpawned` makes a duplicate harmless anyway. A `Welcome`
    * that lands after `destroy()` spawns nothing. */
@@ -2344,7 +2344,7 @@ export function createClient(options: ClientOptions): Client {
         ? { ...options.host.world, buildHash: options.wasm.buildHash }
         : undefined
 
-    // docs/plan/37-robustness-events.md (the M34b seam): a persisted local world's *main thread*
+    // M37 (the M34b seam): a persisted local world's *main thread*
     // holds `world-owner:<id>` for as long as this client lives. The sim worker's own `world:<id>` is
     // released only when the worker is gone, which after a reload can take about 2 s (a worker in
     // `Atomics.wait`); a main thread's lock goes with its document. So a lock held by a live second
@@ -2383,14 +2383,14 @@ export function createClient(options: ClientOptions): Client {
       (worldConfig
         ? { seed: seedToHexU64(worldConfig.params.seed), params: worldConfig.params.worldgen }
         : null)
-    // docs/plan/28-sessions-and-reconnect.md step 5 (Scope: "single-player takes the same path ...
+    // M28 step 5 (Scope: "single-player takes the same path ...
     // the client worker config carries `{ secret, joinKey: \"\", buildHash }`"): only when linked
     // (a real Hello/Welcome round trip happens) and only when `options.test.game` did not already
     // win outright (the same escape hatch `simGame`/`game` above defer to). `loadOrMintSecret` is
     // browser-only (`localStorage`), called exactly once per `createClient()`, here -- not inside
     // the worker, which has no `localStorage` of its own to be the one accessor of (Planning
     // decisions "the secret has one accessor").
-    // docs/plan/29-net-worker-and-reference-server.md steps 3-4 (real bug, found and fixed here):
+    // M29 steps 3-4 (real bug, found and fixed here):
     // `joinKey` used to read only `worldConfig?.joinKey` -- but `worldConfig` (above) is `undefined`
     // for a `{ kind: 'remote' }` host by construction, so a remote client's own `Hello` always sent
     // `''` regardless of `ClientOptions.host.joinKey`, silently failing every non-empty-join-key
@@ -2405,7 +2405,7 @@ export function createClient(options: ClientOptions): Client {
       (linked && (game !== null || !netNoDial)
         ? {
             // A remote client with no `test.game` has no `game` here: its config carries neither
-            // `seed` nor `params` and it starts unconfigured until `Welcome` (docs/plan/33f).
+            // `seed` nor `params` and it starts unconfigured until `Welcome` (M33f.
             ...(game ?? {}),
             secret: hexEncode(loadOrMintSecret()),
             joinKey:
@@ -2416,7 +2416,7 @@ export function createClient(options: ClientOptions): Client {
           }
         : game)
 
-    // docs/plan/33f (ADR 0042): a remote client with no `test.game` knows no world yet, so it
+    // M33f (ADR 0042): a remote client with no `test.game` knows no world yet, so it
     // spawns no gen workers here (they would fail `engine_init` with `BadConfig`); `spawnGenLate`
     // spawns them, once, from the config the client worker reports after the first `Welcome`.
     const lateGen = options.host.kind === 'remote' && options.test?.game === undefined && !netNoDial
@@ -2459,7 +2459,7 @@ export function createClient(options: ClientOptions): Client {
         wasm.url = options.wasm.url
       }
       const link = linked && (kind === 'sim' || kind === 'client')
-      // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: the sim spawn only, only when
+      // M23 steps 3-4: the sim spawn only, only when
       // `host.persist` is set -- `worldConfig` already carries `worldId`/`buildHash`/`params`
       // (`Persistence.open`'s own `WorldConfig` needs no more than these three).
       const world =
@@ -2471,7 +2471,7 @@ export function createClient(options: ClientOptions): Client {
               lockWaitMs: worldLockWaitMs,
             }
           : undefined
-      // docs/plan/29-net-worker-and-reference-server.md steps 1-2: the `net`-kind spawn's own real
+      // M29 steps 1-2: the `net`-kind spawn's own real
       // dial target, present only for a `{ kind: 'remote' }` host. `remoteLinked` (the `client`-kind
       // spawn only) is what gates `worker/client-net.ts`'s handshake pump on `CB_LINK_STATE`.
       const net =
@@ -2508,7 +2508,7 @@ export function createClient(options: ClientOptions): Client {
   }
 
   // Captured separately from `ready` itself (below), and exposed on `ClientTestHandle` as
-  // `workersReady` (docs/plan/16-action-round-trip.md, gate-round fix): the moment every spawned
+  // `workersReady` (M16, gate-round fix): the moment every spawned
   // worker has actually posted its own `{ type: 'ready' }` handshake -- distinct from `ready`'s
   // own, later "session live" meaning, and the one thing a test page needs before it is safe to
   // call anything that blocks the main thread waiting on a worker's own ack (`stepSimTickSync`;

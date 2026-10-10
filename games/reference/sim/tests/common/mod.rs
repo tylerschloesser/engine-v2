@@ -1,4 +1,4 @@
-//! Shared native test support (docs/plan/20-reference-game-v0.md Provides: "native test helper
+//! Shared native test support (M20 Provides: "native test helper
 //! `sim/tests/common/mod.rs::RefScenario`"). `#![allow(dead_code)]`: each `tests/*.rs` file is its
 //! own binary that includes this module whole, so a helper only some of them call (e.g. `landmarks_
 //! fixture.rs` uses neither `RefScenario` nor most of its methods) would otherwise warn -- and

@@ -1,4 +1,4 @@
-// CDP session plumbing behind one interface, two implementations (docs/plan/04-zero-gc-harness.md,
+// CDP session plumbing behind one interface, two implementations (M04,
 // Planning decisions "CDP transport: both, behind one interface"; 0024 §12). `tunnel` (this file) is
 // the default: Playwright's own `CDPSession` for the page (`main`) plus the deprecated but proven
 // `Target.sendMessageToTarget` tunnel for every auto-attached worker (0016 §3 step 2, ~970 spike

@@ -1,4 +1,4 @@
-// docs/plan/22b-persistence-load-and-fs.md, Order of work step 5: `replayWorld`/`runHeavy`
+// M22b, Order of work step 5: `replayWorld`/`runHeavy`
 // (`engine/test`). Two cases per the delegation's own instruction:
 //
 // 1. `replay_world_checkpoints_node`/`heavy_wasm_*`: M22's own checked-in log
@@ -104,7 +104,7 @@ async function wrapFixtureLogStorage(): Promise<ReturnType<typeof memoryStorage>
     v: 1,
     worldId: CFG.worldId,
     epoch: 0,
-    // docs/plan/24b-upgrade-and-migration.md: `ManifestV1.params` now carries `chunkBits` (`fx-
+    // M24b: `ManifestV1.params` now carries `chunkBits` (`fx-
     // persist` never overrides `Game::CHUNK_BITS`, so its trait default, 5, is exact here).
     params: { ...CFG.params, chunkBits: 5 },
     created: dummyIdentity,
@@ -210,7 +210,7 @@ describe('replayWorld / runHeavy (fx-persist)', () => {
   })
 
   test('replay_world_detects_a_segment_boundary_hash_mismatch', async () => {
-    // Planning decisions 5 of docs/plan/22-persistence-log-and-snapshots.md: "the state hash equals
+    // Planning decisions 5 of M22: "the state hash equals
     // the base snapshot's `state_hash`" at every segment boundary. Tampers with segment 1's own
     // base snapshot (still CRC-valid, still the right identity -- just a *different* real snapshot,
     // a pristine genesis one) so the byte-level restore succeeds but the state it describes does

@@ -1,8 +1,8 @@
-// `counters-exact` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Tests added): bytes per
+// `counters-exact` (M27, Tests added): bytes per
 // client per tick, exact, for a fixed seed -- pinned as literals (Constraints: "never computed from
 // the code under test"). Seeds the bandwidth rows M31 asserts.
 //
-// docs/plan/28-sessions-and-reconnect.md, re-measured at M28's gate: the connection opens with
+// M28, re-measured at M28's gate: the connection opens with
 // `Hello` (up, tick 1) and `Welcome` plus the first `Frame` (down, tick 2). `Hello.camera` is a
 // zeroed "no camera yet" report that the host ignores (`ConnSlot.camera` stays `None`), so nothing
 // is subscribed until this test's own `setCamera` reaches the host (up, tick 3); the subscription's

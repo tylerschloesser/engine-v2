@@ -1,4 +1,4 @@
-// `pnpm device:walk --auto` and `--wait` as another session uses them (docs/plan/39f-device-auto-runner.md
+// `pnpm device:walk --auto` and `--wait` as another session uses them (M39f
 // step 13, "Tracker integration"): the real command line is started as a child process (loopback, no tunnel,
 // the fixture build the `pages` step made), `--status --json` is polled for the join URL, a fake phone scans
 // it, a `--wait` child blocks until the round is done, and the apply of the result is dry-run on a scratch

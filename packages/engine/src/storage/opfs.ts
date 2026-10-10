@@ -1,5 +1,5 @@
 // The OPFS `Storage` adapter (docs/decisions/0005-persistence-and-recovery.md Storage table:
-// "Browser OPFS" row; docs/plan/23-persistence-opfs-and-lifecycle.md steps 1-2). Runs inside the
+// "Browser OPFS" row; M23 steps 1-2). Runs inside the
 // sim worker only (0015 §1 "sim worker": "OPFS handles and the Web Lock"), opened through
 // `shell.runAsync` (Seams: "internal to the worker kind `sim`").
 //
@@ -95,7 +95,7 @@ class OpfsStorageAdapter implements OpfsStorage {
    * directly, on the slow path): `read()`/`list()` consult this first, so a caller sees its own
    * write immediately regardless of which path handled it or whether the rename has landed yet. */
   readonly #writtenPending = new Map<string, Uint8Array>()
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 6, fix round 1 (coordinator): `#resolveDir`
+  /** M23 step 6, fix round 1 (coordinator): `#resolveDir`
    * used to re-split `path` and re-walk `getDirectoryHandle` on every call, even though every caller
    * here passes one of a small, fixed set of directory paths for this adapter's whole life
    * (`worlds/<id>`, `worlds/<id>/log`, `worlds/<id>/snap`, `worlds/<id>/sessions`) -- a directory,
@@ -110,7 +110,7 @@ class OpfsStorageAdapter implements OpfsStorage {
   readonly #dirCache = new Map<string, FileSystemDirectoryHandle>()
   #scratch: Scratch | null = null
   #pendingAsync: (() => Promise<void>) | null = null
-  /** Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 1): whether the
+  /** Gate fix (M23, "Open gate failures" 1): whether the
    * one queued continuation (`#pendingAsync`'s own closure, built by `#queueRename`) is *currently
    * running* -- from the moment it starts (set as its own first statement, by itself, not by
    * `pendingAsync()`) until its own `finally` block has fully finished, scratch reopen included.
@@ -330,7 +330,7 @@ class OpfsStorageAdapter implements OpfsStorage {
     // queued has already been taken *and* has already fully settled by the time that reopen ran).
     const previous = this.#pendingAsync
     this.#pendingAsync = async () => {
-      // Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 1): set as this
+      // Gate fix (M23, "Open gate failures" 1): set as this
       // closure's own first statement, by itself -- not by `pendingAsync()`, whichever caller ends up
       // invoking it (`shell.runAsync`, or `flush()` directly). Cleared only after the `finally` below
       // has fully finished (scratch reopen included), so `flush()`'s own poll (below) cannot observe

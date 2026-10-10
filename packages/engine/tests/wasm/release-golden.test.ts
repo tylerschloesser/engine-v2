@@ -1,4 +1,4 @@
-// `release-golden @slow` (docs/plan/36-slow-tier-and-benchmarks.md; docs/decisions/0017 §9): every
+// `release-golden @slow` (M36; docs/decisions/0017 §9): every
 // golden log and scenario, replayed on the plain `release` module of its crate (no `wasm-opt`, no
 // `+simd128`: M36b's), against the checked-in hashes the dev module also meets. Node here; the same
 // replay under Bun is `release-golden-bun.mjs`, spawned once the four release builds exist.

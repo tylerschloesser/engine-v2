@@ -1,5 +1,5 @@
 //! `CameraBlock`: the client role's read side of the camera block (docs/decisions/0019-camera-
-//! input-and-overlay.md §1; docs/plan/06b-workers-and-spawn.md, Scope and Planning decisions
+//! input-and-overlay.md §1; M06b, Scope and Planning decisions
 //! "Worker frame clock"). Byte-for-byte the same 80 bytes `packages/engine/src/camera/block.ts`
 //! defines (`CAM_OFF_*`): the TS side writes and copies the block's live bytes whole into this
 //! role's `Camera` region (0014 §4's copy-in rule, a plain `set()`, never field-by-field), so this
@@ -22,7 +22,7 @@ pub struct CameraBlock {
     pub dpr: f32,
     _reserved0: u32,
     pub cursor_tile: [i32; 2],
-    /// M17 (docs/plan/17-drawlist-and-sprites.md, steps 4-6 Deviations "`px_per_tile()` wired for
+    /// M17 ( steps 4-6 Deviations "`px_per_tile()` wired for
     /// real"): the real device-pixel viewport size (`render/viewport.ts`'s own `renderer.viewport.
     /// widthPx/heightPx`, post render-scale), written by `frame-loop.ts`'s `tick()` every rAF, right
     /// after `applyPending()` refreshes the renderer's viewport and before `writeCameraAndWake()`.
@@ -51,7 +51,7 @@ impl CameraBlock {
         Some(ptr.cast())
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md, Planning decisions "The camera
+    /// M15b, Planning decisions "The camera
     /// report is built in Rust from the camera-block copy, not in TS": quantises this frame's
     /// camera state into the 0010 wire shape `ClientCore::set_camera` takes. Tile-unit `f64`
     /// centre and `f32` half-extent/velocity round to the nearest integer (`f64`/`f32::round`,
@@ -72,7 +72,7 @@ impl CameraBlock {
     }
 }
 
-/// Test-only constructor (`docs/plan/08b-gen-workers-and-queue.md`, `TerrainFeed` tests): every
+/// Test-only constructor (`M08b`, `TerrainFeed` tests): every
 /// reserved field zero, every other field as given. Gated behind `test`/`testing` so it never
 /// exists in a release build; private fields make a struct literal impossible from a sibling
 /// module (`client/terrain_feed.rs`), so this lives here.

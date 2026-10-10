@@ -1,4 +1,4 @@
-// Test-only worker for `triple.test.ts`'s `triple.newest_wins_never_partial` (docs/plan/06-sab-
+// Test-only worker for `triple.test.ts`'s `triple.newest_wins_never_partial` (M06
 // primitives-and-workers.md, Planning decisions "Triple-buffer state word"): a writer on a real
 // Node `worker_threads` thread, publishing frames each stamped with one monotonically increasing
 // value across header and body, so the reader can check every acquired frame is internally

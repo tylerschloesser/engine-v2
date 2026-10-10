@@ -1,5 +1,5 @@
 //! Per-system active lists (docs/decisions/0007-world-model.md §7: "per-system active lists in
-//! deterministic (insertion) order"; docs/plan/21b-timers-wakeups-and-tickcx.md Scope "Active
+//! deterministic (insertion) order"; M21b Scope "Active
 //! lists"). `activate`/`deactivate` are idempotent; a removal during the current tick's iteration
 //! is a tombstone (the slot becomes `None`, `active_len` unchanged) so indices already handed out
 //! this tick stay valid, and compaction (physically dropping tombstones, closing the gaps) happens
@@ -44,7 +44,7 @@ impl ActiveList {
     }
 
     /// Truly active right now: present and not a pending (uncompacted) tombstone. The undo
-    /// journal's own pre-image capture (docs/plan/21b-timers-wakeups-and-tickcx.md fix round 1).
+    /// journal's own pre-image capture (M21b fix round 1).
     fn is_active(&self, id: EntityId) -> bool {
         self.index_of
             .get(&id)
@@ -60,7 +60,7 @@ impl ActiveList {
     }
 
     /// Physically drops every tombstone, closing gaps while preserving the relative insertion
-    /// order of the survivors (docs/plan/21b-timers-wakeups-and-tickcx.md Scope: "tombstone then
+    /// order of the survivors (M21b Scope: "tombstone then
     /// compact").
     fn compact(&mut self) {
         if self.items.iter().all(Option::is_some) {
@@ -157,7 +157,7 @@ impl ActiveLists {
 
     /// Every system `id` is truly active in right now, as a bitmask (bit `i` = system `i`) --
     /// `SystemId::MAX` is 16, so this always fits a `u16` with room to spare. The undo journal's own
-    /// pre-image capture (docs/plan/21b-timers-wakeups-and-tickcx.md fix round 1): `Store::apply`'s
+    /// pre-image capture (M21b fix round 1): `Store::apply`'s
     /// `EntityGone` arm deactivates every system unconditionally, so a rolled-back despawn has to
     /// know which ones to restore.
     pub(crate) fn active_mask(&self, id: EntityId) -> u16 {
@@ -184,7 +184,7 @@ impl ActiveLists {
     }
 
     /// `Store::write_canonical`/`hash_state`: system order, then each system's own insertion order
-    /// (docs/plan/21b-timers-wakeups-and-tickcx.md Scope). Called only between ticks (after
+    /// (M21b Scope). Called only between ticks (after
     /// `Authority::begin_tick`'s own compaction), so no tombstone is ever observed here in practice --
     /// `ActiveList::write_canonical` still encodes the tag byte defensively, so a mid-tick call
     /// (native tests only) round-trips exactly rather than silently dropping data.

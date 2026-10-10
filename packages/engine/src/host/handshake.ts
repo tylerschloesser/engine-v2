@@ -1,5 +1,5 @@
 // The host-side handshake (docs/decisions/0013-sessions-and-integrity.md "Handshake";
-// docs/plan/28-sessions-and-reconnect.md steps 1-2): `Hello`/`Welcome`/`Reject` framing constants,
+// M28 steps 1-2): `Hello`/`Welcome`/`Reject` framing constants,
 // the `Reject` builder (must not depend on a live instance -- Scope), and `CloseCode`, the only
 // signal a non-parsing net worker acts on (Seams).
 //
@@ -103,7 +103,7 @@ export function buildBye(reason: ByeReason): Uint8Array {
   return new Uint8Array([MSG_TYPE_BYE, reason])
 }
 
-/** docs/plan/28b-reconnect-and-lifecycle.md step 4: the host-side counterpart of `buildBye` --
+/** M28b step 4: the host-side counterpart of `buildBye` --
  * peeks a settled connection's own inbound message for `MsgType::Bye` (the one byte every message
  * opens with, same "close code, not the message body" spirit `CloseCode`'s own doc comment names)
  * before falling back to `sim_admit`. `null` for anything that is not a well-formed `Bye`: an
@@ -282,7 +282,7 @@ function encodeVarint(value: number): Uint8Array {
  * hello_tail`. Pure: the caller (`SimHost.accept`'s own handshake driver) already resolved
  * `playerId`/`joined`/`presence` from the session table and `sim_has_player` before calling this.
  *
- * `suppressConnected` (docs/plan/28b-reconnect-and-lifecycle.md step 4): `true` when this attach
+ * `suppressConnected` (M28b step 4): `true` when this attach
  * is a reconnect for a player whose own grace timer is still pending (`host/lifecycle.ts`'s
  * `isWithinGrace`) -- 0013 "a Hello with the same secret inside the grace logs nothing" (the log's
  * own bytes converge with a run that never dropped at all): `Host::attach` skips its own

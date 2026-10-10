@@ -1,5 +1,5 @@
 // `engine/server/bun`: the Bun adapter (docs/decisions/0009 §"Node"/"Targets", 0017 §2;
-// docs/plan/35b-bun-and-deno-adapters.md). It has the names of `server-node.ts`, `bunHandlers`
+// M35b. It has the names of `server-node.ts`, `bunHandlers`
 // taking the place of `attachWebSocketServer`: the game calls `Bun.serve({ port, ...bunHandlers(
 // server) })` itself (port, TLS and routing stay with the deployer, 0009 Consequences), and this
 // file only upgrades and turns each socket into a `Connection`. `loadGame` and `fsStorage` are the

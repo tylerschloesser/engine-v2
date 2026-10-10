@@ -1,4 +1,4 @@
-// M34d (docs/plan/34d-straddling-entity-chunk-versions.md): a reference furnace whose 2x2 footprint
+// M34d ( a reference furnace whose 2x2 footprint
 // straddles a chunk boundary (origin (-4, -1): rows -1 and 0 are chunks cy -1 and 0) converges
 // after `settle()`. Before the fix the replica bumped only the anchor chunk's version, so its
 // region hash differed from the host's (M34b Deviations, finding 1).

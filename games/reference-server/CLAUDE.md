@@ -1,6 +1,6 @@
 # games/reference-server
 
-A deployable, game-agnostic multiplayer server (docs/plan/29-net-worker-and-reference-server.md):
+A deployable, game-agnostic multiplayer server (M29:
 `ws` + `engine/server/node`'s Node adapter (`nodeHostServices`, `fsStorage`, `loadGame`,
 `attachWebSocketServer`), `createWorldServer`/`importWorld` (`engine/server`). Testable against any
 built game: a fixture, or the reference game (multiplayer since M34).

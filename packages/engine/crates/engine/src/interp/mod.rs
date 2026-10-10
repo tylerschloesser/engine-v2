@@ -1,4 +1,4 @@
-//! Remote-motion interpolation (docs/plan/30-interpolation.md; 0012 "Remote motion:
+//! Remote-motion interpolation (M30; 0012 "Remote motion:
 //! interpolation, not prediction"; 0010 Rates "Interpolation delay"): [`InterpBuffer`] turns a
 //! stream of `{ t, pos, vel }` samples into a position at any render time (Hermite between
 //! samples, bounded extrapolation, hold, fade); [`JitterStats`] and [`InterpDelay`] choose the

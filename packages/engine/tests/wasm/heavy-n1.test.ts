@@ -1,4 +1,4 @@
-// `heavy-n1 all logs @slow` (docs/plan/36-slow-tier-and-benchmarks.md; docs/decisions/0002 "Heavy
+// `heavy-n1 all logs @slow` (M36; docs/decisions/0002 "Heavy
 // mode", 0020 §5): `runHeavy` at N = 1 (snapshot and restore into a fresh instance after every
 // tick, compare with the uninterrupted run) over every recorded log, as `.wasm` under Node: the
 // `fx-persist` fixture log (also `heavy_wasm_n1`, in `replay-world.test.ts`), its ABI-parity log, and

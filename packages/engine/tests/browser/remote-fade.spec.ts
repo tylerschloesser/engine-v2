@@ -1,4 +1,4 @@
-// `remote-fade` (docs/plan/39l-remote-motion-staircase.md step 5): the fade of 0012 "Remote motion" ("fade an
+// `remote-fade` (M39l step 5): the fade of 0012 "Remote motion" ("fade an
 // avatar after 2 s of silence", then a 500 ms ramp) is what a *viewer* sees when its own downlink stalls and
 // its clock keeps running. A remote that closes its page is gone at once (0013: `Gone`), so the M34 device
 // item tests that separately (`vanished_at_once`); nothing tested that the fade itself happens. Same

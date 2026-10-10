@@ -1,4 +1,4 @@
-// The client worker's input-drain pump (docs/plan/11-camera-and-input.md, Order of work step 5):
+// The client worker's input-drain pump (M11, Order of work step 5):
 // called from `worker/client.ts`'s `body()` after the frame/gen/upload pumps, on every wake (same
 // "built once at setup, pump() itself allocates nothing" shape `client-gen.ts`/`client-upload.ts`
 // already use). Drains whole `inputRing` records into `Rx` and calls `on_input(len)` once when

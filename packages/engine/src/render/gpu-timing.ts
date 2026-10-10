@@ -1,4 +1,4 @@
-// Opt-in GPU execution timing (docs/plan/39k-gpu-exec-metric.md): the main render pass of a frame gets
+// Opt-in GPU execution timing (M39k: the main render pass of a frame gets
 // `timestampWrites`, resolved into a small ring of mappable buffers and read back after the writing
 // frame, never on it. This is the pass's own begin-to-end time on the GPU, not the submit-to-done latency
 // of a vsync-paced queue (which on a phone reads about 0.8 of a frame interval whatever the pass costs).

@@ -1,7 +1,7 @@
 // The cross-engine golden hash (docs/decisions/0002 §3 "Cross-engine golden hashes"; 0020 §5, §6):
 // the same scenario, same driver (`tests/support/scenario.ts`) as the native, Node and Bun legs,
 // this time run from a worker in Chromium, WebKit and Firefox, for every fixture `determinism.html`
-// lists (`hash`, `worldgen`, docs/plan/08-worldgen-and-gen-worker.md). `@engines` runs it in all
+// lists (`hash`, `worldgen`, M08. `@engines` runs it in all
 // three (Planning decisions, "Browsers and projects"); it needs no GPU, so headless Firefox and
 // WebKit's JavaScriptCore both qualify (0020 §6).
 import { mkdirSync, writeFileSync } from 'node:fs'

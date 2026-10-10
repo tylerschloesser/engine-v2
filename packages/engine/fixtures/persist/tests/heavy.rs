@@ -1,4 +1,4 @@
-//! Native heavy mode against `fx-persist` (docs/plan/22-persistence-log-and-snapshots.md Tests
+//! Native heavy mode against `fx-persist` (M22 Tests
 //! added): `heavy_mode_fixture_n25` (fast tier) and `heavy_mode_fixture_n1` (slow tier). Both
 //! replay the same checked-in log (`tests/fixture_log.rs`'s own `RECORDED_LOG`); this file just
 //! points `engine::testing::heavy` at it.

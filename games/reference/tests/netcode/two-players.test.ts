@@ -1,4 +1,4 @@
-// M34c step 1 (docs/plan/34c-reference-scripted-multiplayer.md): the whole reference game with two
+// M34c step 1 (M34c: the whole reference game with two
 // headless players on the netcode harness, over a conditioned link (60 ms latency, 20 ms jitter).
 import { test } from 'vitest'
 import { refHarness } from '../helpers/net.js'

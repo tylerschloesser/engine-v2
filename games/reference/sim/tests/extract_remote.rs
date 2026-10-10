@@ -1,4 +1,4 @@
-//! `extract_hash_remote_players` (docs/plan/34-reference-multiplayer.md Tests added): one own
+//! `extract_hash_remote_players` (M34 Tests added): one own
 //! circle (plus its range ring) and two remote circles, one of them faded, drawn from a real
 //! `Loopback` round trip (`Global` colours, presences and the roster all arrive over the wire).
 //! Checks the records themselves (colour from `Global`, `alpha`, no ring for remotes) and pins the

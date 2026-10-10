@@ -37,7 +37,7 @@ export function formatSuiteLine({ name, failed, tests, ms, budgetMs, scale = 1, 
 }
 
 /**
- * The `--timings-json` artefact (docs/plan/10-ci-workflow.md, Seams: "writes `{ suite, ms,
+ * The `--timings-json` artefact (M10, Seams: "writes `{ suite, ms,
  * budgetMs, tests }[]` plus build ms, CPU model and commit"). Recorded, never gating (0020 §10):
  * `budgetMs` is whatever the caller measured it against (the unscaled budget, since CI runs with
  * `--budget-scale` applied only to pass/fail, not to this number) and is `undefined` for a suite
@@ -59,7 +59,7 @@ export function buildTimingsReport({ commit, cpu, buildMs, outcomes }) {
 }
 
 /**
- * `test-results/build/timings.json` (docs/plan/17d-fast-tier-wall-time.md step 1): each build
+ * `test-results/build/timings.json` (M17d step 1): each build
  * step's own wall time, written on every `pnpm test` run (pass or WARN) so a slow build is
  * attributable to one step without re-running under a stopwatch.
  */
@@ -68,7 +68,7 @@ export function buildStepsReport(steps) {
 }
 
 /**
- * `build WARN <ms>/<budget> (slowest: ...)` (docs/plan/17d-fast-tier-wall-time.md step 1): the
+ * `build WARN <ms>/<budget> (slowest: ...)` (M17d step 1): the
  * existing one-line build warning, with its `top` (default 3) slowest steps named so the warning
  * is actionable on its own -- `test-results/build/timings.json` (`buildStepsReport`) holds every
  * step for anything needing the rest.
@@ -88,7 +88,7 @@ export function formatWarning(text) {
   return `  warn ${text}`
 }
 
-/** One distinct `adapter.info` line under a suite's line (docs/plan/10-ci-workflow.md, Scope:
+/** One distinct `adapter.info` line under a suite's line (M10, Scope:
  * "adapter class recorded by every GPU test"; `parsePlaywrightJson`'s `adapters`). */
 export function formatAdapter(text) {
   return `  adapter ${text}`
@@ -163,7 +163,7 @@ const FAILED_STATUSES = new Set(['failed', 'timedOut', 'interrupted'])
  * adapter entry of `scripts/lib/adapters.mjs`). `tests` counts one entry per spec x project (a
  * `@engines` spec run in three browsers is three tests); `warnings` comes from annotations of type
  * `warning` (M04's `Tracing.start` stall). `adapters`: the distinct `adapter.info` strings recorded
- * by `tests/browser/support/gpu.ts`'s `expectAdapter` (docs/plan/10-ci-workflow.md, Scope: "adapter
+ * by `tests/browser/support/gpu.ts`'s `expectAdapter` (M10, Scope: "adapter
  * class recorded by every GPU test") -- deduped, since every GPU test on one run typically shares
  * the same adapter, so the runner's quiet-by-default log (0020 §2) still gets the string onto CI's
  * own log without one line per test.
@@ -199,7 +199,7 @@ export function parsePlaywrightJson(json) {
   }
   for (const suite of report.suites ?? []) walkSuite(suite)
 
-  // Gate round 1 fix (docs/plan/20-reference-game-v0.md): top-level `report.errors` -- global
+  // Gate round 1 fix (M20: top-level `report.errors` -- global
   // setup/teardown and `webServer` failures land only here, never inside `suites` (a `webServer`
   // that fails to start crashes before any spec even runs, so `tests`/`failures` stay `0`/`[]`
   // either way). Previously unread entirely; `scripts/lib/adapters.mjs`'s `playwright` adapter uses

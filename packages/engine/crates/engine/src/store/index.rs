@@ -3,7 +3,7 @@
 //! with entities; never evicted". One instance per chunk that has at least one entity overlapping
 //! it (a footprint spans at most 4 chunks, 0007 §5); `Store<G>` owns the map keyed by `ChunkCoord`
 //! and maintains it incrementally in [`crate::store::Store::apply`], so host and replica share the
-//! exact same derived structure (docs/plan/21-entities-and-timers.md Scope).
+//! exact same derived structure (M21 Scope).
 //!
 //! Never encoded or hashed (0007 §5: "derived"): rebuilding it from the entity table after a decode
 //! is [`crate::store::Store::rebuild_indexes`]'s job, and it must reach exactly the state
@@ -18,13 +18,13 @@ pub struct ChunkIndex {
     occupancy: Vec<u64>,
     /// Sorted by `(index, EntityId)`: the tile-local occupant(s) of every set bit. More than one
     /// entry can share an index only through the overlap the engine merely debug-asserts against,
-    /// never rejects (docs/plan/21-entities-and-timers.md Scope "Overlap policy") -- `entity_at`
+    /// never rejects (M21 Scope "Overlap policy") -- `entity_at`
     /// then answers with the lowest id at that index, which is deterministic but otherwise
     /// arbitrary among overlapping occupants.
     entries: Vec<(u16, EntityId)>,
     /// Every entity id whose footprint overlaps this chunk at all, ascending, deduplicated: what
     /// `entities_in`/the frame builder/`encode_chunk_snapshot` scan instead of the whole entity
-    /// table (docs/plan/21-entities-and-timers.md Provides).
+    /// table (M21 Provides).
     overlapping: Vec<EntityId>,
 }
 
@@ -58,7 +58,7 @@ impl ChunkIndex {
     /// low-level structure stays a pure derived index with no invariant of its own to enforce, so a
     /// dozens-strong crate-wide fleet of minimal test `Game::anchor` stubs (every test entity
     /// "anchored" at a fixed tile, never meant to model real placement) keeps working unmodified
-    /// (docs/plan/21-entities-and-timers.md Deviations: no debug-panic was added here, or in
+    /// (M21 Deviations: no debug-panic was added here, or in
     /// `Store::apply`, for exactly this reason -- see Deviations for the full accounting).
     pub(crate) fn add(&mut self, index: u16, id: EntityId) {
         let key = (index, id);

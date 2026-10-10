@@ -1,4 +1,4 @@
-// `liveness` (docs/plan/28-sessions-and-reconnect.md, Tests added): `src/net/link.ts`'s own
+// `liveness` (M28, Tests added): `src/net/link.ts`'s own
 // dead-timer/probe/backoff state machine. `dead-after-silence`/`stale-socket-ignored`/`probe-on-
 // visible`/`backoff-schedule` drive `createLink` directly, over a virtual `ManualClock` (`engine/
 // test`'s own `Clock` + `Scheduler`, docs/decisions/0020 §8) with a plain hand-written `Connection`

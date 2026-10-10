@@ -1,5 +1,5 @@
-// `gc-sim.html`'s script (docs/plan/13-sim-host-tick-loop.md, step 6, Tests added: "zero-GC test
-// extended to the sim isolate"; docs/plan/23-persistence-opfs-and-lifecycle.md step 6, Planning
+// `gc-sim.html`'s script (M13, step 6, Tests added: "zero-GC test
+// extended to the sim isolate"; M23 step 6, Planning
 // decision 1): a real `createClient()` local topology over `fx-puts` (`host: { kind: 'local',
 // world, persist: true }`), the sim isolate driven by exactly one deterministic tick per measured
 // frame through `stepSimTickSync` (bypassing real-time pacing entirely, same as `stepTick`'s own

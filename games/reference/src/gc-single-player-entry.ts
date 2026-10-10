@@ -1,4 +1,4 @@
-// `gc-single-player.html`'s script (docs/plan/34b-reference-scripted-single-player.md, "Zero GC
+// `gc-single-player.html`'s script (M34b, "Zero GC
 // through the game"; `gc-entry.ts` is the topology this extends): the same single-player `startGame`
 // wiring driven through `asHarness`, but in the state a player has after the first half of the script
 // (stone mined, furnace crafted and placed, iron and wood fetched and deposited), and the measured

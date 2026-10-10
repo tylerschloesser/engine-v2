@@ -1,4 +1,4 @@
-// `reference-server/docker-args` (docs/plan/38-hosting-checks.md, Tests added): the Dockerfile and
+// `reference-server/docker-args` (M38, Tests added): the Dockerfile and
 // `fly.toml` agree with each other and with the server's own CLI on the port, the data directory and
 // the static directory. A parse test: no Docker, no Fly.
 import { readFileSync } from 'node:fs'

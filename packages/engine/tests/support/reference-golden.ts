@@ -1,4 +1,4 @@
-// The reference game's full-game golden (docs/plan/34b-reference-scripted-single-player.md):
+// The reference game's full-game golden (M34b:
 // `games/reference/tests/golden/full-game.log` (segment 0's frames of one scripted play, without the
 // segment header: what native `engine::testing::replay::replay` takes) and `full-game.json` (the
 // world, the tick of the log's last frame and a state hash every few ticks, taken from the `.wasm`

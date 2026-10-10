@@ -135,7 +135,7 @@ impl<'a, G: Game> WorldRead<G> for Predicting<'a, G> {
         self.overlay.global().unwrap_or_else(|| self.base.global())
     }
 
-    /// M25 step 8 (docs/plan/25-prediction-core.md Planning decisions "Iterating reads"): merges
+    /// M25 step 8 (M25 Planning decisions "Iterating reads"): merges
     /// the overlay on top of `base.entities_in` through [`merge_entities_in`], sharing its own
     /// `Overlay`-owned scratch buffer (`Overlay::entities_in_scratch`) since `Predicting` itself is
     /// rebuilt fresh every call and has nowhere else to keep one warm.
@@ -224,7 +224,7 @@ impl<'a, G: Game> WorldWrite<G> for Predicting<'a, G> {
 }
 
 /// One pending action's own predict-or-decline pass (0012 Decision, verbatim): `G::predict(action)
-/// == false` declines without running `apply` at all (docs/plan/25-prediction-core.md Planning
+/// == false` declines without running `apply` at all (M25 Planning
 /// decisions); otherwise runs `G::apply` against a fresh mark, rolling back to it on `saw_unknown`
 /// or a clean rejection -- the engine enforces the client-side atomicity 0012 promises "for free".
 /// Called once at dispatch (`ClientCore::on_action`) and once per still-pending action every frame
@@ -439,7 +439,7 @@ mod tests {
         WorldWrite::wake_at(&mut p, EntityId(1), Tick(5));
     }
 
-    /// M25 step 8 (docs/plan/25-prediction-core.md Tests added): override, tombstone,
+    /// M25 step 8 (M25 Tests added): override, tombstone,
     /// provisional-last order, and `Unknown` at the edge -- all through `Predicting::entities_in`,
     /// the real merge (`predict::merge_entities_in`).
     #[test]

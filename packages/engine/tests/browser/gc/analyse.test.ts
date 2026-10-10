@@ -76,7 +76,7 @@ test('gc analyse: events are attributed to named isolates', () => {
 
 test('gc analyse: presentIsolates finds every named thread, even one marked before window-start', () => {
   // trace-sample.json's own gc-isolate marks (ts 998/999) both precede window-start (ts 1000) --
-  // the real shape (gate round 3, docs/plan/09-renderer-terrain.md Deviations): a worker's naming
+  // the real shape (gate round 3, M09 Deviations): a worker's naming
   // mark is always sent before `window.__gc.run`'s own window-start mark.
   const { presentIsolates } = analyseTrace(traceSample())
   expect(presentIsolates).toEqual(new Set(['main', 'sim']))
@@ -112,7 +112,7 @@ test('gc verdict: software mode uses attributed bytes on main only', () => {
   expect(failing.pass).toBe(false)
 })
 
-test('gc verdict: software mode uses raw bytes on every isolate but main (orchestrator decision, docs/plan/10-ci-workflow.md)', () => {
+test('gc verdict: software mode uses raw bytes on every isolate but main (orchestrator decision, M10', () => {
   const page = {
     isolates: {
       main: {

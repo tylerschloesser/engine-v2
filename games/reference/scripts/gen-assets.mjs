@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// `scripts/gen-assets.mjs` (docs/plan/20-reference-game-v0.md Scope): plain Node, no npm
+// `scripts/gen-assets.mjs` (M20 Scope): plain Node, no npm
 // dependency (PNG written with `node:zlib`), deterministic, byte-reproducible. Emits
 // `assets/tiles.png` + `tiles.json` (16 px tiles, 4 variants per terrain, dither priority and band
 // per visual) and `assets/sprites.png` + `sprites.json` (sprite 0: the furnace, M33; the player
@@ -80,7 +80,7 @@ const RESOURCES = [
 // One sprite today: id 0, the 2x2-tile furnace, two frames laid left to right (frame 0 idle, frame 1
 // lit; the game passes the frame in `Draw.param`). 0018 section 4: 2 px extruded padding around the whole
 // strip, frames contiguous. The art is fully opaque (the sprite pipeline's blend is straight alpha
-// over a premultiplied atlas, which is only exact for alpha 255: docs/plan/17b Deviations).
+// over a premultiplied atlas, which is only exact for alpha 255: M17b Deviations).
 const SPRITE_PAD_PX = 2
 const FURNACE_PX = 32 // one frame, 2 tiles x 16 px
 const FURNACE_FRAMES = 2

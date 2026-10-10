@@ -1,4 +1,4 @@
-// docs/plan/24-recovery-and-migration.md step 1 (Scope: "audit that every sim-host export call
+// M24 step 1 (Scope: "audit that every sim-host export call
 // goes through call0/1/2"; Order of work: "one grep-style test: no `inst.x.` use outside
 // `loader.ts`"): `.claude/rules/hot-paths.md`'s own rule ("Exports are called through call0/call1/
 // call2 of EngineInstance ... and nothing else") is about *invoking* a raw export directly (with

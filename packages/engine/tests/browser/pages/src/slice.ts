@@ -1,4 +1,4 @@
-// `slice.html`'s script (docs/plan/16-action-round-trip.md, step 6): the vertical slice itself --
+// `slice.html`'s script (M16, step 6): the vertical slice itself --
 // a real `createClient()` **single-player** topology (`host.connect: true`, fixture `puts`), real
 // device/renderer (chunked world on screen), real camera/input (`createClient` installs both
 // automatically on a real, document-attached canvas -- `device.ts`'s own precedent, unlike every
@@ -17,7 +17,7 @@
 // the HUD element (a human running a long device session without the visual noise); the counters
 // underneath it keep updating either way.
 //
-// M39f step 7 (docs/plan/39f-device-auto-runner.md): `?autopan=1` is `device.html`'s scripted pan (a steady
+// M39f step 7 (M39f: `?autopan=1` is `device.html`'s scripted pan (a steady
 // ~4 tiles/s on top of real gestures; M16-coexist) and `window.__check` (`check.ts`) reports the HUD's own
 // numbers as numbers plus two scripted drivers (`act.paint`, `act.flick`). Diagnostic page, outside the
 // hot-path rule like the HUD.
@@ -160,7 +160,7 @@ const art = await loadTileArt(device.device, '/terrain/tiles.json', {
 renderer.setTileArray(art.texture, art.gpuBytes)
 renderer.writeVisualTable(art.visualTableBytes)
 
-// docs/plan/16d-sim-pacing-under-external-wakes.md, step 4: a main-side copy of the GPU indirection
+// M16d, step 4: a main-side copy of the GPU indirection
 // table, so `__sliceSettle(tileX, tileY)` can wait for "this tile's chunk is resident on the GPU"
 // itself rather than for time to pass. Every indirection write goes through `writeIndir` (the
 // upload drain's INDIR records, `render/upload.ts`), so wrapping it here sees all of them; the
@@ -299,7 +299,7 @@ const verdicts = new Map<number, (r: unknown) => void>() // `__check.act.paint`'
 client.onActionResult<Reject>((seq, result) => {
   if (result !== 'NotPredictable') verdicts.get(seq)?.(result)
   if (result === 'Confirmed') confirmed += 1
-  // `NotPredictable` (docs/plan/25-prediction-core.md) is a hint, never a verdict (0012): this
+  // `NotPredictable` (M25 is a hint, never a verdict (0012): this
   // page counts only the host's own eventual verdict, so a declined prediction does not inflate
   // `rejected` -- the real ack for the same seq (`Confirmed` or a genuine `Rejected`) still
   // arrives and is counted then.
@@ -388,7 +388,7 @@ window.__worldHashAndTick = async () => {
 // only then does `CB_FRAME_REQ` reflect the change `untilQuiescent` needs to wait for the client
 // worker to catch up with.
 //
-// docs/plan/16d-sim-pacing-under-external-wakes.md, step 4 (attributed under `node scripts/
+// M16d, step 4 (attributed under `node scripts/
 // repeat.mjs browser 8 --load 10`): the settle above still passed partly because time elapsed.
 // Caught at the failing read (`expectPixel(8, 8) ... got 32`, the shader's own not-resident
 // colour): the chunk was **in the client's store** (`client_chunk_hash` Ok, gen queue idle, every
@@ -465,7 +465,7 @@ window.__ringDrops = ringDrops
 
 // --- `tick`: `authoritative_tick` from the clock block (Scope) ----------------------------------
 const clockView = new ClockBlockView(sabs.clockBlock)
-// docs/plan/26-prediction-rendering-and-clocks.md steps 4-6: `readClockBlockInto`'s own `out` now
+// M26 steps 4-6: `readClockBlockInto`'s own `out` now
 // needs room for the seventh (`tickFraction`) slot too, even though this page only ever reads the
 // first two (`clock-block.ts`'s own doc comment: `CLOCK_FIELD` has no entry for slot 6 on purpose).
 const clockScratch = new Uint32Array(8)
@@ -573,7 +573,7 @@ window.__probeTile = async (tileX, tileY, size, notTexel) => {
 window.__errors = () => device.errors()
 window.__adapterInfo = () => device.adapterInfo
 
-// --- `window.__check` (docs/plan/39f-device-auto-runner.md, step 7): the HUD's numbers as numbers ------
+// --- `window.__check` (M39f, step 7): the HUD's numbers as numbers ------
 // "Terrain drawn": the centre tile's chunk is resident on the GPU and the offscreen probe of it read back
 // something (the existing `__probeTile`/`gpuTexel`); asked once, a moment after boot.
 let terrainDrawn = false

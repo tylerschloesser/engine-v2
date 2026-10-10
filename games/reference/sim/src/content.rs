@@ -1,4 +1,4 @@
-//! Terrain and resource ids (docs/plan/20-reference-game-v0.md Scope: "content.rs: terrain and
+//! Terrain and resource ids (M20 Scope: "content.rs: terrain and
 //! resource ids ..."). Chosen in step 1/2 so `worldgen.rs` has real targets to write; step 4 adds
 //! `TraitSet` bits (`NOT_BUILDABLE` on both waters, `COLLECTABLE` on every resource id) and
 //! [`register`], in this same file (Scope: "registered in `Game::register`").

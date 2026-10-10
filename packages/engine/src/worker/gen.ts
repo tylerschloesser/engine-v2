@@ -1,4 +1,4 @@
-// `gen`-kind worker body (docs/plan/08b-gen-workers-and-queue.md, Order of work 3): drains its own
+// `gen`-kind worker body (M08b, Order of work 3): drains its own
 // `genRequest[i]` ring, calls `gen_chunk`, and produces a `genResult[i]` record back to the client
 // (whose `W_WAKE` the result producer is constructed with, so a finished chunk wakes the client,
 // Planning decisions 2). `W_ACK` is still stored on every real wake regardless of `gcHook` (a plain
@@ -20,7 +20,7 @@ import { noTimeout } from './shell.js'
 import { handleTestCall } from './test-call.js'
 import { injectTrap } from './test-trap.js'
 
-/** Request/result header bytes (docs/plan/08b-gen-workers-and-queue.md, Seams: `[cx i32][cy
+/** Request/result header bytes (M08b, Seams: `[cx i32][cy
  * i32][0 u32][0 u32]`; a result record is the same header followed by `GenOut`'s tile bytes). */
 const HEADER_BYTES = GEN_RECORD_HEADER_BYTES
 
@@ -28,7 +28,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   const newInstance = await instantiateFactoryForSetup(shell, message, Role.Gen)
   let inst = newInstance()
   const gcHook = message.test?.gcHook === true
-  // `TestFlags.trapGenAtChunk` (docs/plan/37-robustness-events.md step 1): how many more traps to
+  // `TestFlags.trapGenAtChunk` (M37 step 1): how many more traps to
   // inject for that chunk; counted across instance rebuilds.
   const trapSpec = message.test?.trapGenAtChunk
   let trapsLeft = trapSpec ? (trapSpec.times ?? 1) : 0
@@ -104,7 +104,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       for (;;) {
         // Claim a result slot before touching a request (Planning decisions 5: "a gen worker that
         // finds genResult full retries on its next wake and does not start another job"). An
-        // uncommitted claim reserves nothing (docs/plan/06-sab-primitives-and-workers.md,
+        // uncommitted claim reserves nothing (M06,
         // Deviations), so abandoning it here when there is no request is free.
         const claimed = results.tryClaim()
         if (claimed < 0) break

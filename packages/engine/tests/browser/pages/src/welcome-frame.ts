@@ -1,4 +1,4 @@
-// `welcome-frame.html`'s script (docs/plan/39c-acceptance-gap-tests.md step 5, ADR 0042 §3): a real
+// `welcome-frame.html`'s script (M39c step 5, ADR 0042 §3): a real
 // remote `createClient()` (fixture `puts`, no `test.game`, so the world comes from `Welcome`), no
 // renderer, no frame loop, gen workers spawned an hour late so the gen request ring is the
 // observable. The spec holds the server's `Welcome` (it leaves on a server tick), parks the client

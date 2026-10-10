@@ -1,4 +1,4 @@
-// The bench page (docs/plan/36-slow-tier-and-benchmarks.md step 6): `?bench=large-save`, the
+// The bench page (M36 step 6): `?bench=large-save`, the
 // standard large save of 0020 section 9 played single-player with a bench HUD. **Bench builds only**:
 // `main.ts` reaches this file through `if (__BENCH__)` (`vite build --mode bench`), so no other build
 // carries it or reads the parameter (`bench.spec.ts` greps `dist/` for it). Diagnostic, outside the
@@ -55,7 +55,7 @@ export type BenchHud = {
   mainP95Ms: number
   frameP95Ms: number
   tickP95Ms: number
-  /** docs/plan/39o: the whole pass's median and the parts of the pass (10 s window each). */
+  /** M39o: the whole pass's median and the parts of the pass (10 s window each). */
   tickP50Ms: number
   sealP95Ms: number
   simTickP50Ms: number
@@ -63,11 +63,11 @@ export type BenchHud = {
   frameBuildP95Ms: number
   resyncP95Ms: number
   catchupTicksPer10s: number
-  /** docs/plan/39ag: p50/p95 ms of the whole pass and its parts (`rest` = the untimed remainder). */
+  /** M39ag: p50/p95 ms of the whole pass and its parts (`rest` = the untimed remainder). */
   parts: Record<string, [number, number]>
-  /** docs/plan/39s: the last 4,096 `sim_tick` durations, summarised. */
+  /** M39s: the last 4,096 `sim_tick` durations, summarised. */
   tickSeries: TickSummary
-  /** docs/plan/39y: p50/p95 ms per `sim_tick` phase (all 0 unless the module is a `bench-phases` build). */
+  /** M39y: p50/p95 ms per `sim_tick` phase (all 0 unless the module is a `bench-phases` build). */
   phases: Record<string, [number, number]>
   framesRendered: number
   records: number
@@ -88,7 +88,7 @@ export type BenchHud = {
 export type BenchApi = {
   hud(): BenchHud
   hudText(): string
-  /** The whole per-tick ring, oldest first: `[tick, sim_tick us]` pairs (docs/plan/39s). */
+  /** The whole per-tick ring, oldest first: `[tick, sim_tick us]` pairs (M39s. */
   tickSeries(): [number, number][]
   framesRendered(): number
   /** Arms `mf-s-n`/`mf-e-n` marks around every main rAF callback (`bench.frame_reference` reads them

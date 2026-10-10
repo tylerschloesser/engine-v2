@@ -1,4 +1,4 @@
-//! docs/plan/22-persistence-log-and-snapshots.md Tests added, `camera_walk_changes_no_log`: two
+//! M22 Tests added, `camera_walk_changes_no_log`: two
 //! `testkit::Loopback` runs of the same action script, each under a *different* scripted camera
 //! path, must seal byte-identical write-ahead log frames -- camera reports are never logged
 //! (spec `simulation.md`; the engine's own camera/viewport is deliberately non-mutating and no

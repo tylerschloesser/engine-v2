@@ -1,4 +1,4 @@
-//! `Host<G>` (docs/plan/13-sim-host-tick-loop.md Scope): the sim-role `Instance` -- a `Sim<G>`
+//! `Host<G>` (M13 Scope): the sim-role `Instance` -- a `Sim<G>`
 //! driver plus the between-tick warmer ([`warm`]). M15 adds connections, at which point
 //! `sim_admit`/`sim_build_frame` become real; this milestone's own instance leaves them at
 //! `Instance`'s defaults (`Status::Unsupported`), since no connection exists yet (Non-scope).
@@ -63,7 +63,7 @@ impl ByteSink for VecSink<'_> {
 pub type ConnId = u32;
 pub const MAX_CONNS: usize = warm::MAX_VIEWS;
 
-/// [`Host::on_uplink`]'s one failure mode (docs/plan/16-action-round-trip.md Scope, 0004 step 1):
+/// [`Host::on_uplink`]'s one failure mode (M16 Scope, 0004 step 1):
 /// a malformed `UplinkBatch` or a malformed/non-canonical action payload. A protocol error, not a
 /// game-level `Rejected` -- the caller closes the connection over it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -80,7 +80,7 @@ pub struct ConnCounters {
     pub chunk_snapshots: u64,
     pub chunk_leaves: u64,
     pub bytes_up: u64,
-    /// docs/plan/19-presence-channel.md step 3, Planning decisions ("The 32-byte limit is enforced
+    /// M19 step 3, Planning decisions ("The 32-byte limit is enforced
     /// per encoded sample ... An oversize sample is dropped and counted (`presence_oversize`, must
     /// read 0 in tests"): bumped by `Host::on_uplink` whenever a connection's presence bytes exceed
     /// [`crate::presence::MAX_ENCODED_BYTES`] or fail to decode/canonicalise -- the sample is
@@ -89,7 +89,7 @@ pub struct ConnCounters {
     /// only ever makes `admit` more conservative, never less. Live in production: every real `Host`
     /// reaches this from `on_uplink`, not only tests.
     pub presence_oversize: u64,
-    /// docs/plan/19-presence-channel.md steps 4-6, `engine/test`'s own `uplinkPresenceBytes`
+    /// M19 steps 4-6, `engine/test`'s own `uplinkPresenceBytes`
     /// (`sim_conn_counters`): cumulative presence-field wire bytes (`len varint + payload`, the
     /// same scope `counters.presence.uplinkBytesPerSec` measures) this connection's uplink has had
     /// *recorded* into `PresenceTable` -- bumped only on `on_uplink`'s accepted-sample arm (never
@@ -122,7 +122,7 @@ struct ConnSlot<G: Game> {
     /// regardless of whether anything changed this tick (0011: "sent in full on every connect").
     first_frame_pending: bool,
     counters: ConnCounters,
-    /// Outcomes owed to this connection's next `build_frame` (docs/plan/16-action-round-trip.md
+    /// Outcomes owed to this connection's next `build_frame` (M16
     /// Scope: "outcomes go to the sender's next `build_frame` as `ActionResults` in `seq` order").
     /// Two producers: `Host::on_uplink` pushes an admission-time `Rejected` immediately (0004
     /// step 2: "not logged"), and `Host::tick` pushes every `Sim::step` outcome for an admitted
@@ -142,7 +142,7 @@ struct ConnSlot<G: Game> {
     /// admitted (`G::admit` returns `Ok`); an admission-time *reject* does not advance it, since
     /// 0004 never logs that seq and a resend of it is safe to re-admit (it touches no sim state).
     highest_admitted_seq: u32,
-    /// docs/plan/19-presence-channel.md steps 4-6, Planning decisions ("Relay is built per client
+    /// M19 steps 4-6, Planning decisions ("Relay is built per client
     /// per tick from the table, never queued: a sample is relayed when `received_at` is newer than
     /// that client's last relayed tick for that player, or that was >= 1 s ago"): the tick this
     /// connection was last sent each player's presence, whichever of a fresh `Sample` or a >= 1 Hz
@@ -151,13 +151,13 @@ struct ConnSlot<G: Game> {
     /// reads this map; also a bounded per-connection set (at most `MAX_CONNS` players ever relayed
     /// to one connection), never per-tick growth.
     presence_relayed: BTreeMap<PlayerId, Tick>,
-    /// docs/plan/28-sessions-and-reconnect.md step 4: the tick `build_frame` last actually sent
+    /// M28 step 4: the tick `build_frame` last actually sent
     /// this connection *anything* (a real frame or a heartbeat) -- `build_frame`'s own doc comment
     /// has the mechanism. Initialized to the connecting tick, so a fresh connection's own countdown
     /// starts clean (moot in practice: the very next `build_frame` call always sends a real first
     /// frame, `first_frame_pending`).
     last_sent_tick: Tick,
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: the resume hint `attach` parsed off this
+    /// M28b step 5: the resume hint `attach` parsed off this
     /// connection's own `Hello` (already epoch-checked there: `None` here means either no hint was
     /// sent, or it named a foreign epoch -- both collapse to the same "nothing to keep" outcome),
     /// paired with the chunk-coord centre its own `dx`/`dy` offsets are relative to (0013: "Hint
@@ -166,10 +166,10 @@ struct ConnSlot<G: Game> {
     /// take`) -- a resume hint is only ever meaningful for the very first subscription a fresh
     /// `ConnSlot` ever forms; every later tick's enters are ordinary camera-driven ones.
     resume_pending: Option<(ResumeHint, ChunkCoord)>,
-    /// docs/plan/31-rates-and-integrity.md: the chunk-data bucket, the enter queue, the sent set,
+    /// M31: the chunk-data bucket, the enter queue, the sent set,
     /// the soft cap and degrade state, and their counters (`host/pacing.rs`).
     pace: Pacing,
-    /// docs/plan/31b-desync-hashes.md: this connection's hash schedule, pending scope resend and
+    /// M31b: this connection's hash schedule, pending scope resend and
     /// the `sim_skip_delta` hook.
     hashes: hashes::HashSchedule,
     /// Feature `measure-diff` only: the last encoding sent per entity, for `measure_diff.rs`.
@@ -216,7 +216,7 @@ const SLACK_ESTIMATE_BYTES: u64 = 8 * 1024 * 1024;
 /// TILE_COST_BYTES`).
 const OVERLAY_ENTRY_ESTIMATE_BYTES: u64 = crate::budget::TILE_COST_BYTES as u64;
 
-/// `RegionId::Rx`'s size on the sim role (docs/plan/15b-ring-connection-and-replica-rendering.md
+/// `RegionId::Rx`'s size on the sim role (M15b
 /// Scope: "one whole uplink batch"): matches [`default_max_action_growth`], the same 4,096-byte
 /// budget 0007 §8 already gives one action's worth of nominal headroom -- an uplink batch this
 /// milestone ever carries is a `CameraReport` (16 B) alone (actions are M16's), so this is
@@ -230,17 +230,17 @@ const SIM_RX_BYTES: u32 = 4096;
 /// panicking if a real deployment ever needs more (Deviations records this as provisional).
 const SIM_TX_BYTES: u32 = 65536;
 
-/// `RegionId::Persist`'s size on the sim role (docs/plan/22-persistence-log-and-snapshots.md
+/// `RegionId::Persist`'s size on the sim role (M22
 /// Seams: "sized here at 256 KiB"): log frames (`sim_seal_frame`, `sim_segment_header`) and
 /// streaming snapshot blocks (`sim_snapshot_begin`/`sim_snapshot_next`) all copy through it.
 const PERSIST_BYTES: u32 = 256 * 1024;
 
-/// `sim_segment_header`'s own sentinel (docs/plan/22-persistence-log-and-snapshots.md Seams):
+/// `sim_segment_header`'s own sentinel (M22 Seams):
 /// `base_tick` equal to this means `SegmentBase::Genesis`; any other value is
 /// `SegmentBase::Snapshot(Tick(base_tick))`.
 const GENESIS_BASE_TICK: u32 = 0xFFFF_FFFF;
 
-/// docs/plan/28-sessions-and-reconnect.md step 4 (0010 Rates: "a heartbeat frame at least every
+/// M28 step 4 (0010 Rates: "a heartbeat frame at least every
 /// 500 ms"). Tick-based, not a wall-clock timer (Constraints: "deterministic and replayable") --
 /// `build_frame`'s own doc comment has the mechanism.
 const HEARTBEAT_MS: u32 = 500;
@@ -249,7 +249,7 @@ const HEARTBEAT_MS: u32 = 500;
 /// `cacheChunks` knob), read once by `Host::init` and held until `sim_genesis` consumes the
 /// world-params half of it. `seed`/`params` are 0008's (shared with the `gen`/`client` roles of
 /// `GameInstance<G>`); `maxEntities`/`maxModifiedTiles`/`maxActionGrowth` and `cacheChunks` are
-/// 0009's `WorldConfig.params`/host fields (docs/plan/13-sim-host-tick-loop.md Scope "Sim-role
+/// 0009's `WorldConfig.params`/host fields (M13 Scope "Sim-role
 /// config"). `view` (0009's untrusted-view clamp) is not parsed here: Non-scope (Connections,
 /// subscriptions: M15) means nothing reads it yet.
 #[derive(serde::Deserialize)]
@@ -269,13 +269,13 @@ struct SimConfig<P> {
     /// 13-sim-host-tick-loop.md Deviations records this as a known gap, not a silent drop).
     #[serde(default = "default_cache_chunks")]
     cache_chunks: u32,
-    /// M21 (docs/plan/21-entities-and-timers.md Scope: "init check of the 0007 §8 memory split
+    /// M21 (Scope: "init check of the 0007 §8 memory split
     /// against the arena with real `size_of`"): the game's configured world-budget ceiling, in
     /// bytes (0007 §8's own default is 64 MiB). Optional, defaulting to [`default_world_budget_
     /// bytes`] (effectively "unchecked") so every existing config keeps working unmodified.
     #[serde(default = "default_world_budget_bytes")]
     world_budget_bytes: u32,
-    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6 (0005 "Sim identity"): the build's
+    /// M22 steps 4-6 (0005 "Sim identity"): the build's
     /// own content hash (0017), plain lowercase hex (no `0x` prefix -- `build-game.ts`'s own
     /// `createHash('sha256').update(bytes).digest('hex')`), first 32 hex digits (128 bits) kept.
     /// `#[serde(default)]` (empty string, parsed to all-zero) so every existing config -- native
@@ -284,7 +284,7 @@ struct SimConfig<P> {
     /// M24b's, so nothing validates this value yet.
     #[serde(default)]
     build_hash: String,
-    /// docs/plan/28-sessions-and-reconnect.md (Welcome's own "view clamps (0010)" field): 0009's
+    /// M28 (Welcome's own "view clamps (0010)" field): 0009's
     /// `WorldConfig.view.maxTilesPerAxis`, the untrusted-view clamp -- default `256` (0010,
     /// mirrored by `camera/camera.ts`'s own `DEFAULT_MAX_TILES`). `#[serde(default)]` so every
     /// config built before this milestone (native tests, `testkit`) keeps working.
@@ -293,7 +293,7 @@ struct SimConfig<P> {
     /// 0009's `WorldConfig.view.maxChunks`, the subscription cap -- default `144` (0010, amended by 0059).
     #[serde(default = "default_view_max_chunks")]
     view_max_chunks: u16,
-    /// 0009 `WorldConfig.bandwidth` (0010 defaults when absent), docs/plan/31-rates-and-integrity.md.
+    /// 0009 `WorldConfig.bandwidth` (0010 defaults when absent), M31.
     #[serde(default)]
     soft_cap_bytes_per_s: Option<u32>,
     #[serde(default)]
@@ -311,7 +311,7 @@ struct SimConfig<P> {
     action_per_s: Option<u32>,
     #[serde(default)]
     action_burst: Option<u32>,
-    /// docs/plan/31b-desync-hashes.md: `"off"` (the default when absent, until step 4 flips the
+    /// M31b: `"off"` (the default when absent, until step 4 flips the
     /// harness and dev-server defaults), `"production"` (the 0013 schedule) or `"all"` (0013 "dev
     /// builds": every eligible chunk every frame).
     #[serde(default)]
@@ -344,7 +344,7 @@ fn parse_build_hash(hex: &str) -> [u8; 16] {
 }
 
 /// [`Host::init`]/[`Host::genesis_for_test`]'s shared worldgen-fingerprint computation
-/// (docs/plan/22-persistence-log-and-snapshots.md steps 4-6): borrows `params` rather than cloning
+/// (M22 steps 4-6): borrows `params` rather than cloning
 /// it (`worldgen::Worldgen::Params` carries no `Clone` bound), building a throwaway
 /// `PristineSource` the same way `worldgen::Pristine` does but over a reference instead of an owned
 /// value.
@@ -366,7 +366,7 @@ fn compute_worldgen_fingerprint<G: Game>(
     crate::worldgen::worldgen_fingerprint(&source, dims)
 }
 
-/// docs/plan/22b-persistence-load-and-fs.md: builds the same terrain shell [`Sim::genesis`] would
+/// M22b: builds the same terrain shell [`Sim::genesis`] would
 /// (the cache is excluded from a snapshot, `snapshot_excludes_dense_cache`, so its capacity is
 /// inert here exactly as it is at genesis -- `crate::sim::DEFAULT_CACHE_CHUNKS`, not `self.
 /// cache_chunks`, matching `Sim::genesis`'s own hardcoded choice) -- the empty `Store<G>` shell
@@ -382,7 +382,7 @@ where
     crate::store::Store::new(fresh_terrain::<G>(seed, worldgen), G::Global::default())
 }
 
-/// docs/plan/24b-upgrade-and-migration.md: the terrain half of [`restore_shell`], factored out so
+/// M24b: the terrain half of [`restore_shell`], factored out so
 /// `Host::sim_upgrade_end`'s migrate path (which needs a bare `TerrainStore` for `migrate::migrate`,
 /// not a whole `Store<G>` shell) can build the identical shape without duplicating the three-line
 /// construction.
@@ -401,7 +401,7 @@ fn fresh_terrain<G: Game>(
     )
 }
 
-/// docs/plan/22b-persistence-load-and-fs.md: `FrameRecord<G>` -> `Record<G>` (by value: the
+/// M22b: `FrameRecord<G>` -> `Record<G>` (by value: the
 /// production replay path always holds an owned, freshly-decoded `Vec<FrameRecord<G>>` from
 /// `FrameReader::push`, so moving `action` out directly needs no `G::Action: Clone` bound on
 /// `Host<G>`'s own `Instance` impl -- unlike `testing::replay`'s own private copy of this function,
@@ -410,7 +410,7 @@ fn fresh_terrain<G: Game>(
 /// `#[cfg(feature = "testing")]` (dev-only), so production replay (`Host::sim_replay_push`) cannot
 /// reach its copy.
 /// Builds a `(Phase, u32) -> ()` hook that writes into `*progress` and, when `progress_ptr` is
-/// non-null, into the `Progress` region itself (docs/plan/24-recovery-and-migration.md). A free
+/// non-null, into the `Progress` region itself (M24. A free
 /// function, not a `Host` method: `Host::tick`/`Host::sim_replay_end` both need to call this while
 /// a *different* field of `self` (`self.sim`) is already mutably borrowed via destructuring, so the
 /// hook itself must not need `&mut self` (`Host::mark_progress` does, for every other export).
@@ -446,7 +446,7 @@ fn to_record<G: Game>(r: crate::persist::FrameRecord<G>) -> Option<Record<G>> {
         }
         crate::persist::FrameRecord::Connection { who, ev } => Some(Record::Player { who, ev }),
         crate::persist::FrameRecord::Skip { .. } => None,
-        // docs/plan/24b-upgrade-and-migration.md decision 6: never applied -- `Host::sim_replay_push`
+        // M24b decision 6: never applied -- `Host::sim_replay_push`
         // counts and warns on this variant itself, before `to_record` is ever called on it, but the
         // match here still needs to be exhaustive.
         crate::persist::FrameRecord::Undecodable { .. } => None,
@@ -470,7 +470,7 @@ pub struct Host<G: Game> {
     outcomes: Vec<Outcome<G>>,
     warm: Warm,
 
-    // -- M15: connections and subscriptions (docs/plan/15-connection-and-subscriptions.md) -----
+    // -- M15: connections and subscriptions (M15 -----
     conns: Vec<Option<ConnSlot<G>>>,
     /// Whether `connect` has ever seen this slot before (survives `disconnect`, unlike `conns`
     /// itself): `Record::Player { Joined }` is queued only on first sight (Scope).
@@ -478,14 +478,14 @@ pub struct Host<G: Game> {
     /// Engine connection events queued by `connect`/`disconnect`, delivered to the next `tick()`
     /// call and cleared there (Scope: "queued ... into the frame for T+1").
     pending_records: Vec<Record<G>>,
-    /// docs/plan/28-sessions-and-reconnect.md steps 3-5: the `ConnId` `attach`'s *most recent*
+    /// M28 steps 3-5: the `ConnId` `attach`'s *most recent*
     /// call silently freed because the same `PlayerId` was already attached elsewhere (0013: "the
     /// old connection gets `Bye{Superseded}`... nothing is logged"), `None` when nothing was.
     /// `sim_last_superseded` (the ABI export) reads and reports this; it is not cleared between
     /// calls to it, only overwritten by the next `attach()`, since `sim_attach` -> `sim_last_
     /// superseded` is always the caller's own immediate next call (`server.ts`'s `pumpHandshakes`).
     last_superseded: Option<ConnId>,
-    /// docs/plan/34-reference-multiplayer.md: the presence sample the most recent `disconnect`
+    /// M34: the presence sample the most recent `disconnect`
     /// removed, encoded (`G::Presence`'s codec), length `0` when it removed none. `sim_detach`
     /// reports it (`sim_last_detached_presence`) so the session table can keep it (0013).
     last_detached_presence: ([u8; crate::presence::MAX_ENCODED_BYTES], usize),
@@ -494,7 +494,7 @@ pub struct Host<G: Game> {
     /// world state. Absent = never modified = version 0 (the same default a client replica uses
     /// for a chunk it has only ever seen as pristine, `client::Replica` Deviations).
     chunk_versions: BTreeMap<ChunkCoord, u32>,
-    /// docs/plan/31b-desync-hashes.md: how much desync hashing this host does
+    /// M31b: how much desync hashing this host does
     /// ([`hashes::HashMode`]; `SimConfig::hash_mode`, [`Host::set_hash_mode`]); `Production` by
     /// default, and `All` is what the `Welcome` `HASH_ALL` flag announces.
     hash_mode: hashes::HashMode,
@@ -522,7 +522,7 @@ pub struct Host<G: Game> {
     scratch_snap_spans: Vec<(ChunkCoord, u32, u32)>,
     /// Chunks this frame's drain newly marked held (undone if the frame overflows `out`).
     scratch_new_held: Vec<ChunkCoord>,
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: this tick's `ChunkKeeps` entries -- chunks
+    /// M28b step 5: this tick's `ChunkKeeps` entries -- chunks
     /// `scratch_entered` would otherwise have classified `scratch_pristine`/`scratch_snapshot`,
     /// pulled out by the connection's own `resume_pending` diff before that classification runs.
     scratch_keep: Vec<ChunkCoord>,
@@ -530,7 +530,7 @@ pub struct Host<G: Game> {
     scratch_delta_est: Vec<(ChunkCoord, u32)>,
     /// This frame's held chunks of the connection, sorted by `(y, x)`, each with `HELD_ENTERING` /
     /// `HELD_COLLAPSED` bits: one binary search answers what the delta loop asked of `held`,
-    /// `scratch_entered` and `collapsed` with three linear scans per scope (docs/plan/39ag).
+    /// `scratch_entered` and `collapsed` with three linear scans per scope (M39ag.
     scratch_held: Vec<(ChunkCoord, u8)>,
     /// Snapshot byte size per chunk for the current tick (the collapse check, shared by every
     /// connection); sorted by chunk for a binary search (no `HashMap`, 0002 §2), cleared by `tick`,
@@ -550,7 +550,7 @@ pub struct Host<G: Game> {
     /// and which kind of op it resolved to.
     scratch_entity_ops: Vec<(crate::game::EntityId, EntityOpKind)>,
     /// The `who` of every `Record::Action` in `pending_records`, gathered in `tick()` just before
-    /// `Sim::step` drains it (docs/plan/16-action-round-trip.md Deviations): `Sim::step` pushes
+    /// `Sim::step` drains it (M16 Deviations): `Sim::step` pushes
     /// one `Outcome` per `Record::Action` it sees, in the same relative order, but an `Outcome`
     /// itself carries no `who` (0004's `Ack<G>` shape, unchanged) -- zipping this against
     /// `Host::outcomes` after the call is how each result finds its way back to the right
@@ -559,7 +559,7 @@ pub struct Host<G: Game> {
     /// (`no_alloc_connection.rs`, not this milestone's) still rely on for ticks with actions too,
     /// since it settles at a steady capacity the same way `scratch_entity_ops` already does.
     scratch_action_players: Vec<PlayerId>,
-    /// docs/plan/19-presence-channel.md step 3: the presence samples `G::admit` reads (0001:
+    /// M19 step 3: the presence samples `G::admit` reads (0001:
     /// "keeps the latest sample per player"). One table per world, not per connection -- keyed by
     /// `PlayerId`, which survives a reconnect the way `Store::last_seq` does, so a fresh `ConnSlot`
     /// for a returning player does not itself clear a held sample (only `Host::disconnect`, steps
@@ -592,7 +592,7 @@ pub struct Host<G: Game> {
     /// finishes draining).
     snapshot_writer: Option<crate::persist::SnapshotWriter>,
 
-    // -- M28: session handshake (docs/plan/28-sessions-and-reconnect.md) -----------------------
+    // -- M28: session handshake (M28 -----------------------
     /// `WorldParams::seed`, retained past `sim_genesis` (which moves the whole `WorldParams` out
     /// of `pending`) for [`Host::attach`]'s own `Welcome.seed` field.
     seed: u64,
@@ -608,7 +608,7 @@ pub struct Host<G: Game> {
     /// parsed once and retained for every `Welcome` this host ever builds.
     view_max_tiles_per_axis: u16,
     view_max_chunks: u16,
-    /// docs/plan/31-rates-and-integrity.md: the pacing every *new* connection starts with.
+    /// M31: the pacing every *new* connection starts with.
     bandwidth: BandwidthConfig,
 
     // -- M22b: restore (load a snapshot) and replay (apply a log tail) drivers ------------------
@@ -625,7 +625,7 @@ pub struct Host<G: Game> {
     /// out of `pending`; these three plain `u32`s are kept aside for [`Host::sim_restore_end`] to
     /// apply via `Authority::set_budget`, the same way `Sim::genesis` does).
     restore_budget: Option<(u32, u32, u32)>,
-    /// docs/plan/24b-upgrade-and-migration.md step 4: the in-progress envelope decode
+    /// M24b step 4: the in-progress envelope decode
     /// [`Host::sim_upgrade_begin`] started, fed by [`Host::sim_upgrade_push`]; `None` when no
     /// upgrade is in flight.
     upgrade_reader: Option<crate::persist::UpgradeReader>,
@@ -649,19 +649,19 @@ pub struct Host<G: Game> {
     /// replay_reader`'s own unconsumed buffer length is the valid-end offset
     /// ([`Host::sim_replay_valid_end`]).
     replay_fed: u64,
-    /// Set once a pushed replay block fails to decode (docs/plan/22b-persistence-load-and-fs.md:
+    /// Set once a pushed replay block fails to decode (M22b:
     /// "not an error for the last segment") -- further pushes are then ignored, and
     /// [`Host::sim_replay_end`] reports `Status::TornTail` rather than treating it as fatal.
     replay_torn: bool,
-    /// docs/plan/24b-upgrade-and-migration.md decision 6: count of `Action` records
+    /// M24b decision 6: count of `Action` records
     /// [`Host::sim_replay_push`]'s apply pass dropped this replay because they failed to decode
     /// under this build (`persist::FrameRecord::Undecodable`). Reset by [`Host::sim_replay_begin`];
     /// read back by [`Host::sim_replay_end`]'s own `result` write.
     replay_dropped_undecodable: u32,
     /// [`Host::sim_replay_begin`]'s own `segment` argument -- unused for wire purposes (a
-    /// segment's own index lives in its storage key, docs/plan/22b's Deviations), but needed here
+    /// segment's own index lives in its storage key, M22b's Deviations), but needed here
     /// to filter [`crate::persist::FrameRecord::Skip`] targets to this replay's own segment
-    /// (docs/plan/24-recovery-and-migration.md Planning decisions 1: "always the record's own
+    /// (M24 Planning decisions 1: "always the record's own
     /// segment").
     replay_segment: u32,
     /// The in-progress scan-pass decode [`Host::sim_replay_scan_begin`] started, fed by
@@ -675,7 +675,7 @@ pub struct Host<G: Game> {
     /// Set once a pushed scan block fails to decode -- mirrors `replay_torn`, but for the scan
     /// pass's own reader.
     scan_torn: bool,
-    /// docs/plan/24b-upgrade-and-migration.md decision 6: total record count (any kind, `Skip`
+    /// M24b decision 6: total record count (any kind, `Skip`
     /// included) seen across every frame [`Host::sim_replay_scan_push`] decoded this scan -- the
     /// `migrate` path's own "how many records this abandoned tail held" report, since that path
     /// never runs the real apply pass at all. Reset by [`Host::sim_replay_scan_begin`]; read back by
@@ -691,7 +691,7 @@ pub struct Host<G: Game> {
     /// `ConnSlot::pending_results` the next time [`Host::connect`] sees them (their first frame
     /// after recovery reconnects), each becoming `Ack { seq, Rejected(Engine(EngineFault)) }`.
     pending_fault_acks: Vec<(PlayerId, u32)>,
-    /// The last-written [`ProgressCursor`] (docs/plan/24-recovery-and-migration.md): mirrored into
+    /// The last-written [`ProgressCursor`] (M24: mirrored into
     /// `progress_ptr` (the `Progress` region, when this instance has one) but also kept here in
     /// plain Rust so native tests can read it with no ABI/region involved at all.
     progress: ProgressCursor,
@@ -733,7 +733,7 @@ impl<G: Game> Host<G> {
         self.sim.as_ref()
     }
 
-    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6 (0005 "Sim identity"): assembles
+    /// M22 steps 4-6 (0005 "Sim identity"): assembles
     /// this instance's own `Identity` for `sim_segment_header`/`sim_snapshot_begin`.
     /// `engine_version` is `engine::ENGINE_VERSION` (`env!("CARGO_PKG_VERSION")`, defined in the
     /// engine crate itself); `game_version` is `G::GAME_VERSION` (defaulted to `"0.0.0"` unless the
@@ -920,7 +920,7 @@ impl<G: Game> Host<G> {
     /// chunks this host has ever seen a replicated change in. It is also the denominator the
     /// panning allocation test divides by: that test's ceiling is per *newly reached chunk*, since
     /// the host's remaining growth (overlays, versions) is proportional to territory reached and
-    /// not to elapsed ticks (docs/plan/15-connection-and-subscriptions.md, fix round 3).
+    /// not to elapsed ticks (M15, fix round 3).
     #[cfg(any(test, feature = "testing"))]
     pub fn debug_chunk_version_count(&self) -> usize {
         self.chunk_versions.len()
@@ -997,7 +997,7 @@ impl<G: Game> Host<G> {
         }
     }
 
-    /// docs/plan/31b-desync-hashes.md: sets how much desync hashing the host does, for every
+    /// M31b: sets how much desync hashing the host does, for every
     /// connection ([`hashes::HashMode`]). Both `genesis_for_test` and the ABI path start
     /// `Production` unless `SimConfig::hash_mode` says otherwise.
     pub fn set_hash_mode(&mut self, mode: hashes::HashMode) {
@@ -1112,7 +1112,7 @@ impl<G: Game> Host<G> {
             who: player,
             ev: PlayerEvent::Connected,
         });
-        // docs/plan/24-recovery-and-migration.md Planning decisions 4: a record `sim_replay_end`'s
+        // M24 Planning decisions 4: a record `sim_replay_end`'s
         // apply pass skipped still queues `Ack { seq, Rejected(Engine(EngineFault)) }` for "the
         // player's first frame after recovery" -- delivered here, at (re)connect, since replay
         // itself never has a live `ConnSlot` to queue into (a recovered/loaded `Sim` starts with an
@@ -1157,7 +1157,7 @@ impl<G: Game> Host<G> {
         player
     }
 
-    /// docs/plan/24-recovery-and-migration.md, Traps ("Connections stay open across recovery"): a
+    /// M24, Traps ("Connections stay open across recovery"): a
     /// panic-recovery re-instantiation replaces the whole `Sim`/`Host`, but every in-host TS
     /// `Connection` object survives untouched (the JS host process itself never died) -- this
     /// installs a fresh `ConnSlot` for `conn` with the same deterministic `PlayerId` a live
@@ -1242,7 +1242,7 @@ impl<G: Game> Host<G> {
     }
 
     /// Frees the slot and drops presence immediately: no more `build_frame`/`on_uplink` traffic
-    /// for `conn` until a fresh `connect`/`attach`. docs/plan/19-presence-channel.md steps 4-6
+    /// for `conn` until a fresh `connect`/`attach`. M19 steps 4-6
     /// (0001: "on disconnect the host tells clients at once and drops the sample from relay"): the
     /// player's held sample is dropped from [`Self::presence`] right here, immediately -- not
     /// deferred to the next `tick()`. `Host::build_frame`'s own `Gone` detection (a connection's
@@ -1279,7 +1279,7 @@ impl<G: Game> Host<G> {
         }
     }
 
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 4: queues `Record::Player { Disconnected }`,
+    /// M28b step 4: queues `Record::Player { Disconnected }`,
     /// delivered at the next `tick()` -- independent of any live `ConnSlot` (the connection is
     /// already gone by the time this runs, whether from the grace timer expiring or an explicit
     /// `Bye{Leave}`). No tolerance check of its own: the caller (`host/lifecycle.ts`) never calls
@@ -1294,7 +1294,7 @@ impl<G: Game> Host<G> {
         });
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md: the real join/reconnect path `sim_attach` (ABI)
+    /// M28: the real join/reconnect path `sim_attach` (ABI)
     /// dispatches into, replacing M15's implicit `connect` (`PlayerId = conn + 1`) for every real
     /// connection from this milestone on -- `connect`/`reattach` above are untouched (still used
     /// by native tests, `testkit::Loopback`, and recovery's own re-attach path).
@@ -1327,7 +1327,7 @@ impl<G: Game> Host<G> {
         );
         let epoch = r.u32().map_err(WireError::from)?;
         let joined = r.u8().map_err(WireError::from)? != 0;
-        // docs/plan/28b-reconnect-and-lifecycle.md step 4 (0013 "a Hello with the same secret
+        // M28b step 4 (0013 "a Hello with the same secret
         // inside the grace logs nothing"): the TS handshake's own `host/lifecycle.ts` sets this
         // when `player` still has a live grace timer pending -- this attach is not a real
         // reconnect from the log's own perspective (nothing was ever logged `Disconnected`), so
@@ -1350,7 +1350,7 @@ impl<G: Game> Host<G> {
             _ => return Err(WireError::Malformed),
         };
         let tail = r.rest();
-        // docs/plan/28-sessions-and-reconnect.md Scope: "Hello tail = camera report + optional
+        // M28 Scope: "Hello tail = camera report + optional
         // resume". Real bug, found and fixed live (the bisect for `reference_collect_flow`, and
         // separately `overlay_tile_reaches_screen`'s own tick-0 pristine check): `client_hello()`
         // used to always send a *well-formed*, merely zeroed `CameraReport` for a plain join (0013:
@@ -1362,7 +1362,7 @@ impl<G: Game> Host<G> {
         // `Some(zeroed)` camera clamps up to `MIN_HALF_TILES` (`host/subs.rs`) and immediately
         // subscribes a real rectangle around world (0, 0) on the very next tick boundary.
         //
-        // docs/plan/28b-reconnect-and-lifecycle.md step 5: this cut's own real signal -- a plain
+        // M28b step 5: this cut's own real signal -- a plain
         // join still sends no `resume` block at all (`client_hello`'s own doc comment: `self.
         // camera` is `None` before the first `Welcome` ever lands), so "a resume block is present"
         // is the trustworthy proof that `client_hello` had a *real* camera to report (never a
@@ -1394,7 +1394,7 @@ impl<G: Game> Host<G> {
         };
 
         let idx = conn as usize;
-        // docs/plan/28-sessions-and-reconnect.md steps 3-5, 0013 "the same secret in a second
+        // M28 steps 3-5, 0013 "the same secret in a second
         // tab: newest wins; the old socket gets `Bye{Superseded}`": free any *other* `ConnSlot`
         // already attached to this `player` silently -- no `Disconnected` record, no `presence.
         // remove` (the player is not leaving, only moving connections). `last_superseded` is the
@@ -1499,7 +1499,7 @@ impl<G: Game> Host<G> {
         );
     }
 
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 2: sends a fresh `Welcome` on an already-open
+    /// M28b step 2: sends a fresh `Welcome` on an already-open
     /// connection, carrying `epoch` (the host's own new epoch after `SimHost.bumpEpoch()`) -- 0005
     /// "clients see `Resyncing`, then the reconnect-style full resync"; Planning decisions "A
     /// second `Welcome` is the resync signal". Resets `conn`'s own subscription bookkeeping to a
@@ -1521,7 +1521,7 @@ impl<G: Game> Host<G> {
                 slot.subs =
                     SubscriptionSet::new(crate::world::ChunkDims::new(G::CHUNK_BITS), G::TICK_RATE);
                 slot.first_frame_pending = true;
-                // docs/plan/28b-reconnect-and-lifecycle.md step 5: a resync is host-initiated (no
+                // M28b step 5: a resync is host-initiated (no
                 // fresh `Hello`, no resume hint) and always a full rebuild (0013: "clients ...
                 // take a full resync") -- never keep a stale hint across it, even one this
                 // connection's own prior `attach` had not yet consumed (a resync this soon is not
@@ -1546,21 +1546,21 @@ impl<G: Game> Host<G> {
     }
 
     /// Decodes an `UplinkBatch` (0011): records the latest camera report and `bytes_up`, and runs
-    /// every carried action through the admit pipeline (docs/plan/16-action-round-trip.md Scope):
+    /// every carried action through the admit pipeline (M16 Scope):
     /// decode (`WireError`/a failed canonical decode -> `Err`, a protocol error that closes the
     /// connection, 0004 step 1 -- **not logged**, matching an admission `Rejected` below), drop a
     /// resend (`seq <=` the highest `seq` this connection has ever had *admitted*, silently --
     /// 0004: "a resent action is never applied twice"), then `G::admit`: failure queues an
     /// immediate `Outcome::Rejected` on this connection's `pending_results` (0004: "not logged");
     /// success appends `Record::Action` to `pending_records`, collected for the next `tick()`
-    /// (0004 step 3). docs/plan/19-presence-channel.md step 3: a carried presence sample is decoded
+    /// (0004 step 3). M19 step 3: a carried presence sample is decoded
     /// and recorded into `Self::presence` (32-byte-oversize or malformed bytes counted and dropped,
     /// world-cap violations dropped) before the action path runs, so `G::admit` sees the update from
     /// the *same* batch a witness-carrying action arrived in. An unknown connection is silently
     /// ignored -- untrusted input never panics.
     ///
     /// **Dedup floor: `ConnSlot::highest_admitted_seq`, not a single `Store::last_seq` snapshot**
-    /// (gate fix, docs/plan/16-action-round-trip.md: `Store::last_seq` only advances inside
+    /// (gate fix, M16: `Store::last_seq` only advances inside
     /// `Sim::step`, at the next `tick()` -- a single snapshot taken at the top of this call cannot
     /// see an action this *same* connection had admitted into `pending_records` moments earlier by
     /// an *earlier* `on_uplink` call in the same tick-to-tick window, and `worker/sim.ts` drains
@@ -1596,7 +1596,7 @@ impl<G: Game> Host<G> {
             Ok(batch) => batch,
             Err(_) => return Err(UplinkError),
         };
-        // docs/plan/31-rates-and-integrity.md step 5 (0010 "Host drop rule"): camera reports beyond
+        // M31 step 5 (0010 "Host drop rule"): camera reports beyond
         // 20 per second per client are discarded, unapplied.
         let now = self.last_tick.0;
         if let Some(camera) = batch.camera
@@ -1616,7 +1616,7 @@ impl<G: Game> Host<G> {
         if let Some(Some(slot)) = self.conns.get_mut(idx) {
             slot.pace.on_uplink(now, batch.last_received_tick);
         }
-        // docs/plan/19-presence-channel.md step 3: before the `raw_actions.is_empty()` early
+        // M19 step 3: before the `raw_actions.is_empty()` early
         // return below -- a steady-state uplink batch typically carries a presence sample with no
         // actions at all (0010 "Rates": "the latest camera report and presence sample ... plus
         // pending actions"), so handling presence only on the action path would silently discard
@@ -1639,7 +1639,7 @@ impl<G: Game> Host<G> {
                 // only make an implausible claim look more plausible.
                 Some(sample) if sample.pos().tile().in_range() => {
                     self.presence.on_sample(player, sample, self.last_tick);
-                    // docs/plan/19-presence-channel.md steps 4-6: bumped only here, the accepted
+                    // M19 steps 4-6: bumped only here, the accepted
                     // path (`ConnCounters::presence_bytes_up`'s own doc comment).
                     if let Some(Some(slot)) = self.conns.get_mut(idx) {
                         slot.counters.presence_bytes_up += 1 + raw.len() as u64;
@@ -1755,7 +1755,7 @@ impl<G: Game> Host<G> {
             ..
         } = self;
         let Some(sim) = sim.as_mut() else { return };
-        // docs/plan/16-action-round-trip.md Deviations: gathered *before* `sim.step` drains
+        // M16 Deviations: gathered *before* `sim.step` drains
         // `pending_records`, since `Sim::step` pushes one `Outcome` per `Record::Action` it sees,
         // in the same relative order, but never the `who` (0004's `Ack<G>` shape, unchanged) --
         // this is how each outcome below finds its way back to the connection that sent it.
@@ -1766,7 +1766,7 @@ impl<G: Game> Host<G> {
             }
         }
         let completed = sim.tick();
-        // docs/plan/24-recovery-and-migration.md: `record` is the *index* of the record inside
+        // M24: `record` is the *index* of the record inside
         // `pending_records` while ticking live (the byte-offset meaning only applies to the
         // replay apply pass, `Host::sim_replay_end`) -- written before each per-record call so a
         // dead instance's own `Progress` region names exactly which one trapped. `completed` is
@@ -1828,7 +1828,7 @@ impl<G: Game> Host<G> {
         let store = sim.authority().store();
         let changes = sim.authority().changes();
         let first = slot.first_frame_pending;
-        // docs/plan/31b-desync-hashes.md: a `ResyncChunk` for the reserved coordinate owes this
+        // M31b: a `ResyncChunk` for the reserved coordinate owes this
         // connection `Global` and `OwnPlayer` in full, exactly like its first frame.
         let resend = slot.hashes.resend_scopes;
         let ack_seq = store.last_seq(slot.player).unwrap_or(0);
@@ -1877,7 +1877,7 @@ impl<G: Game> Host<G> {
                 .iter()
                 .any(|(_, d)| matches!(d, Delta::Player { who, .. } if *who == slot.player));
 
-        // -- Enter / leave, paced (docs/plan/31-rates-and-integrity.md step 3) ------------------------
+        // -- Enter / leave, paced (M31 step 3) ------------------------
         // A subscription change is not a send: leaves drop a still-queued enter (the client never
         // had it) or leave a held chunk; enters join the per-connection queue, which the chunk
         // bucket then drains visible-first. `scratch_entered` below is what *this frame* sends.
@@ -1897,7 +1897,7 @@ impl<G: Game> Host<G> {
         self.scratch_entered.extend_from_slice(slot.subs.entered());
         insertion_sort_by_key(&mut self.scratch_entered, |c| (c.y, c.x));
 
-        // docs/plan/28b-reconnect-and-lifecycle.md step 5: the resume hint's own diff, consumed
+        // M28b step 5: the resume hint's own diff, consumed
         // exactly once (`Option::take`) against *this* tick's new enters -- the very first
         // subscription a fresh `ConnSlot` ever forms. `keep` chunks are held at once (0013 "3-byte
         // keep": no bytes beyond the coordinate, so no bucket cost); `leave` chunks (held per the
@@ -2097,7 +2097,7 @@ impl<G: Game> Host<G> {
                     }
                 }
                 Delta::EntityPut { id, entity } => {
-                    // M21 (docs/plan/21-entities-and-timers.md Scope, "Anchor-only entity
+                    // M21 (Scope, "Anchor-only entity
                     // delivery" widened together with `Authority`'s scope derivation and
                     // `encode_chunk_snapshot`): `scopes` is now every chunk under the old *and*
                     // new footprint (up to 8, `Scopes::from_chunks`), not a single anchor chunk.
@@ -2164,7 +2164,7 @@ impl<G: Game> Host<G> {
             }
         }
         insertion_sort_by_key(&mut self.scratch_tile_flat, |(c, i, _)| (c.y, c.x, *i));
-        // `sim_skip_delta` (docs/plan/31b-desync-hashes.md): drop one delta of the armed chunk.
+        // `sim_skip_delta` (M31b: drop one delta of the armed chunk.
         if let Some(target) = slot.hashes.skip_delta {
             let dropped = if let Some(at) = self
                 .scratch_tile_flat
@@ -2251,7 +2251,7 @@ impl<G: Game> Host<G> {
             slot.pace.enqueue(chunk, EnterKind::Resnapshot, p, tick_now);
         }
 
-        // -- Presence: relay, >= 1 Hz re-relay, Gone (docs/plan/19-presence-channel.md steps 4-6,
+        // -- Presence: relay, >= 1 Hz re-relay, Gone (M19 steps 4-6,
         // Planning decisions) --------------------------------------------------------------------
         self.scratch_presence.clear();
         // 0010 "Rates" ties the re-relay floor to the sim's own tick rate ("at least once per
@@ -2296,14 +2296,14 @@ impl<G: Game> Host<G> {
         }
         insertion_sort_by_key(&mut self.scratch_presence, |(who, _)| who.0);
 
-        // docs/plan/16-action-round-trip.md Scope: "in seq order". Robust against admission-time
+        // M16 Scope: "in seq order". Robust against admission-time
         // rejections (pushed by `on_uplink`, arrival order) and apply-time outcomes (pushed by
         // `tick()`, `pending_records` order) interleaving out of seq order across ticks; cheap,
         // like every other per-connection scratch sort here (a handful of entries at most).
         insertion_sort_by_key(&mut slot.pending_results, |o| o.seq);
         let want_action_results = !slot.pending_results.is_empty();
 
-        // -- Hashes (docs/plan/31b-desync-hashes.md, 0013 "Per-chunk desync hashes") ---------------
+        // -- Hashes (M31b, 0013 "Per-chunk desync hashes") ---------------
         // Chosen below, once a frame is certain to be built: a due hash never forces one (R2), it
         // rides the next frame sent anyway. What was chosen is committed only if the frame is sent.
         self.scratch_hashes.clear();
@@ -2317,7 +2317,7 @@ impl<G: Game> Host<G> {
 
         // -- Nothing to say? ---------------------------------------------------------------------
         let mut build = true;
-        // docs/plan/28-sessions-and-reconnect.md step 4 (0010 Rates: "a heartbeat frame at least
+        // M28 step 4 (0010 Rates: "a heartbeat frame at least
         // every 500 ms"), tick-based, not a wall-clock timer, so it stays deterministic and
         // replayable exactly like every other tick-path decision here: when every `want_*`/
         // `scratch_*` collection above is empty, this connection has nothing real to say, but if
@@ -2487,7 +2487,7 @@ impl<G: Game> Host<G> {
                     }
                 });
             }
-            // docs/plan/28b-reconnect-and-lifecycle.md step 5: `SectionId::ChunkKeeps` = 11, the
+            // M28b step 5: `SectionId::ChunkKeeps` = 11, the
             // highest id (`FrameWriter::section`'s own strictly-ascending requirement) -- written last,
             // after `Presence` (8). Same coordinate-list shape `ChunkEnterPristine`/`ChunkLeaves`
             // already use (`session::resume`'s own `golden_keep_entries` pins the exact bytes).
@@ -2576,7 +2576,7 @@ impl<G: Game> Host<G> {
             // "outcomes go to the sender's next build_frame"); clear so `pending_results` never grows
             // past what a single tick's worth of admissions/applies can add (host/mod Deviations).
             slot.pending_results.clear();
-            // Commits what this build decided to send (docs/plan/19-presence-channel.md steps 4-6),
+            // Commits what this build decided to send (M19 steps 4-6),
             // independent of `SliceSink`'s own overflow outcome -- the same "committed regardless of a
             // truncated write" convention every other per-tick bookkeeping field above already follows
             // (`first_frame_pending`, `pending_results.clear()`).
@@ -2592,7 +2592,7 @@ impl<G: Game> Host<G> {
             }
         }
 
-        // -- Pacing tail (docs/plan/31-rates-and-integrity.md step 4) ---------------------------
+        // -- Pacing tail (M31 step 4) ---------------------------
         // The soft cap counts every byte but the chunk data the bucket paid for; a client over it,
         // or lagging (`tick - last_received_tick`), gets one message per 2nd or 4th tick, its
         // frames concatenated whole in a `FrameBundle` and applied one by one on arrival.
@@ -2814,7 +2814,7 @@ fn write_presence_flat<G: Game>(
     }
 }
 
-/// docs/plan/24b-upgrade-and-migration.md: writes an `IncompatReason` byte to `result[0]` and
+/// M24b: writes an `IncompatReason` byte to `result[0]` and
 /// returns `Status::SaveIncompatible` (Planning decisions 7: no write of any kind happens on this
 /// path -- this function itself never touches storage, only the scratch `Result` region). A free
 /// function, not a `Host` method, since `sim_upgrade_end`'s own `impl Instance for Host<G>` block
@@ -2856,7 +2856,7 @@ where
 
         let worldgen_fingerprint = compute_worldgen_fingerprint::<G>(cfg.seed.0, &cfg.params);
         let build_hash = parse_build_hash(&cfg.build_hash);
-        // docs/plan/28-sessions-and-reconnect.md: encoded *before* `cfg.params` moves into
+        // M28: encoded *before* `cfg.params` moves into
         // `pending` below (see the `worldgen_params_bytes` field's own doc comment).
         let mut worldgen_params_bytes = Vec::new();
         encode_to(&cfg.params, &mut VecSink(&mut worldgen_params_bytes))
@@ -2973,7 +2973,7 @@ where
         Status::Ok
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `host::Host::connect` (native,
+    /// M15b: `host::Host::connect` (native,
     /// unchanged since M15). Out-of-range `conn` is `Host::connect`'s own `assert!` (a TS-side
     /// contract violation -- `SimHost.accept` is what allocates `ConnId`s within `MAX_CONNS` -- not
     /// untrusted wire input), so it is not pre-checked here.
@@ -2982,7 +2982,7 @@ where
         Status::Ok
     }
 
-    /// docs/plan/24-recovery-and-migration.md: `host::Host::reattach` -- same out-of-range
+    /// M24: `host::Host::reattach` -- same out-of-range
     /// contract as `sim_connect` above (a TS-side bug, not untrusted wire input).
     fn sim_reattach(&mut self, conn: u32) -> Status {
         self.reattach(conn);
@@ -2996,20 +2996,20 @@ where
         Status::Ok
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `host::Host::disconnect` (native,
+    /// M15b: `host::Host::disconnect` (native,
     /// unchanged since M15) already tolerates an unknown/out-of-range `conn` as a no-op.
     fn sim_disconnect(&mut self, conn: u32) -> Status {
         self.disconnect(conn);
         Status::Ok
     }
 
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 4: `host::Host::log_disconnected`.
+    /// M28b step 4: `host::Host::log_disconnected`.
     fn sim_log_disconnected(&mut self, player: u32) -> Status {
         self.log_disconnected(PlayerId(player));
         Status::Ok
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md: `host::Host::attach`. `WireError::Malformed` (a bad
+    /// M28: `host::Host::attach`. `WireError::Malformed` (a bad
     /// `input`) becomes `Status::Decode`; `SliceSink::finish`'s own overflow (a `Welcome` too large
     /// for `tx`, never expected in practice: `SIM_TX_BYTES` is 64 KiB, `Welcome` at most a few
     /// hundred bytes) becomes `Status::OutOfMemory`, not a silent truncation.
@@ -3024,7 +3024,7 @@ where
         }
     }
 
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 2: `host::Host::resync`. Same status mapping
+    /// M28b step 2: `host::Host::resync`. Same status mapping
     /// as `sim_attach` above (`WireError::Malformed` -> `Status::Decode`; a `Welcome` too large for
     /// `tx` -> `Status::OutOfMemory`).
     fn sim_resync(&mut self, conn: u32, epoch: u32, tx: &mut [u8]) -> Result<u32, Status> {
@@ -3043,7 +3043,7 @@ where
         Status::Ok
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md steps 3-5: `self.last_superseded`, `u32::MAX` for
+    /// M28 steps 3-5: `self.last_superseded`, `u32::MAX` for
     /// "nothing" (the sentinel `abi::mod::sim_attach` writes into `Result` when this is `None`).
     fn sim_last_superseded(&self) -> u32 {
         self.last_superseded.unwrap_or(u32::MAX)
@@ -3064,9 +3064,9 @@ where
         }
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `sim_admit(conn, len)` -- `rx` (the
+    /// M15b: `sim_admit(conn, len)` -- `rx` (the
     /// first `len` bytes of `Rx`) is one whole uplink batch, routed to `host::Host::on_uplink`.
-    /// docs/plan/16-action-round-trip.md: `on_uplink` now also runs every carried action through
+    /// M16: `on_uplink` now also runs every carried action through
     /// the admit pipeline; `Status::Decode` on `Err` (a malformed batch or a malformed action
     /// payload, 0004 step 1's protocol error) is what tells the caller (`SimHost`, TS) to close
     /// the connection. An unknown connection is still tolerated silently (`Ok`).
@@ -3080,7 +3080,7 @@ where
         }
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `sim_tick()` becomes real, routing
+    /// M15b: `sim_tick()` becomes real, routing
     /// through `host::Host::tick` (native, connection- and subscription-aware) instead of M13's
     /// bare `sim.step(&[], ..)`. **Seals the *previous* tick's `ChangeLog` first, not the one this
     /// call is about to build** (Deviations, "seal timing"): `Loopback::step`'s reference order is
@@ -3108,7 +3108,7 @@ where
         self.sim.as_ref().map_or(0, Sim::state_hash)
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `sim_build_frame(conn)` becomes
+    /// M15b: `sim_build_frame(conn)` becomes
     /// real, routing through `host::Host::build_frame` (native, unchanged since M15) into `tx`
     /// (the whole `Tx` region for this role, `SIM_TX_BYTES`).
     fn sim_build_frame(&mut self, conn: u32, tx: &mut [u8]) -> Result<u32, Status> {
@@ -3122,7 +3122,7 @@ where
         Ok(n)
     }
 
-    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6: real write-ahead frame bytes,
+    /// M22 steps 4-6: real write-ahead frame bytes,
     /// replacing M13's "always 0" stub. Reads (never clears) `self.pending_records` -- the same
     /// queue `Host::tick`'s own `Sim::step` call drains and clears right after this returns, so the
     /// ABI order (`sim_seal_frame()` -> `logSink(view)` -> `sim_tick()`) sees the *same* records
@@ -3189,7 +3189,7 @@ where
         sink.put_u32(crc);
         let n = sink.finish().map_err(|_| Status::BadLength)?;
         self.last_logged_tick = next_tick;
-        // Fix round 1, gap 2 (docs/plan/22-persistence-log-and-snapshots.md): Planning decisions 7
+        // Fix round 1, gap 2 (M22: Planning decisions 7
         // says dirty means "a put happened *or a record was logged*". `Authority::write`/
         // `record_ack` already cover the first half and most of the second (every admitted action,
         // applied or rejected), but a *reconnect* (`Host::connect` on an already-`ever_joined`
@@ -3214,7 +3214,7 @@ where
         // No `self.sim.is_none()` gate, unlike every other real export here: `self.identity()`
         // reads only `build_hash`/`worldgen_fingerprint` (parsed/computed at `Host::init`, before
         // `sim_genesis` ever runs) and `G`'s own consts, never `self.sim`. This is deliberate --
-        // `Persistence.create` (TS, docs/plan/22-persistence-log-and-snapshots.md steps 4-6) builds
+        // `Persistence.create` (TS, M22 steps 4-6) builds
         // segment 0's header as part of *creating* a world, before the host has run genesis or
         // ticked at all.
         let base = if base_tick == GENESIS_BASE_TICK {
@@ -3233,7 +3233,7 @@ where
             .map(|n| n as u32)
             .map_err(|_| Status::BadLength);
         if result.is_ok() {
-            // Fix round 2 (docs/plan/22-persistence-log-and-snapshots.md): unlike a periodic
+            // Fix round 2 (M22: unlike a periodic
             // snapshot mid-segment (`sim_snapshot_begin`, which deliberately leaves this alone --
             // see its own doc comment), opening a segment *is* the tick_delta reference reset for
             // that segment's own first frame: nothing preceded it in this segment, by definition, so
@@ -3253,7 +3253,7 @@ where
         result
     }
 
-    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6: starts a streaming snapshot of the
+    /// M22 steps 4-6: starts a streaming snapshot of the
     /// current state at `(log_segment, log_offset)` (Planning decisions 4: "the host owns the log
     /// position"). Resets [`Authority::dirty`] once the writer holds a self-consistent copy of the
     /// state it describes -- everything after this call, until the *next* put or logged record,
@@ -3310,7 +3310,7 @@ where
             .map_or(0, |sim| u32::from(sim.authority().dirty()))
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md: begins decoding a snapshot. Deliberately does not
+    /// M22b: begins decoding a snapshot. Deliberately does not
     /// require `self.sim.is_none()` to have run genesis -- the whole point is to replace it -- but
     /// does require no `Sim` exists yet (a fresh instance, or one whose `pending` a prior failed
     /// attempt has not already consumed; `Persistence.open`'s own design tries each candidate
@@ -3352,7 +3352,7 @@ where
         }
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md: `Status::Corrupt` when the snapshot never reached
+    /// M22b: `Status::Corrupt` when the snapshot never reached
     /// `Done` (still `NeedMore` -- a torn snapshot) or when `sim_restore_push` was never called at
     /// all after `sim_restore_begin`; `Status::IdentityMismatch` when the decoded `Identity` differs
     /// from this build's own. On `Status::Ok`, writes `log_segment`/`log_offset` (two LE `u32`) into
@@ -3385,7 +3385,7 @@ where
         Status::Ok
     }
 
-    /// docs/plan/24b-upgrade-and-migration.md step 4: begins the 0005 Upgrades sequence. Same
+    /// M24b step 4: begins the 0005 Upgrades sequence. Same
     /// preconditions as `sim_restore_begin` (no live `Sim` yet, `pending` still holding the world's
     /// own params) -- but the whole `WorldParams` is kept (`upgrade_pending`), not just the budget
     /// fields, since which shell to build is not known until `sim_upgrade_end`.
@@ -3418,7 +3418,7 @@ where
         }
     }
 
-    /// docs/plan/24b-upgrade-and-migration.md step 4: finishes the upgrade sequence -- runs
+    /// M24b step 4: finishes the upgrade sequence -- runs
     /// [`crate::persist::Identity::compare`] between the decoded envelope's own identity and this
     /// running build's, then either a direct `Store<G>` decode (`Same`/`Direct`) or `crate::migrate::
     /// migrate` (`NeedsMigrate`, over a fresh `OldStore`/`TerrainStore`). Every branch that does not
@@ -3518,7 +3518,7 @@ where
         }
     }
 
-    /// Gate fix round 2 (docs/plan/24b-upgrade-and-migration.md): `persist::Identity::compare` for
+    /// Gate fix round 2 (M24b: `persist::Identity::compare` for
     /// the genesis-replay fallback, which has no snapshot container to feed `sim_upgrade_begin`/
     /// `push`/`end` at all. `stored` is `Identity::write`'s own wire shape, no envelope. A
     /// non-empty `stored` that fails to decode is `Status::Decode` (never silently treated as
@@ -3548,7 +3548,7 @@ where
         Status::Ok
     }
 
-    /// docs/plan/24-recovery-and-migration.md: **scan pass** -- decodes `bytes` (fed the same way
+    /// M24: **scan pass** -- decodes `bytes` (fed the same way
     /// `sim_replay_push` is) purely to collect every `Skip { segment, offset }` target whose
     /// `segment` matches `segment`, into `self.replay_skip_targets`. Applies nothing and touches
     /// `self.sim` not at all: a `Skip` record's own target typically lives in an *earlier* frame
@@ -3594,7 +3594,7 @@ where
                 crate::persist::FrameProgress::NeedMore => break,
                 crate::persist::FrameProgress::Frame(f) => f,
             };
-            // docs/plan/24b-upgrade-and-migration.md decision 6: the migrate path's own "how many
+            // M24b decision 6: the migrate path's own "how many
             // records this abandoned tail held" report -- every record, any kind (`Skip` included),
             // since that path never runs the real apply pass at all to tell them apart.
             self.scan_record_count += frame.records.len() as u32;
@@ -3630,10 +3630,10 @@ where
         }
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md: `self.sim` must already exist (from
+    /// M22b: `self.sim` must already exist (from
     /// `sim_restore_end` or `sim_genesis`) -- `segment` unused for wire purposes, same shape as
     /// `sim_segment_header`'s own (a segment's index lives in its storage key, never the wire), but
-    /// kept (docs/plan/24-recovery-and-migration.md) to name the same segment the scan pass already
+    /// kept (M24 to name the same segment the scan pass already
     /// ran over. Deliberately does **not** reset `self.replay_skip_targets`:
     /// `sim_replay_scan_begin`/`push`/`end` (above) populates it first, over the same bytes, before
     /// this real apply pass ever runs.
@@ -3738,7 +3738,7 @@ where
                     }
                     continue;
                 }
-                // docs/plan/24b-upgrade-and-migration.md decision 6 (amending 0024 §3b): an action
+                // M24b decision 6 (amending 0024 §3b): an action
                 // whose own bytes failed `decode_canonical` under this build is dropped, not fatal --
                 // the frame's own crc32 already verified everything around it, so this is a content
                 // mismatch (an unbumped `SCHEMA_VERSION` change to `G::Action`'s layout, or defensive
@@ -3792,7 +3792,7 @@ where
         }
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md: does **not** clear `self.replay_reader` (unlike
+    /// M22b: does **not** clear `self.replay_reader` (unlike
     /// `sim_restore_end`'s own `.take()`) -- `sim_replay_valid_end` needs to keep reading its
     /// `buffered_len()` afterward; the next `sim_replay_begin` replaces it anyway.
     fn sim_replay_end(&mut self, result: &mut [u8]) -> Status {
@@ -3821,7 +3821,7 @@ where
         self.sim.as_ref().map_or(0, |s| s.tick().0)
     }
 
-    /// docs/plan/24-recovery-and-migration.md: encodes one frame holding a single `Skip { segment,
+    /// M24: encodes one frame holding a single `Skip { segment,
     /// offset }` record, `tick_delta = 0` (never a real elapsed tick, so appending it never
     /// disturbs `self.last_logged_tick` or any later frame's idle-tick count -- `sim_replay_end`'s
     /// own apply pass never steps a `tick_delta == 0` frame at all). Needs no live `Sim`: purely an
@@ -3843,7 +3843,7 @@ where
             .map_err(|_| Status::BadLength)
     }
 
-    /// docs/plan/24-recovery-and-migration.md: panics in whatever `Phase` the previous,
+    /// M24: panics in whatever `Phase` the previous,
     /// successfully-completed export left the `Progress` region in -- writes nothing of its own, so
     /// a call right after any ordinary export reports `Phase::Idle`. Uses `panic::fatal` (never
     /// `panic!`, `.claude/rules/hot-paths.md`-adjacent reasoning even though this itself is never a
@@ -3861,19 +3861,19 @@ where
         u32::from(self.warm.warm_one(terrain).is_some())
     }
 
-    /// "20 Hz is hardcoded" gap (docs/plan/13-sim-host-tick-loop.md): `G`'s own real rate, not
+    /// "20 Hz is hardcoded" gap (M13: `G`'s own real rate, not
     /// the trait default.
     fn tick_hz(&mut self) -> u32 {
         G::TICK_RATE.hz_value()
     }
 
-    /// docs/plan/24b-upgrade-and-migration.md Scope: `G`'s own real `CHUNK_BITS`, not the trait
+    /// M24b Scope: `G`'s own real `CHUNK_BITS`, not the trait
     /// default (mirrors `tick_hz` immediately above).
     fn chunk_bits(&mut self) -> u32 {
         G::CHUNK_BITS
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `Host::region_hash(conn)`, two LE
+    /// M15b: `Host::region_hash(conn)`, two LE
     /// `u32` into `result` (`sim_hash`'s own crossing shape). `engine/test`-only.
     fn sim_region_hash(&mut self, conn: u32, result: &mut [u8]) -> Status {
         let Some(out) = result.get_mut(..8) else {
@@ -3885,10 +3885,10 @@ where
         Status::Ok
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `host::ConnCounters` for `conn`,
+    /// M15b: `host::ConnCounters` for `conn`,
     /// little-endian into `result` (`Instance::sim_conn_counters`'s own doc comment names the
     /// field order). An unknown/never-connected `conn` writes every field as 0 (same doc comment).
-    /// docs/plan/19-presence-channel.md steps 4-6: widened from 48 to 56 bytes, appending
+    /// M19 steps 4-6: widened from 48 to 56 bytes, appending
     /// `presence_bytes_up` (`ConnCounters`'s own doc comment) as a 7th `u64` -- `engine/test`'s
     /// `netCounters`' own `uplinkPresenceBytes`. `presence_oversize` (added step 3) still has no
     /// ABI reader: nothing in this milestone's own exit criteria needs it from a browser test.
@@ -3916,7 +3916,7 @@ where
         Status::Ok
     }
 
-    /// docs/plan/31-rates-and-integrity.md (`ABI_VERSION` 34): `PacingCounters` for `conn` as
+    /// M31 (`ABI_VERSION` 34): `PacingCounters` for `conn` as
     /// sixteen little-endian `u32`s, in order `reenters_within_5s`, `reenter_bytes`,
     /// `cap_evictions`, `late_visible_max`, `late_visible_p95`, `degrade_level`, `dropped_visible`,
     /// `queued_enters`, `bucket_tokens` (`i32`), `held_chunks`, `collapses`, `bundles`,

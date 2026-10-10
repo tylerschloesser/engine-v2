@@ -1,4 +1,4 @@
-// `pnpm device:walk --auto`'s reference-game checks of delegation 4 (docs/plan/39f-device-auto-runner.md steps
+// `pnpm device:walk --auto`'s reference-game checks of delegation 4 (M39f steps
 // 10-12) end to end in headless Chromium and WebKit: a fake phone (`fake-phone.mjs`) is the person, the
 // release build of `games/reference` (and its bench/check build) is served by `device-serve --walk`
 // (`support/walk-rig.ts`, `--no-build`: `pnpm test`'s `reference` step built `dist/`).

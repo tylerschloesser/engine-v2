@@ -1,4 +1,4 @@
-//! `ClientCore<G>` (docs/plan/15-connection-and-subscriptions.md Scope): applies a host frame into
+//! `ClientCore<G>` (M15 Scope): applies a host frame into
 //! a [`Replica`] atomically, serves read access, and paces the uplink (0010 "Rates"). ABI exports,
 //! rings and the TS `Connection` are 15b's (Non-scope here): this is the native core `15b` will
 //! drive from a ring buffer.
@@ -29,7 +29,7 @@ use crate::{bytes::ByteReader, bytes::SliceSink, wire::EntityDeltaOp};
 use super::replica::Replica;
 
 /// The 0012 pending-queue figure ("The pending queue has fixed capacity (initially 32)"), reused
-/// here as the action outbox's own capacity (docs/plan/16-action-round-trip.md Scope: "fixed
+/// here as the action outbox's own capacity (M16 Scope: "fixed
 /// outbox (capacity = the 0012 pending-queue figure; M25 turns it into the pending queue)"): M25
 /// is what actually turns this into the prediction pending queue, so the number is shared now
 /// rather than picked twice.
@@ -40,7 +40,7 @@ pub const OUTBOX_CAPACITY: usize = 32;
 /// not this one's).
 const MAX_ACTION_ENCODED_BYTES: usize = 512;
 
-/// [`ClientCore::on_action`]'s failure modes (docs/plan/16-action-round-trip.md Scope).
+/// [`ClientCore::on_action`]'s failure modes (M16 Scope).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ActionError {
     /// The ring record itself is malformed: too short for its own `[seq][len]` header, `len`
@@ -60,7 +60,7 @@ pub enum ActionError {
 
 /// One applied frame's header plus counts (Provides: "`FrameSummary` (`tick`, `ack_seq`,
 /// counts)"). Not every wire section has a counter here: `ActionResults` is decoded for real now
-/// (docs/plan/16-action-round-trip.md), but the results themselves travel through
+/// (M16, but the results themselves travel through
 /// [`ClientCore::drain_results`], not a count on `FrameSummary` -- `Presence`/`Hashes` stay
 /// Non-scope (Presence relay: M19; desync `Hashes`: M31b).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -81,7 +81,7 @@ const KEEPALIVE_INTERVAL_MS: u32 = 1000; // 0010: at least one batch per 1s
 /// 0010 "Rates": "the latest camera report and presence sample at <= 10 Hz, on change" -- unlike
 /// the camera half (which relies on the 50 ms batch floor above plus the host's own drop rule,
 /// 0010 "Host drop rule"), presence has no host-side drop rule, so the sampler enforces its own 10
-/// Hz ceiling here (docs/plan/19-presence-channel.md step 2).
+/// Hz ceiling here (M19 step 2).
 const PRESENCE_MIN_INTERVAL_MS: u32 = 100;
 /// 0010 "Rates" / "Camera report": the camera report goes out at <= 10 Hz, on change, inside the
 /// unchanged 50 ms batch cadence, with a leading-edge send when motion starts and a trailing send
@@ -120,7 +120,7 @@ pub struct ClientCore<G: Game> {
     /// from `FrameSummary`.
     mutations: u64,
     /// Actions dispatched locally, `Codec`-encoded (postcard) and awaiting the next
-    /// [`Self::poll_uplink`] (docs/plan/16-action-round-trip.md Scope): `(seq, encoded_bytes)`,
+    /// [`Self::poll_uplink`] (M16 Scope): `(seq, encoded_bytes)`,
     /// oldest first. Bounded at [`OUTBOX_CAPACITY`]; [`Self::on_action`] is human-rate/UI-driven
     /// (0003, 0016 §2's own exemption), so allocating one `Vec<u8>` per queued action here is not
     /// a zero-allocation-rule violation the way it would be on a per-frame path.
@@ -131,7 +131,7 @@ pub struct ClientCore<G: Game> {
     /// [`Self::on_frame`], not per frame (M33d). Capacity is reserved once ([`OUTBOX_CAPACITY`]):
     /// a result answers one action this client sent, and at most that many are unanswered.
     results: Vec<(u32, Result<Applied, Rejected<G>>)>,
-    /// docs/plan/19-presence-channel.md step 2: this frame's presence sample, `Codec`-encoded
+    /// M19 step 2: this frame's presence sample, `Codec`-encoded
     /// eagerly on every [`Self::set_presence`] call so the sampler (`poll_uplink`) only ever
     /// compares bytes (Planning decisions: "'on change' means the encoded bytes differ from the
     /// last sent sample") -- avoids requiring `G::Presence: PartialEq`, which the trait does not
@@ -150,11 +150,11 @@ pub struct ClientCore<G: Game> {
     overlay: Overlay<G>,
     pending: PendingQueue<G>,
     lead: Ticks,
-    /// Diagnostic counter (docs/plan/25-prediction-core.md Budgets: "a new deterministic counter
+    /// Diagnostic counter (M25 Budgets: "a new deterministic counter
     /// `predict_replays_per_frame`"): how many pending actions the most recent [`Self::on_frame`]
     /// re-predicted.
     predict_replays_last_frame: u32,
-    /// M26 (docs/plan/26-prediction-rendering-and-clocks.md Provides): the per-replay overlay
+    /// M26 (Provides): the per-replay overlay
     /// change list, updated by [`Self::sync_overlay_dirty`] after every replay (dispatch's own
     /// initial predict, and `on_frame`'s reconcile tail).
     overlay_diff: OverlayDiff,
@@ -162,12 +162,12 @@ pub struct ClientCore<G: Game> {
     /// `budgets.json` ceiling"): how many tiles the most recent [`Self::sync_overlay_dirty`] call
     /// found changed.
     overlay_diff_entries_last: u32,
-    /// docs/plan/26-prediction-rendering-and-clocks.md steps 4-6: this client's own wall-clock
+    /// M26 steps 4-6: this client's own wall-clock
     /// estimate (Planning decisions "`HostClock` lives here, not in M30"), fed once per
     /// `game_instance.rs` wake (`frame(t_ms)`, real local wall time via `CameraBlock::
     /// frame_time_ms`) through [`Self::tick_fraction`], not only when a new host frame lands.
     host_clock: HostClock,
-    /// docs/plan/30-interpolation.md: the adaptive interpolation delay (0010 Rates), fed the tick of
+    /// M30: the adaptive interpolation delay (0010 Rates), fed the tick of
     /// every applied frame ([`Self::arrivals`]) stamped with the client clock at the next
     /// [`Self::tick_fraction`] call, and slewed by that call's elapsed time.
     interp_delay: InterpDelay,
@@ -216,7 +216,7 @@ pub struct ClientCore<G: Game> {
     /// "a dispatched action was actually predicted" as a real assertion (`client_predict_stats`,
     /// test-only) rather than a claim resting on the shape of the fixture alone. Never decremented.
     predict_applied_ever: u32,
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: the last `Welcome.epoch` this client has
+    /// M28b step 5: the last `Welcome.epoch` this client has
     /// seen, `0` before the first one (matching a brand-new world's own manifest default, `host/
     /// mod.rs` Deviations) -- `client_hello`'s own source for the resume hint's `epoch` field, and
     /// `client_on_welcome`'s own signal for "is this Welcome a real resync" (Scope: "A client that
@@ -224,7 +224,7 @@ pub struct ClientCore<G: Game> {
     /// changed; a same-epoch Welcome on a *fresh* connection, this milestone's own resume-hint
     /// round trip, must not wipe what the resume hint just told the host it could keep).
     epoch: u32,
-    /// docs/plan/31b-desync-hashes.md: this replica's desync reports (`Hashes` mismatches), a ring
+    /// M31b: this replica's desync reports (`Hashes` mismatches), a ring
     /// of the last 16 plus a counter.
     desyncs: DesyncLog,
     /// `ResyncChunk` requests owed to (or awaiting an answer from) the host, one per chunk or the
@@ -259,7 +259,7 @@ pub struct DesyncDump {
     pub host: Vec<u8>,
 }
 
-/// One outstanding `ResyncChunk` (docs/plan/31b-desync-hashes.md). `coord` is
+/// One outstanding `ResyncChunk` (M31b. `coord` is
 /// [`RESERVED_SCOPE_COORD`] for the `Global` + `OwnPlayer` scopes. Removed when the answer lands (a
 /// snapshot of that chunk, a leave, or an `OwnPlayer` section for the reserved coordinate) and
 /// re-armed by a later mismatch once `5 s` of ticks have passed without one.
@@ -375,7 +375,7 @@ impl<G: Game> ClientCore<G> {
         let predicted_tick = self.predicted_tick();
         let auth_tick_at_dispatch = self.replica.tick();
         let who = self.replica.own_player();
-        // Taint rule R1 (docs/plan/25-prediction-core.md; the replay loop in `on_frame` applies the
+        // Taint rule R1 (M25; the replay loop in `on_frame` applies the
         // same rule): while any pending action is `NotPredictable`, every later one is too, and it is
         // still sent. Checked here as well, so a dispatch behind a declined action is declined at
         // once (and reported once, by `GameInstance::on_action`) instead of being predicted until
@@ -409,7 +409,7 @@ impl<G: Game> ClientCore<G> {
     }
 
     /// Every `ActionResults` entry the most recently applied frame carried, oldest first, handed
-    /// to `f` and cleared (docs/plan/16-action-round-trip.md Scope: "on_frame reads ActionResults
+    /// to `f` and cleared (M16 Scope: "on_frame reads ActionResults
     /// and writes one result record per entry to `RegionId::Ui`" -- this is the native half of
     /// that; the caller turns each entry into JSON and a UI-ring record).
     pub fn drain_results(&mut self, mut f: impl FnMut(u32, &Result<Applied, Rejected<G>>)) {
@@ -433,7 +433,7 @@ impl<G: Game> ClientCore<G> {
         &self.replica
     }
 
-    /// Mutable counterpart of [`Self::replica`] (docs/plan/15b-ring-connection-and-replica-
+    /// Mutable counterpart of [`Self::replica`] (M15b
     /// rendering.md): `game_instance.rs`'s `ClientInstance` reaches `Replica::terrain`/`terrain_mut`
     /// through this for `TerrainFeed`/`Uploader`, which take `&TerrainStore`/`&mut TerrainStore`
     /// directly rather than a `ClientCore`.
@@ -453,7 +453,7 @@ impl<G: Game> ClientCore<G> {
         &self.overlay
     }
 
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: the last real camera [`Self::set_camera`]
+    /// M28b step 5: the last real camera [`Self::set_camera`]
     /// recorded, or `None` before the first one this client instance's whole lifetime has ever had
     /// (survives a reconnect: unlike [`Self::reset_for_resync`], nothing here ever clears it) --
     /// `client_hello`'s own source for both `Hello.camera` (when `Some`) and the resume hint's own
@@ -468,14 +468,14 @@ impl<G: Game> ClientCore<G> {
         self.epoch
     }
 
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: records `Welcome.epoch`, called once per
+    /// M28b step 5: records `Welcome.epoch`, called once per
     /// `client_on_welcome` alongside (never instead of) [`Self::reset_for_resync`]'s own,
     /// epoch-gated call -- see that method's doc comment for the ordering this depends on.
     pub(crate) fn set_epoch(&mut self, epoch: u32) {
         self.epoch = epoch;
     }
 
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 2: called on every `Welcome` (`game_instance
+    /// M28b step 2: called on every `Welcome` (`game_instance
     /// .rs`'s `client_on_welcome`, both a plain join's first one and a resync's second one --
     /// idempotent on an already-empty replica, so the caller need not distinguish the two). Drops
     /// every currently held chunk exactly as an ordinary `ChunkLeaves` entry would (`Replica::
@@ -497,7 +497,7 @@ impl<G: Game> ClientCore<G> {
         self.rebase_interp();
     }
 
-    /// docs/plan/30-interpolation.md (0018 section 8): tab return or resync. The host clock and
+    /// M30 (0018 section 8): tab return or resync. The host clock and
     /// the interpolation delay snap back to their initial state and every remote's samples are
     /// dropped: the only place either snaps.
     pub fn rebase_interp(&mut self) {
@@ -509,7 +509,7 @@ impl<G: Game> ClientCore<G> {
         self.last_interp_ms = None;
     }
 
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 3 ("Pending-action resend"): called once from
+    /// M28b step 3 ("Pending-action resend"): called once from
     /// `client_on_welcome`, on every `Welcome` (a plain join's own included -- `pending` is empty
     /// then, so both loops below are no-ops). `ack_seq` is `Welcome.last_processed_action_seq`
     /// (0013 Reconnect: "the client then resends pending actions with `seq >
@@ -544,7 +544,7 @@ impl<G: Game> ClientCore<G> {
         self.pending.iter()
     }
 
-    /// M26 (docs/plan/26-prediction-rendering-and-clocks.md): the pending queue itself, for
+    /// M26 ( the pending queue itself, for
     /// `FrameView::with_prediction` (`game_instance.rs`'s own `FrameView::new(..)
     /// .with_prediction(core.overlay(), core.pending_queue())` call sites) -- [`Self::pending`]
     /// above only ever hands back an iterator, not something a `FrameView` can borrow for a whole
@@ -562,7 +562,7 @@ impl<G: Game> ClientCore<G> {
         self.lead = lead;
     }
 
-    /// The current lead estimate (docs/plan/26-prediction-rendering-and-clocks.md: `Clocks::lead`'s
+    /// The current lead estimate (M26: `Clocks::lead`'s
     /// own source, and `client.clock()`'s `predicted - authoritative`).
     pub fn lead(&self) -> Ticks {
         self.lead
@@ -608,7 +608,7 @@ impl<G: Game> ClientCore<G> {
         f
     }
 
-    /// docs/plan/30-interpolation.md: once per client frame, at the client clock `local_ms`: stamps
+    /// M30: once per client frame, at the client clock `local_ms`: stamps
     /// the frames and presence samples decoded since the last call with `local_ms` (the real
     /// arrival time `on_frame`'s signature cannot carry), slews the delay, and computes the render
     /// time and the per-frame interpolation counters.
@@ -680,7 +680,7 @@ impl<G: Game> ClientCore<G> {
         self.predict_replays_last_frame
     }
 
-    /// M26's lead-estimator hook (docs/plan/25-prediction-core.md Provides): called once per
+    /// M26's lead-estimator hook (M25 Provides): called once per
     /// pending action the host has just acked, with the authoritative tick this client held at
     /// dispatch time, that same action's own frozen `predicted_tick`, and the tick the ack itself
     /// landed on. Feeds `LeadEstimator` (driving `Self::set_lead`, per its own Provides: "It drives
@@ -698,7 +698,7 @@ impl<G: Game> ClientCore<G> {
         self.correction_set_at = ack_tick;
     }
 
-    /// M26 (docs/plan/26-prediction-rendering-and-clocks.md Provides): marks `chunk` dirty for the
+    /// M26 (Provides): marks `chunk` dirty for the
     /// upload path directly, sharing the one dirty queue replica deltas already push into. Skips
     /// the push if a delta already dirtied this exact chunk earlier in the same call (`Replica::
     /// dirty_contains_chunk`'s own doc comment): the delta's own re-stage already reads the
@@ -756,7 +756,7 @@ impl<G: Game> ClientCore<G> {
         self.replica.region_hash()
     }
 
-    /// This client's desync reports (docs/plan/31b-desync-hashes.md).
+    /// This client's desync reports (M31b.
     pub fn desyncs(&self) -> &DesyncLog {
         &self.desyncs
     }
@@ -834,7 +834,7 @@ impl<G: Game> ClientCore<G> {
         }
     }
 
-    /// Records this frame's presence sample (docs/plan/19-presence-channel.md step 2, 0001: "the
+    /// Records this frame's presence sample (M19 step 2, 0001: "the
     /// game's client-side Rust writes `G::Presence` once per client frame"). Encodes eagerly so
     /// [`Self::presence_due`] only ever compares bytes: an oversize encode (over
     /// [`crate::presence::MAX_ENCODED_BYTES`]) is dropped silently here, leaving
@@ -851,7 +851,7 @@ impl<G: Game> ClientCore<G> {
         }
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md: M19's own Provides named this method ("M28 calls it
+    /// M28: M19's own Provides named this method ("M28 calls it
     /// from `Welcome`"), left unbuilt by M19 itself (no caller existed in that cut) -- this is that
     /// caller. Primes the uplink sampler with the session table's own last-known sample (`Welcome`'s
     /// `presence` field, echoed back from `PresenceTable::restore` host-side) exactly like
@@ -867,7 +867,7 @@ impl<G: Game> ClientCore<G> {
         self.set_presence(sample);
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md (0013 "Join is late join", last sentence): true once
+    /// M28 (0013 "Join is late join", last sentence): true once
     /// every chunk of `visible` is both held by the replica (entered via `ChunkEnterPristine` or
     /// `ChunkSnapshots`) and locally generated (`TerrainStore::is_cached`, the same "resident in
     /// the client's cache" predicate `client_chunk_hash`'s own `Status::NotCached` reads) -- a
@@ -936,7 +936,7 @@ impl<G: Game> ClientCore<G> {
     /// tick plus the network", does not have a 50 ms pacing floor to spend), and every queued
     /// action goes out in the very next batch, whichever tick it is polled on.
     pub fn poll_uplink(&mut self, t_ms: u32, out: &mut [u8]) -> usize {
-        // docs/plan/31b-desync-hashes.md: a owed `ResyncChunk` goes out alone, ahead of and outside
+        // M31b: a owed `ResyncChunk` goes out alone, ahead of and outside
         // the batch pacing below (one per call; the next call sends the next or the batch).
         if let Some(i) = self.resyncs.iter().position(|r| !r.sent) {
             let mut sink = SliceSink::new(out);
@@ -1049,7 +1049,7 @@ impl<G: Game> ClientCore<G> {
         let registry = replica.registry();
         let who = replica.own_player();
         let base = &*replica as &dyn WorldRead<G>;
-        // Taint rule R1 (docs/plan/25-prediction-core.md Planning decisions "Taint rule":
+        // Taint rule R1 (M25 Planning decisions "Taint rule":
         // "taint-all-later: while any pending action is `NotPredictable`, every later pending
         // action is `NotPredictable`; the taint ends when the tainting action is popped"). Chosen
         // over R0 (never taint) and R2 (taint only on write-set overlap): both left contradicted
@@ -1265,7 +1265,7 @@ impl<G: Game> ClientCore<G> {
                     .expect("validated");
                 }
                 SectionId::Presence => {
-                    // docs/plan/19-presence-channel.md steps 4-6: `age_ticks = frame.tick -
+                    // M19 steps 4-6: `age_ticks = frame.tick -
                     // received_at` (`wire/CLAUDE.md`), so the sample's own capture tick is this
                     // frame's tick minus `age_ticks` -- `RemotePresences`'s own `sample_tick`.
                     let replica = &mut self.replica;
@@ -1531,7 +1531,7 @@ mod tests {
         );
     }
 
-    /// **Post-`done` fix (docs/plan/26-prediction-rendering-and-clocks.md, "PendingQueue never
+    /// **Post-`done` fix (M26, "PendingQueue never
     /// drains under bench.frame_worstcase"):** the property the test above cannot distinguish
     /// from the base (broken) behaviour, since it never calls `poll_uplink` -- there, `outbox`
     /// and `pending` grow in lockstep, so checking either happens to reject at the same point.

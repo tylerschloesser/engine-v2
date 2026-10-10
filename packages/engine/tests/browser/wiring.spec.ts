@@ -1,5 +1,5 @@
 // Cross-origin isolation, worker/SAB wiring, the loader's `onLog`/`onPanic` plumbing, and the
-// harness's `errors()` (docs/plan/03-browser-harness.md, Tests added). Chromium only: none of this
+// harness's `errors()` (M03, Tests added). Chromium only: none of this
 // needs a second engine (that is `determinism.spec.ts`).
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'

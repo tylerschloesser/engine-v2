@@ -1,5 +1,5 @@
-//! `slow_worldgen_chunk_reference` (docs/plan/20-reference-game-v0.md "Budgets", wired into
-//! `pnpm test:slow` by docs/plan/36-slow-tier-and-benchmarks.md): median ms per generated chunk of
+//! `slow_worldgen_chunk_reference` (M20 "Budgets", wired into
+//! `pnpm test:slow` by M36: median ms per generated chunk of
 //! `RefWorldgen`, release profile (the slow nextest profile builds dev, so under it the test re-runs
 //! itself in release, `common::bench_run`), a runner `warn` line above 0008 section 6's desktop
 //! threshold, and the 25 % gate of `baselines/worldgen.json` through `scripts/lib/bench-gate.mjs`.

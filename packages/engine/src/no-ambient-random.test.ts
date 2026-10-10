@@ -1,4 +1,4 @@
-// `lint.no_ambient_random` (docs/decisions/0002 §2 "Ambient randomness", docs/plan/03-browser-harness.md
+// `lint.no_ambient_random` (docs/decisions/0002 §2 "Ambient randomness", M03
 // Seams): `noRestrictedGlobals` cannot name `Math.random` (it is a member, not a global), and banning
 // the whole `crypto` global would also ban WebCrypto hashing (M28). So this is a source scan instead.
 import { readdirSync, readFileSync } from 'node:fs'

@@ -1,4 +1,4 @@
-// `soak-netcode @slow` (docs/plan/36-slow-tier-and-benchmarks.md step 7): the reference game with
+// `soak-netcode @slow` (M36 step 7): the reference game with
 // eight headless players over a conditioned link for 30 virtual minutes (36,000 ticks at 20 Hz). Two
 // players keep an economy cycle going (place a furnace, pick it up, again) beside the stone landmark;
 // six tour the map in large views (subscription churn, chunk generation, presence) and are dropped

@@ -1,4 +1,4 @@
-//! [`run_script`] (docs/plan/12b-world-access-and-sim-driver.md Provides): drives a [`Sim<G>`]
+//! [`run_script`] (M12b Provides): drives a [`Sim<G>`]
 //! through a script of `(Tick, Record<G>)` entries and returns the final `state_hash()`.
 //!
 //! Contract: a script entry's `Tick` names the *ordinal* of the `Sim::step` call that delivers it
@@ -54,7 +54,7 @@ where
     }
 }
 
-/// Jumps `next_entity_id` directly (M21, docs/plan/21-entities-and-timers.md Provides), for
+/// Jumps `next_entity_id` directly (M21, M21 Provides), for
 /// `id_exhaustion_rejects_state_budget_full`: proving the 0022 §2 exhaustion clause without
 /// actually spawning billions of entities to reach it.
 pub fn set_next_entity_id<G: Game>(sim: &mut Sim<G>, id: u32) {
@@ -126,7 +126,7 @@ where
 }
 
 /// One [`Loopback`] client: a [`ClientCore`], its constant per-tick network delay, and the frames
-/// still in flight (docs/plan/15-connection-and-subscriptions.md Scope: "byte buffers, per-client
+/// still in flight (M15 Scope: "byte buffers, per-client
 /// delay in ticks"). `queue` holds one entry per `Loopback::step` so far this client hasn't drained
 /// yet -- an empty `Vec` stands for "no frame that tick" (`build_frame` returned 0), so delay is
 /// counted uniformly in ticks regardless of how often the host actually has something to say.
@@ -152,7 +152,7 @@ pub struct Loopback<G: Game> {
     frame_buf: Vec<u8>,
     uplink_buf: Vec<u8>,
     /// Scratch for one action's `Codec` (postcard) encoding, ahead of wrapping it in an
-    /// `UplinkBatch` (docs/plan/16-action-round-trip.md): [`Loopback::action`]'s own real-wire
+    /// `UplinkBatch` (M16: [`Loopback::action`]'s own real-wire
     /// path, not the direct `Host::queue_action_for_test` backdoor it used to call.
     action_buf: Vec<u8>,
     /// Per-player action sequence counter, for [`Loopback::action`]/[`Loopback::dispatch`].
@@ -186,7 +186,7 @@ where
     /// 16-action-round-trip.md: an `UplinkBatch` of one action -> `Host::on_uplink` -> decode,
     /// dedup, `G::admit`), delivered at the next `Loopback::step`/`Host::tick`. Auto-increments a
     /// per-player `seq`. `who.0 - 1` recovers the connection id: `Host::connect` always assigns
-    /// `PlayerId(conn + 1)` (docs/plan/15-connection-and-subscriptions.md Deviations), and this
+    /// `PlayerId(conn + 1)` (M15 Deviations), and this
     /// milestone's own admit pipeline has no other way to learn a connection from a `PlayerId`
     /// (host state keeps no reverse map, by design -- one isn't needed anywhere else).
     ///
@@ -231,7 +231,7 @@ where
     /// M25 (docs/decisions/0012-prediction-and-reconciliation.md; docs/plan/
     /// 25-prediction-core.md Seams): dispatches through the real `ClientCore::on_action` path
     /// (a Codec-encoded action re-wrapped as one action-ring record, `[seq u32 LE][len u32
-    /// LE][UTF-8 JSON]`, docs/plan/16-action-round-trip.md Scope) instead of [`Self::action`]'s own
+    /// LE][UTF-8 JSON]`, M16 Scope) instead of [`Self::action`]'s own
     /// direct-to-host uplink shortcut, so prediction actually runs. Still delivered to the host at
     /// the next [`Self::step`] (`ClientCore::poll_uplink`/`Host::on_uplink`, unchanged).
     pub fn dispatch(&mut self, i: usize, action: G::Action) -> (u32, Prediction<G::Reject>)
@@ -263,13 +263,13 @@ where
         (seq, status)
     }
 
-    /// Every action client `i` still has pending, oldest first (docs/plan/25-prediction-core.md
+    /// Every action client `i` still has pending, oldest first (M25
     /// Seams).
     pub fn pending(&self, i: usize) -> impl Iterator<Item = &Pending<G>> {
         self.clients[i].core.pending()
     }
 
-    /// Client `i`'s current overlay size (docs/plan/25-prediction-core.md Seams).
+    /// Client `i`'s current overlay size (M25 Seams).
     pub fn overlay_len(&self, i: usize) -> usize {
         self.clients[i].core.overlay().len()
     }
@@ -287,7 +287,7 @@ where
     }
 
     /// Everything visible to client `i` over `rect`, reading through its prediction-merged view
-    /// (the spike's own `visible()`, docs/plan/25-prediction-core.md Seams): tiles, occupants BY
+    /// (the spike's own `visible()`, M25 Seams): tiles, occupants BY
     /// VALUE (entity ids are not part of the comparison), and the client's own player state. "No
     /// visible change" means this value is equal.
     pub fn visible(&self, i: usize, rect: TileRect) -> Visible<G> {
@@ -314,7 +314,7 @@ where
         Visible { cells, me }
     }
 
-    /// M25 step 8 (docs/plan/25-prediction-core.md Tests added: `entities_in_merges_overlay`/
+    /// M25 step 8 (M25 Tests added: `entities_in_merges_overlay`/
     /// `entities_in_order_matches_authority`): every entity client `i`'s prediction-merged view
     /// visits over `rect`, in the order `WorldRead::entities_in` itself promises (ascending
     /// `EntityId`, ids not values -- `G::Entity: Clone` is what lets this collect owned copies
@@ -333,7 +333,7 @@ where
         out
     }
 
-    /// This client's own prediction-merged `Global` (docs/plan/25-prediction-core.md Tests added:
+    /// This client's own prediction-merged `Global` (M25 Tests added:
     /// `global_put_predicted` needs to see a predicted `put_global` before any ack, which
     /// `Predicting::global`/`View::global`'s own overlay-first merge already provides -- `visible`
     /// covers tiles/entities/the local player, not this scope.
@@ -349,7 +349,7 @@ where
         view.global().clone()
     }
 
-    /// M26 (docs/plan/26-prediction-rendering-and-clocks.md): a real `FrameView` over client `i`'s
+    /// M26 ( a real `FrameView` over client `i`'s
     /// own prediction-merged state -- `entities()`/`predicted_player`/`is_predicted`/... all real,
     /// not reimplemented -- so a test can drive the game's own `ClientSide::extract`/`ui` exactly
     /// as `game_instance.rs`'s `frame()`/`on_frame()` do. `visible`/`window_origin` are the
@@ -398,7 +398,7 @@ where
         .with_prediction(core.overlay(), core.pending_queue())
     }
 
-    /// M26 step 3 (docs/plan/26-prediction-rendering-and-clocks.md): drains client `i`'s own
+    /// M26 step 3 (M26: drains client `i`'s own
     /// dirty queue into `uploader` (`ClientCore::drain_dirty`, coalesced to `ChunkCoord` -- a test
     /// driving `Uploader` directly, not through `game_instance.rs`'s own `on_frame`, has no
     /// `patch_tile` call site to route a finer `DirtyEvent::Tile` to anyway) then stages up to
@@ -479,7 +479,7 @@ where
     }
 
     /// Encodes a real `UplinkBatch` carrying only a fresh presence sample and delivers it to the
-    /// host immediately (docs/plan/19-presence-channel.md Provides: `testkit::Loopback::
+    /// host immediately (M19 Provides: `testkit::Loopback::
     /// set_presence(client, value)` "for scripted producers"), the presence-only sibling of
     /// [`Self::set_camera`] -- same no-modelled-uplink-delay rationale.
     pub fn set_presence(&mut self, i: usize, value: G::Presence) {
@@ -549,7 +549,7 @@ where
     }
 
     /// Replaces the send buffer `build_frame` writes into (the default is 64 KiB): a small one makes
-    /// a frame overflow (docs/plan/31-rates-and-integrity.md Deviations, "Gate round 2").
+    /// a frame overflow (M31 Deviations, "Gate round 2").
     pub fn set_frame_buf_len(&mut self, len: usize) {
         self.frame_buf = vec![0u8; len];
     }

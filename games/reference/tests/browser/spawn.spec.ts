@@ -1,4 +1,4 @@
-// `reference_new_player_spawns_on_land` (docs/plan/20b-reference-player-and-collect-ui.md Tests
+// `reference_new_player_spawns_on_land` (M20b Tests
 // added, step 6): a fresh session's camera starts on the spawn tile (`RefClient::nearest_land_tile`,
 // step 5), not the world's raw `(0, 0)` centre -- `game.ts`'s shared `onUi` subscription calls
 // `client.camera.moveTo` once, only when `client.camera.restored` is `false` (a fresh browser

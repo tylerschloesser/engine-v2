@@ -1,4 +1,4 @@
-// M19b step 3 (docs/plan/19b-sim-park-while-armed.md): `armedLoop`'s own doc comment
+// M19b step 3 (M19b: `armedLoop`'s own doc comment
 // (`src/test/harness-worker.ts`) now waits on `Wake`, a word every park/step signal always bumps,
 // closing the residual race fix round 3 (M17c) left open -- a park signal landing in the gap
 // between the loop's own `Yield` check and the moment its `Atomics.wait` call actually registers as

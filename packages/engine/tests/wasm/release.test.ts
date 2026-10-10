@@ -1,4 +1,4 @@
-// Release-only behaviours (docs/plan/35-packaging-and-adapters.md): no earlier test builds a release
+// Release-only behaviours (M35: no earlier test builds a release
 // module, so these do, on profile `release-names` (release with `strip = false`: names kept so a
 // string or symbol can be looked for). `fx-hash` is the module: it logs one distinct line per level
 // on `logAtTick`, and allocates 64 MiB past its arena on `exhaustAtTick`. @slow: a release build.

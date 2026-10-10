@@ -1,4 +1,4 @@
-// docs/plan/22-persistence-log-and-snapshots.md Exit criteria: "The native log written by step 3
+// M22 Exit criteria: "The native log written by step 3
 // and the log written by the Node host for the same script are byte-identical
 // (`log_bytes_native_equals_wasm`)." `fixtures/persist/tests/abi_log_parity.rs`'s own doc comment
 // has the reasoning for why this compares against a *new* golden

@@ -1,5 +1,5 @@
 // The blocking-loop shell every worker kind runs inside (docs/decisions/0015-threads-memory-and-
-// topology.md §2 "Wake-ups"; docs/plan/06b-workers-and-spawn.md, Planning decisions "`yield`
+// topology.md §2 "Wake-ups"; M06b, Planning decisions "`yield`
 // protocol"). One `WorkerShell` per worker; `runBlockingLoop` is the loop, `shell.fatal`/
 // `shell.runAsync` are the two ways a kind body leaves it early. `Atomics.wait` itself lives only in
 // `ControlBlock.waitForWake` (`sab/control.ts`): this file blocks only through that.
@@ -25,7 +25,7 @@ import type {
 } from './protocol.js'
 
 export type LoopState = {
-  /** Absent only for the `net` kind (docs/plan/29-net-worker-and-reference-server.md steps 1-2):
+  /** Absent only for the `net` kind (M29 steps 1-2):
    * event-driven, never blocked in `Atomics.wait` (0015 §2 "the net worker is event-driven"), so it
    * has no loop for `runBlockingLoop` to run at all -- `worker.ts` checks `loop?.body` before ever
    * calling it, not merely `loop` itself (a `net`-kind `setup()` still returns a non-null
@@ -37,24 +37,24 @@ export type LoopState = {
    * (`worker/test-call.ts`'s `handleTestCall`, closed over its own instance). Absent for a kind
    * with no instance (`net`). Not part of the loop `runBlockingLoop` re-enters with -- `worker.ts`
    * reads it once, off the returned `LoopState`, and routes `test-call` messages to it directly
-   * (docs/plan/08b-gen-workers-and-queue.md, orchestrator decision 1 at the step-5 boundary). */
+   * (M08b, orchestrator decision 1 at the step-5 boundary). */
   testCall?: (m: TestCallMessage) => FromWorker
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: `worker/sim.ts`'s own handler for
+  /** M23 steps 3-4: `worker/sim.ts`'s own handler for
    * `SimControlMessage` (`sim-pause`/`sim-resume`), parked-only like `testCall` above -- `worker.ts`
    * routes both message types here directly, never generically. Absent for every kind but `sim`. */
   simControl?: (m: SimControlMessage) => void
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5: `worker/sim.ts`'s own handler for
+  /** M23 step 5: `worker/sim.ts`'s own handler for
    * `SimWorldOpMessage` (export/import/delete), parked-only like `simControl` above and routed the
    * same way by `worker.ts`. Present only for a `sim`-kind worker that opened real world storage
    * (`message.world`) -- including a world whose `Persistence.open` itself failed (Deviations,
    * `'load-failed'`), which still has live OPFS handles to offer. */
   worldOp?: (m: SimWorldOpMessage) => void
-  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2: `worker/net.ts`'s own handler for
+  /** M29 steps 1-2: `worker/net.ts`'s own handler for
    * `NetControlMessage` (`probe`/`retry`) -- deliverable at any time (this kind is never blocked in
    * `Atomics.wait`, so `worker.ts` routes it here directly, with no `W_PARKED` gate at all, unlike
    * `simControl`/`worldOp`). Present only for the `net` kind. */
   linkControl?: (m: NetControlMessage) => void
-  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "M06b's `stop` sends
+  /** M29 steps 1-2 (Scope: "M06b's `stop` sends
    * `Bye{Leave}` first"): `worker/net.ts`'s own cleanup for `{ type: 'stop' }`, called by
    * `worker.ts` *before* `shell.stop()` -- stops the uplink-drain timer and calls `Link.stop()`
    * (`net/link.ts`), closing the current connection without a further reconnect. This is only the
@@ -70,7 +70,7 @@ export type LoopState = {
 
 /** Every kind's `timeoutMs` until M13 gives `sim` a real tick deadline: a module-level constant
  * closed over once, not `Number.POSITIVE_INFINITY` read fresh on every pass. Fix round 2 evidence
- * (docs/plan/06b-workers-and-spawn.md, Deviations, `byFn` attribution on `topology clean`) found
+ * (M06b, Deviations, `byFn` attribution on `topology clean`) found
  * each kind's own `const NO_TIMEOUT = (): number => Number.POSITIVE_INFINITY` was the single
  * largest allocation site in the idle `sim`/`gen0`/`client` isolates: reading the named property
  * `Number.POSITIVE_INFINITY` boxed a fresh `HeapNumber` on every call, in the interpreter tier a
@@ -104,7 +104,7 @@ export interface WorkerShell {
    * and not run outside the loop's own leave/re-enter discipline.
    */
   runAsync(fn: () => Promise<void>): void
-  /** docs/plan/23-persistence-opfs-and-lifecycle.md Seams: the sim worker's own lifecycle
+  /** M23 Seams: the sim worker's own lifecycle
    * notifications beyond `ready`/`fatal` (`SimLifecycleMessage`) -- `postMessage` after setup still
    * carries lifecycle only (0015 §2). Step 5 adds `SimWorldOpResult` to the same channel (still not a
    * per-frame/per-tick path: one message per explicit export/import/delete request). */
@@ -142,7 +142,7 @@ export class Shell implements WorkerShell {
    * and starting a second, concurrent `runBlockingLoop` here would race it. */
   #asyncInFlight = false
   #asyncQueue: Array<() => Promise<void>> = []
-  /** Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 4): `runAsync`
+  /** Gate fix (M23, "Open gate failures" 4): `runAsync`
    * calls made before this worker's first `runBlockingLoop` has ever recorded a loop (`#loop` still
    * `null`) -- previously dropped silently, contradicting `runAsync`'s own "never dropped or
    * rejected". Drained by `setLoop` the moment a loop is available, through the ordinary `runAsync`
@@ -205,7 +205,7 @@ export class Shell implements WorkerShell {
         }
         this.#asyncInFlight = false
         const loop = this.#loop
-        // `net`-kind Deviations (docs/plan/29-net-worker-and-reference-server.md steps 1-2): a
+        // `net`-kind Deviations (M29 steps 1-2): a
         // `LoopState` with no `body` (`worker.ts`'s own `loop?.body` gate) never reaches `setLoop`
         // in the first place (`runBlockingLoop` is what calls it), so `this.#loop` is null for that
         // kind for its whole life -- this guard is never actually reached with a bodyless loop, but
@@ -232,7 +232,7 @@ export class Shell implements WorkerShell {
    * `runBlockingLoop` as `lastSeen` is what closes the lost-wake window: a producer that sees the
    * worker available and calls `ControlBlock.wake()` bumps the word past this value, so the
    * worker's first `Atomics.wait` sees the mismatch and returns instead of sleeping on a wake that
-   * already happened (fix round 3, docs/plan/06b-workers-and-spawn.md, Deviations).
+   * already happened (fix round 3, M06b, Deviations).
    */
   observeWake(): number {
     return Atomics.load(this.control.words, workerWord(this.index, W_WAKE))
@@ -257,7 +257,7 @@ export class Shell implements WorkerShell {
     return this.#stopped
   }
 
-  /** `{ type: 'resume' }` handler (docs/plan/06b-workers-and-spawn.md, Planning decisions): store
+  /** `{ type: 'resume' }` handler (M06b, Planning decisions): store
    * `W_YIELD = 0` and re-enter the loop this worker was parked from. A no-op for a worker with no
    * loop yet (still in setup) or one that never left the event loop (a `net`-kind worker).
    *
@@ -327,7 +327,7 @@ function runBodyOnce(shell: Shell, body: (wokenBy: number) => void, last: number
  * every kind until M13 gives the sim role a real tick deadline.
  *
  * The `yield` protocol (Planning decisions): the loop checks `W_YIELD` *before every wait,
- * including its own first one* -- fixed M17c step 3, round 2 (docs/plan/17c-client-park-stall.md):
+ * including its own first one* -- fixed M17c step 3, round 2 (M17c:
  * the original shape checked it only *after* a wait returned, so a park request whose own
  * `W_YIELD = 1` store and wake both land before this function's first `waitForWake` call (inside
  * the gap `Shell.resume()`'s own steps leave between reading `W_WAKE` and calling here, or
@@ -346,7 +346,7 @@ function runBodyOnce(shell: Shell, body: (wokenBy: number) => void, last: number
  * ordering relative to clearing `W_YIELD` no longer matters for *this* class of loss (the check
  * above catches it either way, whichever word ends up read first) -- it is unchanged here.
  *
- * **Drains on entry, before the first wait** (docs/plan/08b-gen-workers-and-queue.md, orchestrator
+ * **Drains on entry, before the first wait** (M08b, orchestrator
  * decision 2 at the step-5 boundary): a wake issued while this worker was parked (M06b, "a wake
  * issued while a worker is parked is not replayed on `resume()`") can carry real ring traffic that
  * arrived with nobody able to act on it -- a `genRequest` pushed to a parked gen worker, say. Every

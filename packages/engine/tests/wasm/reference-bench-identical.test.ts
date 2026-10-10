@@ -1,4 +1,4 @@
-// `reference_bench_feature_identical @slow` (docs/plan/39f-device-auto-runner.md step 11, "decide by
+// `reference_bench_feature_identical @slow` (M39f step 11, "decide by
 // measurement"): does cargo feature `bench` leave a *normal* world (no `{ bench }` marker, so
 // `RefParams.bench == 0`) bit-identical? If so the bench build (`vite build --mode bench`) can also be
 // the reference game's check build (it carries `window.__check`) for `pnpm device:walk`, instead of a

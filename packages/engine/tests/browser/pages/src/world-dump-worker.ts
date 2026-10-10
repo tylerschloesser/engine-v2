@@ -1,4 +1,4 @@
-// `world.html`'s test-only debug worker (docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4,
+// `world.html`'s test-only debug worker (M23 steps 3-4,
 // `world_survives_reload`/`hidden_pauses_and_snapshots`): reads a persisted world's own OPFS files
 // back to whoever spawned it, *without* going through `opfsStorage()` -- that constructor eagerly
 // opens an exclusive sync access handle on the world's own `.scratch` file (Planning decision 2), so

@@ -2,11 +2,11 @@
 // "rendering never touches a WASM instance", so this never imports `loader.ts`). Every internal
 // test/device page already builds a page this way (`tests/browser/pages/src/device.ts`,
 // `slice.ts`); this subpath is the first time a *game outside packages/engine* needs the same
-// pieces (docs/plan/20-reference-game-v0.md: a real dev page with terrain, pan and zoom), so it is
+// pieces (M20: a real dev page with terrain, pan and zoom), so it is
 // added now, together with this file (`packages/engine/CLAUDE.md`: "Add an exports subpath only
 // together with the file that backs it").
 //
-// `createUploadDrain`/`RingConsumer` (docs/plan/20b-reference-player-and-collect-ui.md step 0):
+// `createUploadDrain`/`RingConsumer` (M20b step 0):
 // added for the same reason -- a page built outside `packages/engine` that drives its own frame
 // loop under a manual/stepped clock (`ClientOptions.test`, `engine/test`'s `stepFrame`) cannot rely
 // on `createRealFrameLoop`'s own per-rAF upload-ring drain, since nothing fires it without a real

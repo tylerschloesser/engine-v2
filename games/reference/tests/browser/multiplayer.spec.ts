@@ -1,4 +1,4 @@
-// M34 (docs/plan/34-reference-multiplayer.md Tests added): two pages on one reference server. Each
+// M34 (Tests added): two pages on one reference server. Each
 // page is its own browser context (the identity secret is per origin `localStorage`), stepped
 // frames and server ticks only: the server has a manual timer and the pages a manual clock.
 import { type Browser, expect, type Page, test } from '@playwright/test'

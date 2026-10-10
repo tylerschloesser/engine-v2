@@ -1,7 +1,7 @@
 //! Own test binary (mirrors `no_alloc_codec.rs`), so the counting `#[global_allocator]` sees only
 //! this file's work: after init, reads and cache churn through `TerrainStore` allocate zero bytes
 //! (`abi::arena::live_bytes()` unchanged). Overlay growth (writes) is explicitly allowed to
-//! allocate (docs/plan/07-world-model-core.md Tests added), so this file never calls `set_tile` in
+//! allocate (M07 Tests added), so this file never calls `set_tile` in
 //! its measured region.
 
 use engine::abi::Arena;

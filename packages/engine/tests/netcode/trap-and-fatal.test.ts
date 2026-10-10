@@ -1,4 +1,4 @@
-// docs/plan/37-robustness-events.md steps 1 and 3, Tests added (`netcode`): a trapped client
+// M37 steps 1 and 3, Tests added (`netcode`): a trapped client
 // instance resyncs (0014 §6, client role), and a world that cannot continue reports `onFatal`
 // (0005 Panic recovery 4; 0024 §5), stops, closes its sockets and touches no file.
 import { expect, test } from 'vitest'

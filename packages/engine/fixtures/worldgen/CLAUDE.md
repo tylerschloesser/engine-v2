@@ -6,7 +6,7 @@ of the height sample packed into `aux`) and `FixtureParams` (currently empty). `
 `Instance::init` rejects any other role. Chunk edge is fixed at 32 (`ChunkDims::new(5)`), matching
 the default of docs/decisions/0007-world-model.md §3.
 
-Consumed by docs/plan/08b-gen-workers-and-queue.md too (Seams of `08-worldgen-and-gen-worker.md`):
+Consumed by M08b too (Seams of `08-worldgen-and-gen-worker.md`):
 the worldgen fixture for gen workers and the client pristine-cache feed.
 
 ## Golden

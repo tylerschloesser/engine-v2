@@ -1,4 +1,4 @@
-// `connected-paced.html`'s tests (docs/plan/15b-ring-connection-and-replica-rendering.md,
+// `connected-paced.html`'s tests (M15b,
 // Orchestrator ruling 3): the ADR 0030 `AtomicsTimer.poll()` fix, landed inert in steps 1-3 and
 // made live by this milestone's own step 4 (a linked client's uplink push is the first thing that
 // ever wakes the sim worker from outside its own pacing timer). "A correctness fix nothing
@@ -6,7 +6,7 @@
 // fails if `worker/sim.ts`'s `wokenBy === lastWokenBy` comparison (or the fix it guards) is ever
 // removed. Chromium only: real-time pacing, not a GPU/renderer concern.
 //
-// docs/plan/15e-paced-tick-measurement.md: `SimHostCounters.ticksRun` is cumulative from
+// M15e: `SimHostCounters.ticksRun` is cumulative from
 // `simHost.start()` (called at the end of `worker/sim.ts`'s own `setup()`), not reset per read, so
 // the assertion below is over the *delta* between a reading taken right before the poke and one
 // taken right after -- the ticks the sim ran during the poke window -- not the lifetime total,
@@ -24,7 +24,7 @@ declare global {
   }
 }
 
-// docs/plan/13-sim-host-tick-loop.md / `server.ts`: `fx-puts`'s own `TICK_RATE` is the trait
+// M13 / `server.ts`: `fx-puts`'s own `TICK_RATE` is the trait
 // default (20 Hz), so a well-paced window ticks about once every 50 ms.
 const TICK_MS = 50
 
@@ -62,7 +62,7 @@ test('poll_skips_a_spurious_tick_on_a_ring_wake', async ({ page }) => {
   expect(ticksRun).toBeLessThan(expectedTicks * 1.35)
 })
 
-// docs/plan/16d-sim-pacing-under-external-wakes.md, step 1: a producer waking the sim worker more
+// M16d, step 1: a producer waking the sim worker more
 // often than once per tick interval (a linked client's uplink every frame, later presence and
 // actions) must not starve its pacing timer. `__wakeSimFor` wakes `WORKER_HOST` directly at ~60 Hz
 // -- three wakes per 50 ms tick -- and records the sim's own `ticksRun` (`CB_SIM_TICKS_RUN`,

@@ -1,4 +1,4 @@
-// `pnpm acceptance:check` (docs/plan/39-acceptance.md, "Evidence check, mechanical"): reads the
+// `pnpm acceptance:check` (M39, "Evidence check, mechanical"): reads the
 // coverage tables in docs/plan/acceptance/ (format: that directory's README.md) and fails, one
 // line per problem (`file:line  reason`), when
 //   (a) a `test: <suite> "<title>"` entry names a title that is not a real, not-skipped test in

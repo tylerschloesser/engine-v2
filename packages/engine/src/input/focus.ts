@@ -1,5 +1,5 @@
 // Focus-loss reset (docs/decisions/0019-camera-input-and-overlay.md §4: "all key and pointer state
-// is cleared on `blur`, `visibilitychange` and `pointercancel`"; docs/plan/11-camera-and-input.md,
+// is cleared on `blur`, `visibilitychange` and `pointercancel`"; M11,
 // Order of work step 6, Non-scope of the 1-3 range: "Keyboard/pointer focus rules ... beyond
 // `pointercancel`'s own slot release, which `pointers.ts` already does"). `pointercancel` already
 // clears its own slot (`recordPointerUp`, `input/pointers.ts`); this file is the other two triggers,

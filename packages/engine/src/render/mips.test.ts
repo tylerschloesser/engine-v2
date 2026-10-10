@@ -1,4 +1,4 @@
-// `mipLevelCountFor` is pure (docs/plan/09b-terrain-art-and-lifecycle.md Scope): the browser-only
+// `mipLevelCountFor` is pure (M09b Scope): the browser-only
 // `generateMips` itself needs a real `GPUDevice` and is exercised by `terrain-readback.spec.ts`'s
 // `terrain.minified_converges_to_mean` (Tests added).
 import { expect, test } from 'vitest'

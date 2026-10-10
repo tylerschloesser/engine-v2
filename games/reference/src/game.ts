@@ -1,4 +1,4 @@
-// `startGame` (docs/plan/20b-reference-player-and-collect-ui.md step 0): the reusable half of what
+// `startGame` (M20b step 0): the reusable half of what
 // was, through M20, a single `main.ts` -- device/renderer/art/client/camera-drive wiring shared by
 // the production entry (`main.ts`) and the test-only entry (`test-entry.ts`). Neither entry's own
 // diagnostic `window.__*` hooks live here: this file is imported by both and must stay free of
@@ -153,7 +153,7 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   // M20b step 3-4 (Scope: collect buttons, progress, cancel-on-pan-out, rejection flash, inventory
   // readout): wired here, not in each entry, so both `main.ts` and `test-entry.ts` get a working
   // collect UI from one place. `onUi`/`onActionResult` are polled by `client` itself on its own
-  // `Scheduler` (`docs/plan/16-action-round-trip.md`/`16b-ui-observation-and-clock.md`); no page
+  // `Scheduler` (`M16`/`16b-ui-observation-and-clock.md`); no page
   // wiring beyond subscribing here.
   const collectUi = createCollectUi(client)
   const inventoryUi = createInventoryUi(document.body)

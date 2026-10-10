@@ -1,4 +1,4 @@
-// `bench-build @slow` (docs/plan/36-slow-tier-and-benchmarks.md step 3): the reference game's `bench`
+// `bench-build @slow` (M36 step 3): the reference game's `bench`
 // feature, built through `buildGame({ features: ['bench'] })`. A separate directory and build hash;
 // a shipped build ignores the marker (the same world with or without `{ bench }`); the bench build
 // reaches `genesis` through the worldgen marker, builds the FULL save inside the default arena with

@@ -1,4 +1,4 @@
-// `tick-large-save node @slow` (docs/plan/36-slow-tier-and-benchmarks.md step 4, 0024 §14): the same
+// `tick-large-save node @slow` (M36 step 4, 0024 §14): the same
 // load as the native `slow_tick_large_save` (standard large save at full scale, eight clients with
 // maximum views, one `FurnaceTake` a second each) driven as `.wasm` through the real
 // `createWorldServer`, so the TS sim host, its fan-out and the WASM codegen show up somewhere.

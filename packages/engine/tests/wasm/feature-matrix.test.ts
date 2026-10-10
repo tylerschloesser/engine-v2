@@ -1,4 +1,4 @@
-// `feature-matrix @slow` (docs/plan/36b-suite-audit-and-measurements.md; M02's hand-over, 0002
+// `feature-matrix @slow` (M36b; M02's hand-over, 0002
 // Consequences): every golden (the `fx-hash` and `fx-worldgen` scenarios, the `fx-persist` log, the
 // reference game's full-game log) replayed on the reference game's and each fixture's `release`
 // module built (a) plain, (b) with `wasm-opt`, (c) with `+simd128`, under Node and under Bun. The

@@ -1,5 +1,5 @@
 // `presence-worker-path`: single-player page (`fx-presence`, real `SimHost.accept`ed connection),
-// no renderer (docs/plan/19-presence-channel.md step 6, Tests added). `PresenceClient::frame`
+// no renderer (M19 step 6, Tests added). `PresenceClient::frame`
 // writes a changing sample every client frame (`fixtures/presence/src/lib.rs`); this test proves
 // it reaches the sim worker's own `PresenceTable` (`uplinkPresenceBytes` > 0, bumped only on the
 // accepted-sample path, `ConnCounters::presence_bytes_up`'s own doc comment), stays within the

@@ -1,4 +1,4 @@
-//! Fixture game `fx-migrate-v2` (docs/plan/24b-upgrade-and-migration.md Scope): `SCHEMA_VERSION =
+//! Fixture game `fx-migrate-v2` (M24b Scope): `SCHEMA_VERSION =
 //! 2`, `TICK_RATE` the default 20Hz -- same tick rate as `fx-migrate-v1`, so a migration from it
 //! is a pure schema-version bump (`fx-migrate-v2-hz30` is the sibling that also changes the tick
 //! rate). The whole game is in `game.rs` (shared with `fx-migrate-v2-hz30` by `#[path]`, "three

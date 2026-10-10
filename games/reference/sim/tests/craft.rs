@@ -1,4 +1,4 @@
-//! Crafting rules (docs/plan/32-reference-crafting.md Tests added). `common::RefScenario` throughout.
+//! Crafting rules (M32 Tests added). `common::RefScenario` throughout.
 
 mod common;
 

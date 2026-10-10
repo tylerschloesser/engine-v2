@@ -1,4 +1,4 @@
-// `createLink` (docs/plan/28-sessions-and-reconnect.md Scope/Seams; docs/decisions/
+// `createLink` (M28 Scope/Seams; docs/decisions/
 // 0013-sessions-and-integrity.md "Client policy"): the one dead-timer/probe/backoff state machine
 // a client side keeps over a `Connection` (0009) -- pure TS over an injected `Clock`/`Scheduler`
 // (`../clock.js`, docs/decisions/0020 §8), so it is exactly as testable under a virtual clock as
@@ -107,7 +107,7 @@ export interface CreateLinkOptions {
    * one, the same role `net-harness.ts`'s own `linkIdx` plays for a test). */
   onUp(conn: Connection, gen: number): void
   /** Fires once per down transition (never twice in a row without an intervening `onUp`). `code`
-   * (docs/plan/29-net-worker-and-reference-server.md steps 1-2, Deviations: additive, so no
+   * (M29 steps 1-2, Deviations: additive, so no
    * existing caller has to change) is the raw `CloseEvent.code` when this transition came from a
    * real close (`'close'` and every terminal reason); absent for `'dead'` (the timer, not a close)
    * -- `net.ts`'s own `{ type: 'link', ... }` postMessage forwards it verbatim for a page's debug

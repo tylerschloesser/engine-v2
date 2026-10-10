@@ -1,4 +1,4 @@
-// The first-`Ui` spawn move's decision (docs/plan/33e-reference-first-ui-races.md), kept apart from
+// The first-`Ui` spawn move's decision (M33e, kept apart from
 // `game.ts` so a DOM-free test can call it.
 
 /** The camera fields a player can change: position and zoom. Not the viewport size, not velocity,

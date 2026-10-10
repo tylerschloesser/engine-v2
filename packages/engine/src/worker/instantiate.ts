@@ -1,5 +1,5 @@
 // Shared WASM setup for every kind that has an instance (`client`, `sim`, `gen`; not `net`):
-// docs/plan/06b-workers-and-spawn.md, Scope ("WASM kinds instantiate, call `engine_init(role)`,
+// M06b, Scope ("WASM kinds instantiate, call `engine_init(role)`,
 // reserve their arena, build views once") and Planning decisions ("Posted `Module` first, URL as
 // fallback"). Publishes `W_MEM_PAGES`/`W_MEM_GROWS` into the control block so main can read them by
 // polling shared memory, never a message (0015 §2: main never blocks).
@@ -20,7 +20,7 @@ export async function instantiateForSetup(
   return factory()
 }
 
-/** docs/plan/23-persistence-opfs-and-lifecycle.md step 3: `Persistence.open`'s own `newInstance: ()
+/** M23 step 3: `Persistence.open`'s own `newInstance: ()
  * => EngineInstance` needs a fresh instance per restore candidate (`loadLatest` tries the newest
  * snapshot, falling back to older ones on a bad CRC) -- the module is only ever compiled/fetched
  * once, here, and every call of the returned factory builds a new `EngineInstance` over it (the same

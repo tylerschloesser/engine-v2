@@ -1,4 +1,4 @@
-// `lifecycle` (docs/plan/28b-reconnect-and-lifecycle.md step 4, Tests added): the idle world --
+// `lifecycle` (M28b step 4, Tests added): the idle world --
 // ticking stops on the tick that applies the last `Disconnected`, the idle delay (`host/
 // lifecycle.ts`) pauses (snapshot + flush, `SimHost.pause()`) and calls `onIdle` exactly once, and
 // a `Hello` while paused resumes ticking before the handshake is consumed (0013 "A new connection

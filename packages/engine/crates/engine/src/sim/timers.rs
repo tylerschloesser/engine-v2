@@ -1,5 +1,5 @@
 //! The timer wheel (docs/decisions/0007-world-model.md §7: "a timer wheel keyed `(tick,
-//! EntityId)`"; docs/plan/21b-timers-wakeups-and-tickcx.md Scope "Timer wheel"): at most one timer
+//! EntityId)`"; M21b Scope "Timer wheel"): at most one timer
 //! per entity, `wake_at` replaces, `cancel_wake`/despawn removes, `next_due` pops entries with
 //! `tick <= now` in key order.
 //!
@@ -154,7 +154,7 @@ impl TimerWheel {
         self.by_entity.get(id)
     }
 
-    /// `Store::write_canonical`/`hash_state`: key order (docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// `Store::write_canonical`/`hash_state`: key order (M21b
     /// Scope "timers (key order)") -- the wheel's own bucket order, then each bucket's own sorted
     /// order, which together are exactly `(Tick, EntityId)` ascending.
     pub(crate) fn write_canonical(&self, sink: &mut impl ByteSink) {

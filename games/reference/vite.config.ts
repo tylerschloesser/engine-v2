@@ -5,7 +5,7 @@ import { engine } from 'engine/vite'
 import { defineConfig } from 'vite'
 import { servePreview, walkProxy } from '../../packages/engine/scripts/walk-preview-plugin.ts'
 
-// docs/plan/29-net-worker-and-reference-server.md Scope: `pnpm device:serve --app reference`
+// M29 Scope: `pnpm device:serve --app reference`
 // serves this app (instead of the fixture app) on the same port/tunnel/proxy shape `packages/
 // engine/tests/browser/pages/vite.config.ts` already has -- mirrored here rather than shared,
 // since the two are separate Vite apps in separate packages. `ENGINE_TEST_PORT` unset (every
@@ -20,7 +20,7 @@ const port = Number(process.env.ENGINE_TEST_PORT ?? 4173)
 // `assets/tiles.json` on disk is `fetch('/tiles.json')` at runtime, the same "public dir contents
 // at /" rule `tests/browser/pages/public/terrain/tiles.json` already uses (there, the directory is
 // literally named `public`; here it is named `assets` to match this brief's own Scope wording).
-// `vite build --mode bench` (M36, docs/plan/36-slow-tier-and-benchmarks.md step 6): the bench build.
+// `vite build --mode bench` (M36, M36 step 6): the bench build.
 // It compiles the sim with cargo feature `bench` (the standard large save, 0020 section 9), defines
 // `__BENCH__` so `main.ts` carries the `?bench=large-save` page and its HUD (`src/bench.ts`), and
 // writes to `dist-bench/`, never `dist/`. Every other mode defines `__BENCH__` false, so the bundle
@@ -88,7 +88,7 @@ function config(bench: boolean) {
     preview: {
       port,
       strictPort: true,
-      // `pnpm device:serve --tunnel --app reference` (docs/plan/03-browser-harness.md; docs/plan/
+      // `pnpm device:serve --tunnel --app reference` (M03; docs/plan/
       // 29-net-worker-and-reference-server.md): same "the tunnel's `Host` header is a random
       // `*.trycloudflare.com` subdomain" reasoning as the fixture app's own config.
       ...(process.env.ENGINE_DEVICE === '1' ? { allowedHosts: ['.trycloudflare.com'] } : {}),

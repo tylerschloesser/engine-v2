@@ -1,4 +1,4 @@
-// docs/plan/09-renderer-terrain.md, Tests added: "device.requests_compatibility_defaults" -- purely
+// M09, Tests added: "device.requests_compatibility_defaults" -- purely
 // static, no GPU needed: `ADAPTER_REQUEST`/`DEVICE_REQUEST` are module-level constants (0018 §7).
 import { expect, test } from 'vitest'
 import { ADAPTER_REQUEST, DEVICE_REQUEST } from './device.js'

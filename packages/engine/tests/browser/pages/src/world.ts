@@ -1,4 +1,4 @@
-// `world.html`'s script (docs/plan/23-persistence-opfs-and-lifecycle.md, Scope): a real
+// `world.html`'s script (M23, Scope): a real
 // `createClient()` single-player topology with persistence on (`host.persist`), fixture `puts` --
 // `?world=<id>` (default `device`). Reuses M16's `slice.html` HUD/Paint precedent (a plain HUD
 // element and a Paint button dispatching an action at a fixed world position -- no renderer: this
@@ -45,7 +45,7 @@ declare global {
     __worldBusy?: () => boolean
     __readyErrorCode?: () => string | undefined
     __storageStatuses?: () => StorageStatus[]
-    /** docs/plan/23-persistence-opfs-and-lifecycle.md step 5: `#export-btn`'s own stash (see the
+    /** M23 step 5: `#export-btn`'s own stash (see the
      * file-level comment above); a test reads this instead of intercepting a real download. */
     __lastExportedBytes?: () => number[] | undefined
     /** Direct, button-independent hooks (Seams parity): a test drives most of `export_import_
@@ -122,7 +122,7 @@ busyEl.textContent = 'WorldBusy: another tab already has this world open'
 busyEl.style.display = 'none'
 document.body.appendChild(busyEl)
 
-// docs/plan/23-persistence-opfs-and-lifecycle.md step 5, Scope: Export/Import/Delete controls.
+// M23 step 5, Scope: Export/Import/Delete controls.
 const exportBtn = document.createElement('button')
 exportBtn.id = 'export-btn'
 exportBtn.textContent = 'Export'
@@ -193,7 +193,7 @@ window.__dumpWorldStorage = (id) =>
     worker.postMessage({ worldId: id })
   })
 
-// docs/plan/23-persistence-opfs-and-lifecycle.md step 5: `export_works_after_load_failure`'s own
+// M23 step 5: `export_works_after_load_failure`'s own
 // setup hook (`world-corrupt-worker.ts`'s own doc comment has why this is safe between page loads).
 window.__corruptWorldKey = (worldId, key, bytes) =>
   new Promise((resolve, reject) => {
@@ -236,12 +236,12 @@ const storageStatuses: StorageStatus[] = []
 window.__storageStatuses = () => storageStatuses
 
 let worldBusy = false
-// docs/plan/23-persistence-opfs-and-lifecycle.md step 5 (Deviations, `'load-failed'`): distinct from
+// M23 step 5 (Deviations, `'load-failed'`): distinct from
 // `worldBusy` -- the sim worker stays alive and `client.exportWorld()`/`deleteWorld()` still work
 // (`export_works_after_load_failure`), but nothing else here should touch a world that never loaded
 // (paint, hash reads, `attachHostLifecycle`'s pause/resume), so every gate below reads `unusable`.
 let loadFailed = false
-// docs/plan/24b-upgrade-and-migration.md: `'load-failed'`'s own sibling for an identity/schema/
+// M24b: `'load-failed'`'s own sibling for an identity/schema/
 // tick-rate/worldgen/chunk-size mismatch that ends in `SaveIncompatible` (0005 Upgrades) -- the same
 // degraded-but-alive worker as `load-failed` (`exportWorld`/`deleteWorld` still work,
 // `save_incompatible_rejects_ready_and_export_still_works`), so it joins `unusable` the same way.
@@ -279,7 +279,7 @@ if (!unusable) {
   attachHostLifecycle(client, controllableDoc)
 }
 
-// docs/plan/23-persistence-opfs-and-lifecycle.md step 5: Export/Import/Delete, both as the real
+// M23 step 5: Export/Import/Delete, both as the real
 // button wiring (Scope) and as direct test hooks (Seams parity, file-level comment above).
 let lastExportedBytes: number[] | undefined
 window.__lastExportedBytes = () => lastExportedBytes
@@ -475,7 +475,7 @@ renderHud()
 window.__hudText = hudText
 window.__errors = () => []
 
-// --- `window.__check` (docs/plan/39f-device-auto-runner.md, step 7) -------------------------------------
+// --- `window.__check` (M39f, step 7) -------------------------------------
 // `hash`/`tick` are the HUD's own discrete readings (page load, a Paint through `act.paint` or the button);
 // `act.read` takes a fresh one (the same park/resume round trip `__worldHashAndTick` makes).
 check.errors = () => []

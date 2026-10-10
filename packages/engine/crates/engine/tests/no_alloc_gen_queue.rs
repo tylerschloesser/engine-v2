@@ -3,7 +3,7 @@
 //! crate's own lib test binary, which installs none). `GenQueue`'s own storage never grows past its
 //! preallocated capacity (docs/decisions/0008-chunk-generation.md §4 "a preallocated array of a few
 //! hundred entries"): a realistic pan sequence (repeated `set_view`/`take`/`complete`) allocates
-//! zero bytes beyond warm-up (`docs/plan/08b-gen-workers-and-queue.md` Deviations: this test lives
+//! zero bytes beyond warm-up (`M08b` Deviations: this test lives
 //! here, not inline in `gen_queue.rs`, because only a dedicated binary's global allocator is
 //! actually counted).
 

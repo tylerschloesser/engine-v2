@@ -1,4 +1,4 @@
-//! The client's own wall-clock estimation (docs/plan/26-prediction-rendering-and-clocks.md
+//! The client's own wall-clock estimation (M26
 //! Planning decisions: "`HostClock` lives here, not in M30"): [`HostClock`] turns a stream of
 //! `(tick, arrived_ms)` samples into a smooth, monotone estimate of "what tick is it *right now*"
 //! even between frames (0010: idle ticks send nothing, so a clock that only stepped on frames

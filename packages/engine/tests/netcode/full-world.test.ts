@@ -1,4 +1,4 @@
-// M39d (docs/plan/39d-full-world-reconnect.md): at the default `maxPlayers` (8 = `MAX_CONNS`) a
+// M39d ( at the default `maxPlayers` (8 = `MAX_CONNS`) a
 // player whose socket died silently and who redials with its secret before the 3 s dead timer is
 // admitted, superseding the old connection (0013). The harness's `connectRaw` calls the production
 // `accept` directly; an adapter's `catch { close(CloseCode.Full) }` is what a throw becomes.

@@ -1,4 +1,4 @@
-//! [`HostClock`] v1 (docs/plan/26-prediction-rendering-and-clocks.md Planning decisions):
+//! [`HostClock`] v1 (M26 Planning decisions):
 //! "offset sample per arriving frame (`tick × tick_ms − arrived_ms`), estimate = maximum over a
 //! 2 s window (late arrivals only lower a sample), slewed with the dilation limit of 0010, never
 //! stepped except by `rebase()`". Fed once per client-worker wake with the *current* authoritative

@@ -2,7 +2,7 @@
 //! check", docs/decisions/0023-action-growth-declaration.md "The check"): run from
 //! [`crate::sim::Sim::step`], immediately before `Game::apply`, for game actions only -- never for
 //! `on_player`, `genesis`, `migrate` or tick rules (0023: "the budget is soft by that margin").
-//! **Deterministic-core-resident, not host-role-resident** (docs/plan/21-entities-and-timers.md
+//! **Deterministic-core-resident, not host-role-resident** (M21
 //! Deviations): `Sim::step` runs identically live, in replay and in recovery, with no `Host<G>` in
 //! the loop at all (`testkit::run_script`, `fx-puts`'s own replay tests), and crate `CLAUDE.md`'s
 //! own layering rule (`tests/module_layering.rs`) forbids the deterministic core from importing

@@ -1,4 +1,4 @@
-// `client`-kind worker body (docs/plan/06b-workers-and-spawn.md, Scope): instantiate, reserve the
+// `client`-kind worker body (M06b, Scope): instantiate, reserve the
 // arena, copy the camera block into its `Camera` region and call `frame(t_ms)` when `CB_FRAME_REQ`
 // has advanced since the last wake, storing `W_ACK` (Planning decisions "Worker frame clock",
 // amended: see `FRAME_ARG` below). `test.echo` additionally drives the `echo` zero-GC page's SAB ->
@@ -41,7 +41,7 @@ import { asNumberList, injectTrap } from './test-trap.js'
 
 /**
  * The *raw export argument* of `frame(t_ms: f64)` is a vestigial Smi, not the frame time (Planning
- * decisions "Worker frame clock" amended, fix round 2: docs/plan/06b-workers-and-spawn.md,
+ * decisions "Worker frame clock" amended, fix round 2: M06b,
  * Deviations). The game-facing `Instance::frame(t_ms, ...)` still receives the real frame time:
  * decision A of fix round 3 has `abi::frame` (`crates/engine/src/abi/mod.rs`) drop this argument on
  * the floor and pass `camera.frame_time_ms` instead, and `workers.camera_block_reaches_wasm` holds
@@ -63,7 +63,7 @@ function requireRegion(inst: EngineInstance, id: RegionId, what: string): Region
   return r
 }
 
-/** One client instance and every pump built over it (docs/plan/37-robustness-events.md step 1):
+/** One client instance and every pump built over it (M37 step 1):
  * `setup` builds one, and builds a fresh one over a fresh instance when the first traps (0014 §6).
  * Nothing here outlives its instance: the pumps close over `inst`, the regions and the ring
  * endpoints (the rings themselves live in the SABs, so a new endpoint continues where the old one
@@ -95,7 +95,7 @@ function assemble(
 ): Assembly {
   // A debugging/test convenience only, gated the same way as `worker.ts`'s own globals
   // (orchestrator decision 1): lets a Playwright test read the client instance's own memory
-  // directly through `worker.evaluate()` (docs/plan/06b-workers-and-spawn.md, Tests added,
+  // directly through `worker.evaluate()` (M06b, Tests added,
   // `workers.camera_block_reaches_wasm`) instead of inventing a message type for it.
   if (message.test) {
     ;(self as unknown as { __engineInstance?: EngineInstance }).__engineInstance = inst
@@ -114,7 +114,7 @@ function assemble(
   const rx = echo ? requireRegion(inst, RegionId.Rx, 'Rx') : null
   const tx = echo ? requireRegion(inst, RegionId.Tx, 'Tx') : null
 
-  // docs/plan/16-action-round-trip.md, step 3: the real action/UI-result pump, mutually exclusive
+  // M16, step 3: the real action/UI-result pump, mutually exclusive
   // with the `echo`-gated test-only round trip immediately above (both would otherwise construct
   // their own, independent `RingConsumer`/`RingProducer` over the *same* `actionRing`/`uiRing`
   // SABs, corrupting each other's SPSC bookkeeping). `Rx`/`Ui` are looked up unconditionally
@@ -130,14 +130,14 @@ function assemble(
         inst.region(RegionId.Ui),
       )
 
-  // docs/plan/16-action-round-trip.md ("`tick_hz()` already exists as an export, so
+  // M16 ("`tick_hz()` already exists as an export, so
   // `ticks_per_second` need not be re-plumbed per frame"): read once here, at setup, from this
   // instance's own role -- broadened from a sim-only export (`abi::tick_hz`'s own Deviations) --
   // and handed to `createNetPump` below, which mirrors it into the clock block unchanged on every
   // write rather than calling this export again every wake.
   const ticksPerSecond = inst.call0(inst.x.tick_hz)
 
-  // docs/plan/08b-gen-workers-and-queue.md, Order of work 4: the gen pump, built once and run every
+  // M08b, Order of work 4: the gen pump, built once and run every
   // wake (orchestrator decision: it must cost nothing and answer 0 on a page whose client role has
   // no `client::TerrainFeed`, e.g. `fx-hash`'s `topology`/`echo`). `GenIn` is optional: absent
   // there, present wherever `Instance::init` declares it (`TerrainFeed::gen_in_bytes`).
@@ -147,33 +147,33 @@ function assemble(
     shell.fatal(msg),
   )
 
-  // docs/plan/09-renderer-terrain.md, Order of work 5: the upload-staging pump, built once and run
+  // M09, Order of work 5: the upload-staging pump, built once and run
   // every wake, same shape as `genPump` above (`ChunkTexels` is optional: `null` on a client role
   // with no `client::Uploader`, e.g. `fx-hash`'s `topology`/`echo`/`gen` pages).
   const chunkTexels = inst.region(RegionId.ChunkTexels)
   const uploadPump = createUploadPump(inst, message.sabs.uploadRing, chunkTexels)
 
-  // docs/plan/17-drawlist-and-sprites.md, step 3: the DrawList publish pump, built once.
+  // M17, step 3: the DrawList publish pump, built once.
   // `RegionId.DrawList` is optional, same shape as `chunkTexels`/`genIn` above: absent on a client
   // role with no `Game` (e.g. `fx-hash`'s `topology`/`echo` pages).
   const drawListRegion = inst.region(RegionId.DrawList)
   const drawlistPump = createDrawlistPump(inst, message.sabs.drawList, drawListRegion)
 
-  // docs/plan/11-camera-and-input.md, Order of work 5: the input-drain pump, built once and run
+  // M11, Order of work 5: the input-drain pump, built once and run
   // every wake, same shape as `genPump`/`uploadPump` above. `RegionId.Rx` is looked up
   // unconditionally, independent of the `echo`-only `rx` local above (`fixtures/hash`'s own `Rx`
   // is unrelated to input; the two never coexist on one instance today, Deviations).
   const inputRxRegion = inst.region(RegionId.Rx)
   const inputPump = createInputPump(inst, message.sabs.inputRing, inputRxRegion)
 
-  // docs/plan/15b-ring-connection-and-replica-rendering.md, step 4: the net pump, built only when
+  // M15b, step 4: the net pump, built only when
   // this topology is linked (`message.link`, Orchestrator ruling 1) and run every wake, same shape
   // as `genPump`/`uploadPump`/`inputPump` above -- unconditional, not gated behind `CB_FRAME_REQ`
   // the way `frame()` itself still is (Scope's per-wake order lists it alongside `frame(t_ms)`, but
   // draining the downlink and polling the uplink both have their own internal pacing/emptiness
   // checks, so running them on every wake, not only a real render frame's, is what keeps a linked
   // client caught up between renders too).
-  // docs/plan/28-sessions-and-reconnect.md step 5: a linked client worker now always speaks the
+  // M28 step 5: a linked client worker now always speaks the
   // real handshake (`Hello` first, `ready` means `Welcome` applied) -- single-player takes the
   // same path as a real connection would (Scope). `onAttached` forwards Welcome's own view
   // clamps to the main thread (0019 §1's `setViewClamp`, which only main can call, `Client.camera`
@@ -194,13 +194,13 @@ function assemble(
         ticksPerSecond,
         {
           clock: systemClock,
-          // docs/plan/29-net-worker-and-reference-server.md steps 1-2: gates the first
+          // M29 steps 1-2: gates the first
           // `client_hello()` send on the net worker's own `CB_LINK_STATE` (`worker/client-net.ts`'s
           // own doc comment) -- absent for a `local` host, unchanged from before this milestone
           // (`exactOptionalPropertyTypes`: omitted, not `undefined`, when unset).
           ...(message.remoteLinked ? { remoteLinked: true as const } : {}),
           ...(opts.restart ? { restart: true as const } : {}),
-          // docs/plan/33f (ADR 0042): the one `Welcome` that configured this client's world.
+          // M33f (ADR 0042): the one `Welcome` that configured this client's world.
           // Once per instance (the wasm side reports it once), so this is not a steady-state
           // message: it carries the config main needs to spawn the gen workers late.
           onConfigured: () => {
@@ -229,7 +229,7 @@ function assemble(
           onWorldMismatch: () => {
             shell.fatal('WorldMismatch: a Welcome for a different world than this client joined')
           },
-          // docs/plan/37-robustness-events.md step 4: a new entry in the instance's desync report
+          // M37 step 4: a new entry in the instance's desync report
           // ring (M31b): one `client-desync` message per report, a rare event, so `client.onDesync`.
           onDesync: (report) => {
             shell.post({ type: 'client-desync', report })
@@ -243,7 +243,7 @@ function assemble(
             })
           },
         },
-        // docs/plan/28b-reconnect-and-lifecycle.md step 2: a second `Welcome` on this same linked
+        // M28b step 2: a second `Welcome` on this same linked
         // connection (a panic recovery or an upgrade bump, this milestone's own `resyncAll()`) --
         // `client-resyncing` is the same one-off "setup, fatal errors and lifecycle only"
         // notification `client-welcome` already is, forwarded to `Client.onResyncing` listeners.
@@ -257,7 +257,7 @@ function assemble(
   function body(): void {
     framedThisWake = false
     if (gcHook) applyGcHook(shell.control, shell.index)
-    // docs/plan/18-picking-and-overlay.md, gate round 1: `inputPump.pump()` must run *before*
+    // M18, gate round 1: `inputPump.pump()` must run *before*
     // `frame()`, in this same wake, not after it -- `game_instance.rs`'s `GameInstance::frame` now
     // reads `InputQueue` (`FrameCx::input()`) and clears it at the end of the same call, so an event
     // drained into the queue only *after* `frame()` already ran would sit unread until the *next*
@@ -269,7 +269,7 @@ function assemble(
     // this function reads `Rx` before overwriting it for its own, unrelated purpose (`actionPump`'s
     // own action-record decode, below) -- single-threaded, sequential, no concurrent readers.
     inputPump.pump()
-    // docs/plan/37b-device-loss.md (0018 §8): main rebuilt the renderer after a WebGPU device loss
+    // M37b (0018 §8): main rebuilt the renderer after a WebGPU device loss
     // and set `FLAG_RENDERER_RESET`. Consume it at this wake, before `frame()` and `uploadPump`:
     // every resident chunk and the indirection window are marked for re-upload, and the ring's byte
     // budget on main paces the refill like a join. One atomic load per wake, no allocation.
@@ -280,7 +280,7 @@ function assemble(
     const frameReq = Atomics.load(shell.control.words, CB_FRAME_REQ)
     if (frameReq !== lastFrameReq) {
       lastFrameReq = frameReq
-      // docs/plan/30-interpolation.md (0018 section 8): main set `FLAG_REBASE` on return from the
+      // M30 (0018 section 8): main set `FLAG_REBASE` on return from the
       // background. Consume it before this frame so the first frame after the return renders from
       // rebased clocks and empty interpolation buffers. One atomic load, no allocation.
       if ((Atomics.load(shell.control.words, CB_FLAGS) & FLAG_REBASE) !== 0) {
@@ -302,7 +302,7 @@ function assemble(
           inst.call1(inst.x.frame, FRAME_ARG)
         }
         framedThisWake = true
-        // docs/plan/17-drawlist-and-sprites.md Scope: "once per produced frame" (0018 §2) -- only
+        // M17 Scope: "once per produced frame" (0018 §2) -- only
         // after a real `frame()` call, never on a wake where `CB_FRAME_REQ` did not advance.
         if (gateDraw) {
           if (netPump?.hasFrame()) gateDraw = false
@@ -319,7 +319,7 @@ function assemble(
         uiRing.tryPush(tx.u8, tx.u8.length)
       }
     }
-    // `netPump` runs before `uploadPump` (docs/plan/15b-ring-connection-and-replica-rendering.md,
+    // `netPump` runs before `uploadPump` (M15b,
     // step 5): `on_frame` (inside `netPump.pump()`, when a downlink message arrived) enqueues any
     // dirty chunks straight into `Uploader`'s own pending queues, and this order stages them onto
     // the upload ring the very same wake, not one wake later -- `untilQuiescent`'s own "every ring
@@ -327,7 +327,7 @@ function assemble(
     // before `uploadPump` ever got a chance to try.
     //
     // `actionPump` also runs before `uploadPump` now, for the identical reason, one milestone
-    // later (docs/plan/26-prediction-rendering-and-clocks.md steps 4-6, found live by the browser
+    // later (M26 steps 4-6, found live by the browser
     // `prediction-no-flicker` test: a semantic pixel probe read the *pristine* colour for one
     // extra wake after dispatch, every time). `ClientCore::on_action` (inside `actionPump.pump()`)
     // calls `sync_overlay_dirty`/`mark_dirty` synchronously as part of predicting the just-

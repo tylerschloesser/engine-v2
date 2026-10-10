@@ -1,4 +1,4 @@
-// `pnpm device:walk --auto`'s Mac rows (docs/plan/39f-device-auto-runner.md step 14) end to end: a round of
+// `pnpm device:walk --auto`'s Mac rows (M39f step 14) end to end: a round of
 // only Mac rows (`client: 'both'`, no phone), the service opens each Mac browser tab itself through the
 // `openMac` hook (the CLI's is `open -a Safari|Firefox`), and a fake Mac (`fake-mac.mjs`) plays the person in a
 // Playwright browser: "safari" is WebKit in the webkit project and Chromium in the chromium project, Firefox is

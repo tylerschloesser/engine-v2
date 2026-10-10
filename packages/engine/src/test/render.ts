@@ -1,5 +1,5 @@
 // `engine/test`: renders one frame into a caller-supplied offscreen target and reads it back
-// (docs/plan/09-renderer-terrain.md Seams: `renderTo`/`readPixels`, `tileCentrePx`, `expectPixel`;
+// (M09 Seams: `renderTo`/`readPixels`, `tileCentrePx`, `expectPixel`;
 // docs/decisions/0020-testing-strategy.md §6's "semantic pixel probes" gate). Never imported by
 // production code; this file is step 2's own (Deviations), so `tileCentrePx`'s camera parameter is a
 // small structural type rather than an import of step 4's `render/terrain.ts`.
@@ -29,7 +29,7 @@ export type CameraFrame = {
 }
 
 /** Anything that can draw one frame into a target: `TerrainRenderer` today, a fuller
- * `frame-loop.ts`-owned renderer once M17 adds sprites (docs/plan/09-renderer-terrain.md
+ * `frame-loop.ts`-owned renderer once M17 adds sprites (M09
  * Deviations: the brief's `renderTo(client, ...)` names a "client" that doesn't exist in this
  * milestone's scope -- rendering is main-thread-only and no worker is involved in a hand-filled
  * probe scene, so this takes the renderer object directly instead). */
@@ -48,7 +48,7 @@ export type RenderTarget = {
   readonly format?: 'rgba8unorm' | 'bgra8unorm'
 }
 
-/** `readPixels`'s return shape (docs/plan/09-renderer-terrain.md Deviations: the brief says
+/** `readPixels`'s return shape (M09 Deviations: the brief says
  * `Promise<Uint8Array>`; `expectPixel`/`tileCentrePx` need the width to index a pixel, and there is
  * no separate place to carry it once the bytes leave the target, so this small struct carries it
  * instead of a bare buffer). */
@@ -75,7 +75,7 @@ const clientRenderers = new WeakMap<Client, TerrainRenderer>()
 const clientTargets = new WeakMap<Client, RenderTarget>()
 
 /** Pairs `client` with the `TerrainRenderer` a test built around it, so `renderTo(client, opts)`/
- * `readPixels(client)` need no renderer argument (docs/plan/09-renderer-terrain.md Seams,
+ * `readPixels(client)` need no renderer argument (M09 Seams,
  * Provides). Call once, before the first `renderTo(client, ...)`. */
 export function attachRenderer(client: Client, renderer: TerrainRenderer): void {
   clientRenderers.set(client, renderer)
@@ -343,7 +343,7 @@ export function uploadRecords(drain: Pick<UploadDrain, 'recordsTotal'>): number 
   return drain.recordsTotal()
 }
 
-// docs/plan/17-drawlist-and-sprites.md, `engine/test` (steps 4-6): pass-throughs for `render/
+// M17, `engine/test` (steps 4-6): pass-throughs for `render/
 // drawables.ts`'s own counters, same shape as `drawCalls`/`pageSlotsUsed` above.
 
 /** `engine/test`'s `instanceBytes` counter: cumulative bytes copied into the drawables instance

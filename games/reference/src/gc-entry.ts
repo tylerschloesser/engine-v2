@@ -1,4 +1,4 @@
-// `gc.html`'s script (docs/plan/20b-reference-player-and-collect-ui.md, zero-allocation exit
+// `gc.html`'s script (M20b, zero-allocation exit
 // criterion; `gc-test` skill "Production-topology pages", `gc-terrain.ts`'s own precedent): a real
 // `startGame` topology -- the exact device/renderer/collectUi/inventoryUi wiring `main.ts`/
 // `test-entry.ts` share -- driven through `asHarness` instead of a real frame loop, with two collect
@@ -145,7 +145,7 @@ for (let i = 0; i < 10; i++) {
   await nextAnimationFrame()
 }
 
-// M33 (docs/plan/33-reference-furnace.md Budgets): construction mode on for the whole measured run,
+// M33 (Budgets): construction mode on for the whole measured run,
 // so `RefClient::extract` emits the ghost and runs `can_place` over the `View` every frame. Emitted
 // and drained here, outside the measured window (a parked worker cannot drain a ring).
 client.input.emit(LOCAL.PLACE_MODE, 1)

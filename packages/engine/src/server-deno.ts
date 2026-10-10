@@ -1,5 +1,5 @@
 // `engine/server/deno`: the Deno adapter (docs/decisions/0009 "Targets": "Deno: adapter only,
-// best-effort"; docs/plan/35b-bun-and-deno-adapters.md). The twin of `server-bun.ts`:
+// best-effort"; M35b. The twin of `server-bun.ts`:
 // `denoHandler(server)` is the `(req) => Response` a game passes to `Deno.serve`, built on
 // `Deno.upgradeWebSocket`, which is declared below structurally so a consumer's `tsc` needs no Deno
 // lib types.

@@ -1,4 +1,4 @@
-// `deno-adapter @slow`'s Deno half (docs/plan/35b-bun-and-deno-adapters.md): `adapter-loopback.mjs`
+// `deno-adapter @slow`'s Deno half (M35b: `adapter-loopback.mjs`
 // -- the scenario `bun-leg.mjs` runs under Bun -- with `engine/server/deno` on `Deno.serve`, run by
 // `deno-adapter.test.ts` as `deno run --allow-read=... --allow-write=... --allow-net=127.0.0.1
 // deno-adapter.mjs <gameDir> <dataDir> <blockedDir>`. Prints one JSON line `{ ok, message }`.

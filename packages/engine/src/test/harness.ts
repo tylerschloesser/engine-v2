@@ -1,4 +1,4 @@
-// `engine/test`: the harness worker driver (docs/plan/03-browser-harness.md, Seams and Planning
+// `engine/test`: the harness worker driver (M03, Seams and Planning
 // decisions). Own module under `src/test/`, never imported by production code (0017 §2). Spawns one
 // dedicated harness worker per spec (pattern A shape, 0017 §3), drives it over a per-worker step
 // block (`step-block.ts`) plus `postMessage`.
@@ -22,7 +22,7 @@ export type HarnessWorkerSpec = {
   name: string
   role: Role
   config: InstanceConfig
-  /** M04 (docs/plan/04-zero-gc-harness.md, Seams): drives `coreTick`'s fixed-block SAB<->region
+  /** M04 ( Seams): drives `coreTick`'s fixed-block SAB<->region
    * copy every tick, instead of a bare `sim_tick`. */
   rxTx?: { rx: SharedArrayBuffer; tx: SharedArrayBuffer }
 }
@@ -30,7 +30,7 @@ export type HarnessWorkerSpec = {
 export interface Harness {
   readonly clock: ManualClock
   /** Names of every worker, in the order given to `createHarness` ('main' is reserved and never
-   * included: docs/plan/04-zero-gc-harness.md, Seams). */
+   * included: M04, Seams). */
   readonly workerNames: string[]
   /** Every sim-role worker runs one `sim_tick`; returns when all have acknowledged. Synchronous and
    * allocation-free once every target worker is resumed. */
@@ -54,7 +54,7 @@ export interface Harness {
   admit(worker: string, bytes: Uint8Array): Promise<Status>
   memoryBytes(): Promise<Record<string, number>>
   memGrows(): Promise<Record<string, number>>
-  /** M04: one tick by message round trip (docs/plan/04-zero-gc-harness.md, Seams, `post-message`
+  /** M04: one tick by message round trip (M04, Seams, `post-message`
    * negative control). Valid only for a worker excluded from `resume()` (never armed), so it is
    * reachable through its normal event loop. */
   messageTick(worker: string): Promise<void>
@@ -72,7 +72,7 @@ export interface Harness {
   dispose(): void
 }
 
-/** M18c (docs/plan/18c-stepping-hash-under-load.md): diagnostic only, so a `stepping.spec.ts` hash
+/** M18c ( diagnostic only, so a `stepping.spec.ts` hash
  * mismatch can explain itself instead of guessing -- deliberately not folded into `Harness` above
  * (Seams: this milestone provides nothing new there). `src/test/client.ts`'s `asHarness` (the
  * production-topology counterpart) does not implement this; only `createHarness`'s own harness
@@ -112,9 +112,9 @@ type WorkerHandle = {
   gcExposed: boolean
 }
 
-// M16f (docs/plan/16f-harness-waits-and-sibling-burst.md): every wait below now fails within a
+// M16f ( every wait below now fails within a
 // bound instead of hanging (M16e's own finding: `gc-loop clean` once hit a bare 30 s Playwright
-// timeout inside this file's `resume`/`park`, docs/plan/16e-park-timeout-diagnosis.md, Deviations
+// timeout inside this file's `resume`/`park`, M16e, Deviations
 // "Two natural occurrences"). `POLL_TIMEOUT_MS` matches the bound `src/test/client.ts`'s
 // `pollUntil` already uses; `awaitAck`'s spin keeps its own pre-existing `SPIN_LIMIT`
 // iteration-count bound unchanged (Non-scope) -- only its failure message gains detail. The failure
@@ -133,7 +133,7 @@ function now(): number {
 
 /** Per-worker state for a timeout's failure message, read only when a wait is about to fail.
  * `Yield` is the park flag (1 = a park was requested of this worker); `Waits` (M19b,
- * docs/plan/19b-sim-park-while-armed.md) is `armedLoop`'s own per-wait counter, read straight off
+ * M19b is `armedLoop`'s own per-wait counter, read straight off
  * the SAB the same way the other fields are -- a worker stuck in `Atomics.wait` cannot answer a
  * message, so this is the only way to see "stuck on its very first wait" versus "stuck after N". */
 type WorkerDiag = {
@@ -280,7 +280,7 @@ export async function createHarness(opts: {
   await Promise.all(opts.workers.map((spec) => setupWorker(spec, module, handles, errors)))
 
   const all = (): WorkerHandle[] => [...handles.values()]
-  // M04 (docs/plan/04-zero-gc-harness.md, measured): `stepAll` runs every tick/frame in the gc
+  // M04 ( measured): `stepAll` runs every tick/frame in the gc
   // suite's measured window; `byRole` used to be `all().filter(...)`, allocating two fresh arrays
   // per call (~250 B/frame of the gc-loop `main` budget, dominating it). Grouped once here instead
   // (.claude/rules/hot-paths.md, even though src/test/** is exempt from the rule itself: the
@@ -309,7 +309,7 @@ export async function createHarness(opts: {
     h.seq++
     Atomics.store(h.sab, StepBlockField.Op, op)
     Atomics.store(h.sab, StepBlockField.Req, h.seq)
-    // M19b step 3 (docs/plan/19b-sim-park-while-armed.md): `Wake`, not `Req`, is what `armedLoop`
+    // M19b step 3 (M19b: `Wake`, not `Req`, is what `armedLoop`
     // blocks on -- see `step-block.ts`'s own doc comment on that field for why `Req`'s own notify
     // was not enough on its own (it is, for a real step: the value always changes; the field exists
     // for `parkOne`, which cannot say the same). `signalWake` (gate round 1): the one shared
@@ -335,7 +335,7 @@ export async function createHarness(opts: {
   function stepAll(role: Role, op: number): void {
     const targets = byRole(role)
     // Index loops, not `for...of`: measured to avoid an iterator-protocol allocation V8 otherwise
-    // takes on this path (docs/plan/04-zero-gc-harness.md).
+    // takes on this path (M04.
     for (let i = 0; i < targets.length; i++) {
       const h = targets[i] as WorkerHandle
       if (!h.armed) throw new Error(`harness: worker '${h.name}' is not resumed`)
@@ -380,7 +380,7 @@ export async function createHarness(opts: {
   }
 
   /** Wakes a worker blocked in `Atomics.wait` without touching `Req`/`Ack`: keeps `Req === Ack`
-   * true across a park. M19b step 3 (docs/plan/19b-sim-park-while-armed.md): the notify targets
+   * true across a park. M19b step 3 (M19b: the notify targets
    * `Wake` (bumped, not just notified -- `step-block.ts`'s own doc comment on that field), the same
    * word `armedLoop` blocks on for a real step request, so this signal is self-healing regardless of
    * exactly when `armedLoop`'s own thread reaches its next `Atomics.wait` call. It used to notify

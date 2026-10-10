@@ -1,7 +1,7 @@
 //! `SegmentHeader` (0005 Formats: "A segment header carries the identity and names its base
 //! snapshot"): identity plus whether this segment starts from genesis or from a snapshot taken at
 //! a given tick -- the binary counterpart of `ManifestV1`'s own `base: 'genesis' | tick`
-//! (docs/plan/22-persistence-log-and-snapshots.md Planning decisions 3, TS/manifest side, M22b).
+//! (M22 Planning decisions 3, TS/manifest side, M22b).
 //! No trailing CRC of its own (unlike a frame or a snapshot): 0005 does not specify one, and a
 //! segment header that fails to parse is simply an unreadable segment, a case this milestone does
 //! not yet recover from (Non-scope: torn-frame truncation, segment rolling).

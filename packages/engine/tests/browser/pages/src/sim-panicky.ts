@@ -1,4 +1,4 @@
-// `sim-panicky.html`'s script (docs/plan/24-recovery-and-migration.md, Tests added:
+// `sim-panicky.html`'s script (M24, Tests added:
 // `sim_worker_recovers_from_panic`): a real `createClient()` single-player topology over
 // `fx-panicky`, persisted (`host.persist`, memory storage via `test.flags.noOpfs` -- OPFS itself is
 // `world.spec.ts`'s own territory, not this milestone's), real-time paced (`test.flags.pace`, this

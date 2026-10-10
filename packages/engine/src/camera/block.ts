@@ -1,6 +1,6 @@
 // The camera block (docs/decisions/0019-camera-input-and-overlay.md §1, Planning decisions "Camera-
 // block byte offsets"): a fixed 80-byte seqlock-guarded SAB record, `seq` at offset 0 doubling as
-// both the layout's own first field and the seqlock sequence word (docs/plan/06-sab-primitives-and-
+// both the layout's own first field and the seqlock sequence word (M06
 // workers.md, Scope). Written once per rAF by main; read by the client worker. Every view is built
 // once, in `CameraBlockView`'s constructor; `writeCameraBlock`/`readCameraBlockInto` run every frame
 // and allocate nothing (`sab.no_alloc_syntax`).
@@ -18,7 +18,7 @@ export const CAM_OFF_ZOOM_RATE = 44
 export const CAM_OFF_HALF_EXTENT_TILES = 48
 export const CAM_OFF_DPR = 56
 export const CAM_OFF_CURSOR_TILE = 64
-/** M17 (docs/plan/17-drawlist-and-sprites.md, steps 4-6 Deviations "`px_per_tile()` wired for
+/** M17 ( steps 4-6 Deviations "`px_per_tile()` wired for
  * real"): the real device-pixel viewport size, written by `frame-loop.ts`'s `tick()` each rAF from
  * `renderer.viewport.widthPx/heightPx` (post render-scale), right after `applyPending()` and before
  * `writeCameraAndWake()`. Fills bytes 72..80, already reserved (unused) since M06 -- `CAMERA_BLOCK_
@@ -143,7 +143,7 @@ export function writeCameraBlock(block: CameraBlockView, state: CameraState): vo
   Atomics.add(block.seqWord(), 0, 1) // end: even, published
 }
 
-/** Reader: copy-with-retry, up to 8 attempts (docs/plan/06-sab-primitives-and-workers.md, Planning
+/** Reader: copy-with-retry, up to 8 attempts (M06, Planning
  * decisions "Seqlock reader rule"). Returns false, leaving `dstU8` untouched, only if every retry
  * raced the writer. */
 export function readCameraBlockInto(

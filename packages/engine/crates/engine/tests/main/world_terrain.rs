@@ -216,7 +216,7 @@ fn set_tile_reports_change_and_count() {
     assert_eq!(s.modified_tiles(), 0);
 }
 
-/// M22's own bug fix (docs/plan/22-persistence-log-and-snapshots.md Deviations): `set_tile`
+/// M22's own bug fix (M22 Deviations): `set_tile`
 /// reverting a tile all the way back to its pristine value (`TileChange::Changed`, `modified_tiles`
 /// back to 0, `set_tile_reports_change_and_count` above already covers that much) used to leave a
 /// *present but empty* `ChunkOverlay` registered for that chunk forever (`Overlays::get_or_create`

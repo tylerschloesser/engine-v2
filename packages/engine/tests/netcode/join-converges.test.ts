@@ -1,4 +1,4 @@
-// `join-converges` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Tests added): K=4, a mix
+// `join-converges` (M27, Tests added): K=4, a mix
 // of actions, `assertConverged`. Every client's `ui()`-observable state (global scope: `motd`,
 // `global_ticks`) is asserted identical across all four, and `assertConverged()` (M27 gate round 1:
 // every connection, not just `connId 0` -- `HeadlessClient`'s own `myPlayerId` now threads each

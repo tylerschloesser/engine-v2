@@ -1,4 +1,4 @@
-// docs/plan/18-picking-and-overlay.md Order of work step 1: "pick.ts with unit tests on hand-built
+// M18 Order of work step 1: "pick.ts with unit tests on hand-built
 // slots" -- a header + body built by hand (no SAB, no client, no worker), exercising
 // `scanDrawListForPick` directly against the exact byte layout `render/drawables.ts`'s own
 // `packDrawKindLayerFlags` produces (0018 §2).

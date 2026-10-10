@@ -1,5 +1,5 @@
 //! The wake queue (docs/decisions/0007-world-model.md §7: "wake-ups are queued and applied at one
-//! fixed point in the tick"; docs/plan/21b-timers-wakeups-and-tickcx.md Scope "Wake queue"): two
+//! fixed point in the tick"; M21b Scope "Wake queue"): two
 //! lists, `now` (drained by `TickCx::next_woken` during `G::tick`) and `next` (every entity put
 //! made through `Authority` outside `G::tick`, plus `TickCx::wake`, appends here, deduplicated, in
 //! insertion order). The fixed point (`Authority::begin_tick`/`end_tick`) swaps `next` into `now`
@@ -65,7 +65,7 @@ impl WakeList {
     }
 }
 
-/// `now`/`next` (docs/plan/21b-timers-wakeups-and-tickcx.md Scope). `now` is deliberately never
+/// `now`/`next` (M21b Scope). `now` is deliberately never
 /// encoded: outside a `G::tick` call in progress it is always empty (`Authority::end_tick` clears
 /// it).
 #[derive(Default)]
@@ -86,7 +86,7 @@ impl WakeQueue {
     }
 
     /// Undoes a [`WakeQueue::push_next`] that turns out to belong to a rolled-back `apply` (the
-    /// undo journal, docs/plan/21b-timers-wakeups-and-tickcx.md Planning decisions).
+    /// undo journal, M21b Planning decisions).
     pub(crate) fn remove_next(&mut self, id: EntityId) -> bool {
         self.next.remove(id)
     }

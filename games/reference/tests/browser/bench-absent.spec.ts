@@ -1,4 +1,4 @@
-// `bench: a shipped build ignores ?bench=large-save @slow` (docs/plan/36-slow-tier-and-benchmarks.md
+// `bench: a shipped build ignores ?bench=large-save @slow` (M36
 // step 6): the bench page and its HUD exist only in the bench build (`vite build --mode bench`,
 // `__BENCH__`). The production `dist/` has no trace of it in any script, and the page it serves
 // shows no HUD and exposes no `window.__bench` when asked for `?bench=large-save`.

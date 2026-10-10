@@ -1,4 +1,4 @@
-// `epoch`/`resync` (docs/plan/28b-reconnect-and-lifecycle.md step 2, Tests added): coverage for the
+// `epoch`/`resync` (M28b step 2, Tests added): coverage for the
 // mechanism steps 1-2 land -- `SimHost.epoch`/`bumpEpoch()`/`resyncAll()`, `ManifestV1.epoch`
 // load/write-back on a real restart (`harness.restartServer()`), and the client side of a second
 // `Welcome` on an already-`Online` connection (`session_state` cycling through `Resyncing`, the

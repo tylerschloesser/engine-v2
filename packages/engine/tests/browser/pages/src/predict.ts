@@ -1,5 +1,5 @@
 // `predict.html`: a real, connected `createClient()` local topology over `fx-predict`
-// (docs/plan/26-prediction-rendering-and-clocks.md steps 4-6, `prediction-no-flicker`) -- the
+// (M26 steps 4-6, `prediction-no-flicker`) -- the
 // manual clock/renderer/GPU-readback wiring is `connected-terrain.ts`'s own (`overlay_tile_
 // reaches_screen`'s precedent): no `createRealFrameLoop`/viewport at all, since this page's own
 // tests drive everything through explicit `__predictAdvance`/`__predictRenderAndRead` calls, never a real
@@ -32,7 +32,7 @@ declare global {
   interface Window {
     __pageReady?: true
     __predictInit?: () => Promise<{ adapterInfo: unknown }>
-    /** `fx_predict::Action::Paint { tile, base }` (docs/plan/26-...md step 3): JSON-encodes and
+    /** `fx_predict::Action::Paint { tile, base }` (M26-...md step 3): JSON-encodes and
      * dispatches through the real, production `Client.dispatch` -- never a test backdoor. */
     __predictDispatchPaint?: (x: number, y: number, base: number) => number
     /** Moves the client's own camera *state* (never sent until the next `__predictAdvance`'s own

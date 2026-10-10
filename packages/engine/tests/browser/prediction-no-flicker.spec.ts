@@ -1,4 +1,4 @@
-// `prediction-no-flicker` (docs/plan/26-prediction-rendering-and-clocks.md, Tests added): a real,
+// `prediction-no-flicker` (M26, Tests added): a real,
 // connected `fx-predict` client (`predict.html`, `predict.ts`) dispatches `Paint` at a plain tile
 // well outside the world's water/resource patches. Stepped frames (`__predictAdvance`, `stepTick`
 // under the hood), never a wall-clock wait (must-knows). The property this pins is the brief's own
@@ -19,7 +19,7 @@ import { openPage } from './support/page.ts'
 declare global {
   interface Window {
     __predictInit?: () => Promise<{ adapterInfo: unknown }>
-    /** `fx_predict::Action::Paint { tile, base }` (docs/plan/26-...md step 3): JSON-encodes and
+    /** `fx_predict::Action::Paint { tile, base }` (M26-...md step 3): JSON-encodes and
      * dispatches through the real, production `Client.dispatch` -- never a test backdoor. */
     __predictDispatchPaint?: (x: number, y: number, base: number) => number
     /** Moves the client's own camera *state* (never sent until the next `__predictAdvance`'s own

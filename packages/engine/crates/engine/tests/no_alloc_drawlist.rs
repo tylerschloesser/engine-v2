@@ -1,5 +1,5 @@
 //! Own test binary (`no_alloc_ui.rs`'s own template, M15's "measured at two window lengths,
-//! asserted equal, not under a budget" shape -- docs/plan/17-drawlist-and-sprites.md's own
+//! asserted equal, not under a budget" shape -- M17's own
 //! Deviations ask). Proves the DrawList path (`begin_frame` -> `G::Client::extract` ->
 //! `sort_into`, all inside `frame()`) does not grow the WASM arena in steady state: the scratch
 //! list is reserved once at `DrawList::new()` (`CAPACITY` = 65,536) and `begin_frame` only ever

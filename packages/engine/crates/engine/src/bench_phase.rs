@@ -1,4 +1,4 @@
-//! Per-phase tick timing for the benchmark builds (docs/plan/39y-wasm-tick-cost.md step 2).
+//! Per-phase tick timing for the benchmark builds (M39y step 2).
 //! Compiled to nothing unless cargo feature `bench-phases` is on: `mark` is an empty
 //! `#[inline(always)]` function, so a release build has no counter, no import and no code here.
 //!

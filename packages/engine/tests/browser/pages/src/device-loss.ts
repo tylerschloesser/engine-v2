@@ -1,4 +1,4 @@
-// `device-loss.html` (docs/plan/37b-device-loss.md): the real-client host for `device-loss.spec.ts`.
+// `device-loss.html` (M37b: the real-client host for `device-loss.spec.ts`.
 // `fx-terrain` (Gen + Client roles) behind a `GpuHost`, one `createFrameLoop` driving the production
 // phase list over `gpu`, a manual clock and an offscreen `rgba8unorm` target (a pixel probe needs
 // that format; a real canvas would need the preferred one). Every step is stepped, never real rAF:

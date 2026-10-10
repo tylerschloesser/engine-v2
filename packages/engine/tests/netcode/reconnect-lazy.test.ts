@@ -1,4 +1,4 @@
-// M34c step 8 (docs/plan/34c-reference-scripted-multiplayer.md Deviations): `link(i).reconnect()` after
+// M34c step 8 (M34c Deviations): `link(i).reconnect()` after
 // an outage longer than the grace. The client's redial backoff has grown by then; the fresh end must
 // be accepted when the client dials it, not when `reconnect()` is called (the host closes an end that
 // sends no `Hello` within 5 s).

@@ -1,6 +1,6 @@
 //! Own test binary (mirrors `no_alloc_connection.rs`/`no_alloc_terrain.rs`: only a dedicated
 //! binary's `#[global_allocator]` is actually counted). Proves the constant-`Ui` path of
-//! docs/plan/16b-ui-observation-and-clock.md's `ui` call policy does not grow the WASM arena
+//! M16b's `ui` call policy does not grow the WASM arena
 //! (`.claude/rules/hot-paths.md`): `frame(t_ms)` runs `ClientSide::ui` every frame a host frame
 //! was applied, but a value that never differs from the one last emitted is never serialised again
 //! after the one real change (`Default` -> the constant value, on the very first call).
@@ -105,7 +105,7 @@ fn client_instance() -> GameInstance<NGame> {
 }
 
 /// One heartbeat frame (no sections) at `tick`: enough for `on_frame` to bump `ClientCore::
-/// mutations()` (docs/plan/16b-ui-observation-and-clock.md: "iff a frame mutated the replica since
+/// mutations()` (M16b: "iff a frame mutated the replica since
 /// the last call") without needing any real replicated state.
 fn heartbeat(tick: u32) -> Vec<u8> {
     let mut buf = [0u8; 32];

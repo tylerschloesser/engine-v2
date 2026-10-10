@@ -1,4 +1,4 @@
-// docs/plan/17-drawlist-and-sprites.md Tests added, `unit` suite.
+// M17 Tests added, `unit` suite.
 import { expect, test } from 'vitest'
 import { packDrawColor, packDrawKindLayerFlags, UBERQUAD_VERTEX_LAYOUT } from './drawables.js'
 import { UBERQUAD_WGSL } from './wgsl.generated.js'

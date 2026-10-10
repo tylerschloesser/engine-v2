@@ -1,4 +1,4 @@
-//! `Progress` (0005 "Panic recovery"; docs/plan/24-recovery-and-migration.md): a fixed 12-byte
+//! `Progress` (0005 "Panic recovery"; M24: a fixed 12-byte
 //! cursor `Host<G>` writes into `RegionId::Progress` before starting risky (game-authored or
 //! container-decode) work, so a *dead* instance's own linear memory still names exactly what it
 //! was doing when it trapped -- read by the host with no export call at all (`inst.region(id).u8`
@@ -74,7 +74,7 @@ impl ProgressCursor {
     }
 
     /// The inverse, for native tests (the TS side reads the same 12 bytes with its own
-    /// `DataView`/`inst.mem.u32`, docs/plan/24-recovery-and-migration.md Seams).
+    /// `DataView`/`inst.mem.u32`, M24 Seams).
     pub fn read(bytes: &[u8]) -> Option<Self> {
         let phase = Phase::from_u32(u32::from_le_bytes(bytes.get(0..4)?.try_into().ok()?))?;
         let tick = u32::from_le_bytes(bytes.get(4..8)?.try_into().ok()?);

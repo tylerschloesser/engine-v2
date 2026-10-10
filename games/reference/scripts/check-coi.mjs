@@ -1,4 +1,4 @@
-// `node games/reference/scripts/check-coi.mjs <url>` (docs/plan/38-hosting-checks.md, Scope B): asserts
+// `node games/reference/scripts/check-coi.mjs <url>` (M38, Scope B): asserts
 // the two cross-origin isolation headers, with the exact values of 0015 section 3, on a deployed
 // page's `/`, its hashed worker script, its `.wasm`, one image and a 404. Exits 0 when every response
 // carries both, 1 with one line per miss. Plain Node, no dependencies.

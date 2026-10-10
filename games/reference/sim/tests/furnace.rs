@@ -1,4 +1,4 @@
-//! Furnace operation on the host (docs/plan/33b-reference-furnace-operation.md Tests added): deposit,
+//! Furnace operation on the host (M33b Tests added): deposit,
 //! take, pick-up and the smelting rule. The prediction and two-player-replica cases are in
 //! `furnace_predict.rs`.
 

@@ -1,4 +1,4 @@
-// `connected-paced.html`'s script (docs/plan/15b-ring-connection-and-replica-rendering.md,
+// `connected-paced.html`'s script (M15b,
 // Orchestrator ruling 3): `connected.html`'s own topology (fx-puts, `host.connect: true`), but
 // `test.flags.pace = true` arms the sim worker's real-time pacing (`simHost.start()` via `onFire`/
 // `AtomicsTimer`, `worker/sim.ts`) instead of driving every tick through `CB_SIM_STEP_REQ` -- the
@@ -11,7 +11,7 @@
 // real-time pacing paces against, so the two interleave the way a real single-player session's
 // would.
 //
-// `__simCounters` is called twice by the spec (docs/plan/15e-paced-tick-measurement.md), once
+// `__simCounters` is called twice by the spec (M15e, once
 // before `__pokeFor` and once after: `SimHostCounters.ticksRun` is cumulative from
 // `simHost.start()` (called at the end of `worker/sim.ts`'s own `setup()`), not reset per call, so
 // the spec asserts on the *delta* between the two readings -- the ticks that ran during the poke
@@ -43,7 +43,7 @@ declare global {
     /** Wakes the sim worker directly (`ControlBlock.wake(WORKER_HOST)`, the call every external
      * producer makes) every `intervalMs` for `ms` real milliseconds, with nothing else driving the
      * page, and records `CB_SIM_TICKS_RUN` (the sim's own `ticksRun`, readable without parking) at
-     * every wake. docs/plan/16d-sim-pacing-under-external-wakes.md, step 1. */
+     * every wake. M16d, step 1. */
     __wakeSimFor?: (ms: number, intervalMs: number) => Promise<{ t: number[]; ticks: number[] }>
   }
 }

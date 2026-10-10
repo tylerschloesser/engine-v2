@@ -1,4 +1,4 @@
-//! `golden_replay` (docs/plan/34b-reference-scripted-single-player.md Tests added): the full-game
+//! `golden_replay` (M34b Tests added): the full-game
 //! golden log (`games/reference/tests/golden/full-game.log`, recorded by `pnpm --filter reference
 //! golden:record` from the `.wasm` run, 0002 section 1) replayed natively with `engine::testing::
 //! replay`; every checkpoint hash in `full-game.json` must match, and a mismatch names the first
@@ -97,7 +97,7 @@ fn golden_replay_reports_the_first_divergent_tick() {
     assert!(message.contains("first divergent tick"), "{message}");
 }
 
-/// Heavy mode at N = 1 (0002 "Heavy mode", 0020 section 5; docs/plan/36-slow-tier-and-benchmarks.md):
+/// Heavy mode at N = 1 (0002 "Heavy mode", 0020 section 5; M36:
 /// every tick of the full-game golden log, snapshot and restore into a fresh `Sim`, same hashes as
 /// the uninterrupted run. The `.wasm` twin is `heavy-n1 all logs @slow`.
 #[test]

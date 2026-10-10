@@ -1,4 +1,4 @@
-//! `texel_upload_only_on_change` (docs/plan/26-prediction-rendering-and-clocks.md step 3):
+//! `texel_upload_only_on_change` (M26 step 3):
 //! `testing::testkit::Loopback::drain_and_stage` drains a real `ClientCore`'s own dirty queue
 //! into a real `Uploader`, then stages through the real, overlay-aware `Uploader::stage_predicted`
 //! -- not a reimplementation. `Fixability`: see `render.rs`'s own inject-fail-revert convention;

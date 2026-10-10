@@ -1,5 +1,5 @@
 // `drawables.html`: the readback probe scene host for `draw.*.spec.ts`/`sprite.*.spec.ts` (docs/plan/
-// 17-drawlist-and-sprites.md Tests added; docs/plan/17b-sprites-and-frame-budget.md Tests added:
+// 17-drawlist-and-sprites.md Tests added; M17b Tests added:
 // `loadSprites()` fetches the real `/drawables/sprites.json` fixture, `scripts/gen-sprite-art.mjs`'s
 // own output). Scenes hand-fill the DrawList header/body directly through `window.__drawables.
 // acquireFromBytes` (no worker, no ABI instance, no SAB triple buffer -- the real production path,

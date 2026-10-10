@@ -1,4 +1,4 @@
-// docs/plan/06b-workers-and-spawn.md, Tests added: `arena.sum_rule`. A pure check (no `Worker`,
+// M06b, Tests added: `arena.sum_rule`. A pure check (no `Worker`,
 // `fetch` or cross-origin isolation needed): `checkArenaBudget` throws only when the chosen
 // topology's arenas sum past `arenaBudgetBytes()` (0015 §5).
 import { expect, test } from 'vitest'

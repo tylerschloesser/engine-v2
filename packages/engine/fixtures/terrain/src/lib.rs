@@ -1,9 +1,9 @@
-//! Fixture game `fx-terrain` (docs/plan/09-renderer-terrain.md, step 5): the whole worker -> ring
+//! Fixture game `fx-terrain` (M09, step 5): the whole worker -> ring
 //! -> drain data path, real gen workers included, instead of steps 2-4's hand-filled renderer
 //! textures. `Gen` role: a trivial, deterministic `Worldgen` (not real worldgen -- this fixture
 //! exists to prove the data path, not to generate interesting terrain). `Client` role: a
 //! `TerrainStore` over `Pristine<FixtureTerrain>`, the `TerrainFeed` that turns cache misses into
-//! `genRequest`/`genResult` traffic (docs/plan/08b-gen-workers-and-queue.md), and the `Uploader`
+//! `genRequest`/`genResult` traffic (M08b, and the `Uploader`
 //! that turns residency into upload-ring records (this milestone).
 //!
 //! Base/resource layer ids are used directly as visual ids: `ClientSide`'s default identity table
@@ -23,14 +23,14 @@ use engine::world::{
 };
 use engine::worldgen::{GenCore, Pristine, Worldgen};
 
-/// Matches `worker/client-upload.ts`'s own `UPLOAD_BATCH_MAX` (docs/plan/09-renderer-terrain.md
+/// Matches `worker/client-upload.ts`'s own `UPLOAD_BATCH_MAX` (M09
 /// Planning decisions: "`upload_stage` is called with `min(ring free slots, 16)`") -- the
 /// `ChunkTexels` region must hold whatever the worker might ever request in one call.
 const MAX_STAGE_BATCH: u32 = 16;
 const CLIENT_CACHE_CHUNKS: u32 = 1024;
 const EDGE: i32 = 32;
 
-/// `RegionId::Rx`'s size for input (docs/plan/11-camera-and-input.md, Order of work 5): whatever
+/// `RegionId::Rx`'s size for input (M11, Order of work 5): whatever
 /// the client worker's own input-drain pump might hand `on_input` in one call is bounded by
 /// `InputQueue::CAPACITY` whole records (`worker/client-input.ts`'s own per-wake batch is bounded
 /// by this region's length), so that is exactly what `Rx` needs to hold.
@@ -68,7 +68,7 @@ impl Worldgen for FixtureTerrain {
     type Params = FixtureParams;
     const WORLDGEN_VERSION: u32 = 1;
 
-    /// Deterministic, not real worldgen (docs/plan/09-renderer-terrain.md Deviations "Steps 5-7"):
+    /// Deterministic, not real worldgen (M09 Deviations "Steps 5-7"):
     /// chunk (0, 0) is grass with one ore tile at local index 5; chunk (1, 0) is water; every other
     /// chunk is void (`Tile::VOID`, never probed by a pixel assertion).
     fn generate(_seed: u64, _params: &FixtureParams, chunk: ChunkCoord, out: &mut [Tile]) {
@@ -90,7 +90,7 @@ impl Worldgen for FixtureTerrain {
 }
 
 /// A trivial `Game`, named only so `Vis: ClientSide<G>` below has a concrete `G: Game` to satisfy
-/// `Uploader`'s bound (docs/plan/12-store-and-game-trait.md Scope: `ClientSide<G: Game>` replaces
+/// `Uploader`'s bound (M12 Scope: `ClientSide<G: Game>` replaces
 /// M09's unbounded, defaulted `G`). This fixture implements no `Sim` role (`Role::Sim` is rejected
 /// in `Instance::init` below), so none of `NoGame`'s required methods is ever called; `Worldgen`
 /// reuses `FixtureTerrain`'s own impl above rather than duplicating it.
@@ -144,7 +144,7 @@ impl ClientSide<NoGame> for Vis {}
 struct Config {
     #[serde(default = "default_gen_workers")]
     gen_workers: u32,
-    /// Open gate failures items 3/4, gate round 1 (docs/plan/09-renderer-terrain.md Deviations
+    /// Open gate failures items 3/4, gate round 1 (M09 Deviations
     /// "Gate fix round 1"): overrides `CLIENT_CACHE_CHUNKS` through `ClientOptions.test.game`
     /// (`{ clientCacheChunks: N }`) so a caller can force continuous eviction/slot-reuse with a
     /// small pan, without shrinking the default every other real-client test relies on.
@@ -222,7 +222,7 @@ impl Instance for FixtureTerrain {
             } => {
                 feed.on_frame(camera, terrain);
                 uploader.on_frame(camera, terrain);
-                // docs/plan/11-camera-and-input.md Seams originally had this fixture clear
+                // M11 Seams originally had this fixture clear
                 // `InputQueue` here, unconditionally, every call ("cleared at the end of each
                 // `frame`") -- harmless while nothing read the queue's contents from anywhere near
                 // `frame()` (`FrameCx::input` was M18, Non-scope at the time). docs/plan/
@@ -304,7 +304,7 @@ impl Instance for FixtureTerrain {
         }
     }
 
-    /// docs/plan/37b-device-loss.md: the client worker's answer to `FLAG_RENDERER_RESET`.
+    /// M37b: the client worker's answer to `FLAG_RENDERER_RESET`.
     fn upload_requeue_all(&mut self) -> Status {
         match &mut self.role {
             FixtureRole::Client {
@@ -317,7 +317,7 @@ impl Instance for FixtureTerrain {
         }
     }
 
-    /// This range's own test export (docs/plan/11-camera-and-input.md, browser `input: events
+    /// This range's own test export (M11, browser `input: events
     /// reach wasm`): decodes `rx` into the queue, then writes the queue's own length (`u32`) and
     /// its last event's tile (`i32` x2) into `result[0..12)` -- whatever `on_input` ran last owns
     /// `Result`'s content, same idiom as `gen_take`/`client_gen_stats`.

@@ -1,8 +1,8 @@
-// The write side of 0005 Persistence (docs/plan/22-persistence-log-and-snapshots.md steps 4-6):
+// The write side of 0005 Persistence (M22 steps 4-6):
 // creates a fresh world (manifest + segment 0), the write-ahead `appendFrame` `SimHost.logSink`
 // points at, the `sync`/snapshot cadence (0005 Cadence) driven from `afterTick`, and `flush()`.
 //
-// docs/plan/22b-persistence-load-and-fs.md adds the load side: `Persistence.open` (create-or-load,
+// M22b adds the load side: `Persistence.open` (create-or-load,
 // recovery from whatever a crash left) and `Persistence.loadLatest` (the snapshot + tail-replay
 // step on its own, a static helper rather than an instance method -- at the point it runs there is
 // no live `Persistence` yet for `open`'s own "no manifest" branch to have skipped past). Segment
@@ -33,9 +33,9 @@ const SNAPSHOT_EVERY_TICKS = 1200
  * periodic snapshot is written; that snapshot becomes the new segment's base. */
 const SEGMENT_ROLL_BYTES = 4 * 1024 * 1024
 
-/** docs/plan/22b-persistence-load-and-fs.md Seams: the segment-roll option a test lowers to
+/** M22b Seams: the segment-roll option a test lowers to
  * exercise rolling without writing `SEGMENT_ROLL_BYTES` of log. `snapshotEveryTicks`
- * (docs/plan/23-persistence-opfs-and-lifecycle.md, coordinator fix round 1): the same idea for the
+ * (M23, coordinator fix round 1): the same idea for the
  * *snapshot* cadence -- a real, continuously-paced OPFS behavioural test needs several periodic
  * snapshots inside a `@slow`-free few seconds, far short of 1,200 real ticks at 20 Hz. */
 export interface PersistenceOptions {
@@ -71,9 +71,9 @@ export interface ManifestSegment {
 
 /** Planning decisions 3, verbatim shape: `{ v: 1, worldId, epoch: 0, params, created, segments }`.
  * `epoch` starts at `0` for a brand-new world and is owned and incremented by M28b
- * (`Persistence.epoch`/`bumpEpoch()`, below: docs/plan/28b-reconnect-and-lifecycle.md step 2 --
+ * (`Persistence.epoch`/`bumpEpoch()`, below: M28b step 2 --
  * "the epoch lives in the manifest, not the log"); `params` is `WorldConfig.params`, plus one
- * addition (docs/plan/24b-upgrade-and-migration.md Scope): `chunkBits`, the running build's own
+ * addition (M24b Scope): `chunkBits`, the running build's own
  * `G::CHUNK_BITS` (read through the `chunk_bits()` ABI export, never user-authored) at the moment
  * the world was created -- `params` is no longer *quite* verbatim `cfg.params`, since this one field
  * is engine-known, not caller-known (this milestone's own Deviations). */
@@ -86,7 +86,7 @@ export interface ManifestV1 {
   segments: ManifestSegment[]
 }
 
-/** docs/plan/22b-persistence-load-and-fs.md Seams: thrown by `Persistence.open`/`loadLatest` when
+/** M22b Seams: thrown by `Persistence.open`/`loadLatest` when
  * a stored world cannot simply be loaded. `identity`: reserved (M22b/M23's own placeholder;
  * superseded by `incompatible` below -- a build-hash difference alone no longer means this, since
  * M24b's upgrade path handles it). `corrupt`: every candidate snapshot (and, if segment 0 is all
@@ -94,7 +94,7 @@ export interface ManifestV1 {
  * version mismatch the engine cannot even attempt (nothing raises this yet: a version mismatch on a
  * single candidate snapshot is instead treated the same as `corrupt`, falling back to an older one,
  * since a *newer* running build can still read an *older* segment's own untouched history).
- * `incompatible` (docs/plan/24b-upgrade-and-migration.md): the upgrade path itself concluded
+ * `incompatible` (M24b: the upgrade path itself concluded
  * `SaveIncompatible` (`reason` names why: `Schema`/`TickRate`/`Worldgen`/`MigrateDeclined`/
  * `Container`/`Decode` from `sim_upgrade_end`, or `ChunkSize` raised here, before any ABI call, from
  * the manifest) -- every stored byte is guaranteed untouched (Planning decisions 7), and no
@@ -174,7 +174,7 @@ function decodeIdentity(bytes: Uint8Array): IdentityJson {
   }
 }
 
-/** docs/plan/24b-upgrade-and-migration.md: decodes a *snapshot candidate's own* identity straight
+/** M24b: decodes a *snapshot candidate's own* identity straight
  * from its raw container bytes (0005 Formats: `magic(4) | container_version u16 | varint(total_len)
  * | identity | ...`) -- the ground truth for "what build actually wrote this snapshot", since a
  * segment's own `ManifestSegment.identity` only ever recorded `manifest.created` before this
@@ -185,7 +185,7 @@ function parseSnapshotIdentity(bytes: Uint8Array): IdentityJson {
   return decodeIdentity(bytes.subarray(afterLen))
 }
 
-/** docs/plan/24b-upgrade-and-migration.md Scope: 0007 §3's own default ("CHUNK_BITS is 5 here"),
+/** M24b Scope: 0007 §3's own default ("CHUNK_BITS is 5 here"),
  * used only as the *stored* side's fallback when reading a manifest written before this milestone
  * (which never recorded `params.chunkBits` at all) -- the running side always reads the real value
  * back from the build itself, through `chunk_bits()`. */
@@ -255,7 +255,7 @@ export class Persistence {
 
   private readonly storage: Storage
   private readonly keys: WorldKeys
-  /** docs/plan/24-recovery-and-migration.md: not `readonly` any more -- `recover()` rebinds this
+  /** M24: not `readonly` any more -- `recover()` rebinds this
    * to the freshly recovered instance, since this class's own direct ABI calls (`sim_dirty`,
    * `sim_segment_header`, `sim_snapshot_*`) must never run against the dead instance recovery just
    * replaced (the same "read a dead instance is fine, call one is not" rule 0014 §6 states). */
@@ -271,7 +271,7 @@ export class Persistence {
 
   /** The currently open segment's index. `0` for a brand-new world; whatever `Persistence.open`'s
    * own load found (a restored snapshot's `logSegment`, or `0` for a genesis-based load) otherwise.
-   * Mutable since docs/plan/22b-persistence-load-and-fs.md step 3: segment rolling changes it. */
+   * Mutable since M22b step 3: segment rolling changes it. */
   private segment: number
   /** The host owns the log position (Planning decisions 4): every byte appended so far to
    * `keys.log(segment)`, header included. */
@@ -294,7 +294,7 @@ export class Persistence {
    * does (`sim_tick` returning a bad status, `sim_seal_frame` failing) -- the caller's own error
    * boundary is the same one either way. */
   private fatalError: unknown = undefined
-  /** docs/plan/37-robustness-events.md step 3: called once with the error `Storage.onError` reported.
+  /** M37 step 3: called once with the error `Storage.onError` reported.
    * `SimHost` sets it and raises its `onFatal`: a failed or lost write is fatal to the world (0005). */
   onStorageError: ((err: unknown) => void) | null = null
 
@@ -381,7 +381,7 @@ export class Persistence {
     return p
   }
 
-  /** docs/plan/22b-persistence-load-and-fs.md Seams: create-or-load. No stored manifest -> exactly
+  /** M22b Seams: create-or-load. No stored manifest -> exactly
    * `Persistence.create`'s own path (`outcome: 'created'`); a stored manifest -> `loadLatest` picks
    * the newest snapshot whose CRC verifies (falling back to older ones, then to a genesis replay of
    * segment 0 if none verify), replays the tail, truncates a torn one, and this wraps the result in
@@ -402,7 +402,7 @@ export class Persistence {
     outcome: 'created' | 'loaded' | 'recovered' | 'upgraded'
     tick: number
     truncatedBytes: number
-    /** docs/plan/24b-upgrade-and-migration.md: present only when `outcome === 'upgraded'` -- a
+    /** M24b: present only when `outcome === 'upgraded'` -- a
      * caller (`worker/sim.ts`, or a test) uses this to fire `SimHost.onRecovered` with
      * `reason: 'upgrade'` once (Deviations of M24's own `onRecovered`: "widen it to 'upgrade'"). */
     upgrade?: { reason: 'direct' | 'migrated'; droppedTailRecords: number }
@@ -469,7 +469,7 @@ export class Persistence {
     }
   }
 
-  /** docs/plan/22b-persistence-load-and-fs.md Seams: "the snapshot + tail step on its own, reused
+  /** M22b Seams: "the snapshot + tail step on its own, reused
    * by M24 after a trap". A `static` helper, not an instance method: at the point it runs (from
    * `Persistence.open`'s own "manifest exists" branch) there is no live `Persistence` yet to call it
    * on. M24 (re-instantiation after a trap, Non-scope here) would call this the same way, with a
@@ -493,7 +493,7 @@ export class Persistence {
     keys: WorldKeys,
     manifest: ManifestV1,
     newInstance: () => EngineInstance,
-    /** docs/plan/24-recovery-and-migration.md: called once, right before `sim_replay_begin`, with
+    /** M24: called once, right before `sim_replay_begin`, with
      * the segment this call is about to replay -- `recovery.ts`'s own retry loop has no other way
      * to learn which segment a replay-time trap happened in (`ProgressCursor.record` is the byte
      * *offset* within it, Seams, but never names the segment itself; `Host::sim_log_skip`'s own
@@ -510,7 +510,7 @@ export class Persistence {
     tick: number
     truncatedBytes: number
     outcome: 'loaded' | 'recovered' | 'upgraded'
-    /** docs/plan/24b-upgrade-and-migration.md: present only when `outcome === 'upgraded'`. `manifest`
+    /** M24b: present only when `outcome === 'upgraded'`. `manifest`
      * is already fully healed (0005 Consequences: a new segment was opened, Planning decisions 7) --
      * the caller uses it directly instead of `healManifest` (which would otherwise rewrite it again
      * from stale `manifest.created` identity). */
@@ -546,7 +546,7 @@ export class Persistence {
       if (usedInstance) inst = newInstance()
       usedInstance = true
 
-      // docs/plan/24b-upgrade-and-migration.md step 4: `sim_upgrade_*` replaces `sim_restore_*` --
+      // M24b step 4: `sim_upgrade_*` replaces `sim_restore_*` --
       // a candidate's own identity may legitimately differ from `runningIdentity` now; only
       // `sim_upgrade_end` (which alone has `persist::Identity::compare`'s verdict) knows whether
       // that is a direct load, a migration, or a genuine `SaveIncompatible`.
@@ -597,7 +597,7 @@ export class Persistence {
       const h = inst.call2(inst.x.sim_segment_header, 0, GENESIS_BASE_TICK)
       if (h < 0) throw new Error(`Persistence.loadLatest: sim_segment_header failed: status ${-h}`)
 
-      // Gate fix (docs/plan/24b-upgrade-and-migration.md: "known gap" in this milestone's own
+      // Gate fix (M24b: "known gap" in this milestone's own
       // Deviations): no snapshot candidate ever verified, but segment 0's own stored header still
       // carries a real identity -- check it, through the real `persist::Identity::compare`
       // (`compareStoredIdentity`, gate fix round 2: `sim_identity_compare`, since a TS-side copy of
@@ -655,7 +655,7 @@ export class Persistence {
       // decision 6: never replayed -- only counted, for the report/log.
       droppedTailRecords = scanRecordCount(inst, logSegment, tail)
     } else {
-      // docs/plan/24-recovery-and-migration.md: the scan pass runs once, over the whole tail,
+      // M24: the scan pass runs once, over the whole tail,
       // before the real apply pass below -- a `Skip` record's own target can live in an earlier
       // frame than the `Skip` record itself, so every frame must be seen before any of them is
       // safely applied.
@@ -735,7 +735,7 @@ export class Persistence {
     }
   }
 
-  /** docs/plan/22b-persistence-load-and-fs.md step 3: `loadLatest`'s own segment discovery (via
+  /** M22b step 3: `loadLatest`'s own segment discovery (via
    * `storage.list`/decoded snapshot bytes) never trusts `manifest.segments` -- proven by
    * `crash_before_manifest_rewrite_on_roll`, a crash between a roll's own log/snapshot writes and
    * its manifest rewrite. This is the self-heal: if the loaded segment is not the manifest's own
@@ -770,7 +770,7 @@ export class Persistence {
     return healed
   }
 
-  /** docs/plan/24-recovery-and-migration.md (0005 Panic recovery 2: "fresh instance, latest valid
+  /** M24 (0005 Panic recovery 2: "fresh instance, latest valid
    * snapshot, replay the log tail"): re-derives a fresh `Sim` from storage after a trap, reusing
    * `loadLatest` unchanged over this *live* Persistence's own `storage`/`keys`/`manifest` -- never
    * a second `Persistence.open`/`create` call, which would re-run world-creation checks pointlessly
@@ -795,7 +795,7 @@ export class Persistence {
       newInstance,
       onReplaySegment,
     )
-    // docs/plan/24b-upgrade-and-migration.md: a panic recovery is the same running build throughout
+    // M24b: a panic recovery is the same running build throughout
     // (never an upgrade scenario in practice, since `this.manifest` is this very build's own), but
     // `loadLatest` is shared -- `loaded.upgrade` already carries a fully-healed manifest when it is
     // ever present, exactly like `Persistence.open`'s own handling.
@@ -823,7 +823,7 @@ export class Persistence {
     }
   }
 
-  /** docs/plan/24-recovery-and-migration.md Planning decisions 1: "the host appends a `Skip
+  /** M24 Planning decisions 1: "the host appends a `Skip
    * { segment, offset }` record ... restarts recovery honoring it". `sim` needs no live `Sim`
    * (`Host::sim_log_skip`'s own doc comment: "call it on whatever fresh instance is at hand,
    * including one about to be discarded") -- `recovery.ts` passes a throwaway instance built purely
@@ -875,7 +875,7 @@ export class Persistence {
     return this.sim.call0(this.sim.x.sim_dirty) !== 0
   }
 
-  /** docs/plan/22b-persistence-load-and-fs.md step 3: the clean-boundary snapshot (0005 Cadence:
+  /** M22b step 3: the clean-boundary snapshot (0005 Cadence:
    * "at every clean boundary the host can detect"; 0013 World lifecycle: zero-player pause, then an
    * idle timeout snapshots too -- the 30 s timer and `onIdle` themselves are M27/M28b's). Same guard
    * as the periodic cadence: only if `sim_dirty()`. `SimHost.pause()`/`stop()` call this, then await
@@ -885,13 +885,13 @@ export class Persistence {
     if (this.isDirty()) this.snapshotNow()
   }
 
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: the current session epoch (`ManifestV1.
+  /** M28b step 2: the current session epoch (`ManifestV1.
    * epoch`), loaded once at `create`/`open` and bumped only by `bumpEpoch()`. */
   get epoch(): number {
     return this.manifest.epoch
   }
 
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: increments `epoch` and rewrites the manifest
+  /** M28b step 2: increments `epoch` and rewrites the manifest
    * (`Storage.write`, the same fire-and-forget convention `snapshotNow`'s own manifest rewrite
    * uses above -- "the epoch is durable ... every bump is written back with `Storage.write` before
    * the next `accept` or `Welcome`": synchronous here, so the write is issued before this call
@@ -939,7 +939,7 @@ export class Persistence {
     this.counters.snapshots++
     this.counters.lastSnapshotBytes = bytes.length
     if (rolled) {
-      // docs/plan/22b-persistence-load-and-fs.md step 3: the manifest rewrite lands *last*, after
+      // M22b step 3: the manifest rewrite lands *last*, after
       // the new segment's own header and its base snapshot are both already durable -- so a crash
       // between them and this write leaves real, self-describing data behind and only a stale
       // manifest (`loadLatest`'s own segment discovery never trusts it anyway; `healManifest`

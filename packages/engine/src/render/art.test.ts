@@ -1,4 +1,4 @@
-// docs/plan/09-renderer-terrain.md, Tests added: "manifest.schema_errors" -- every failure mode of
+// M09, Tests added: "manifest.schema_errors" -- every failure mode of
 // 0018 §4's limits and the tiles.json v1 schema (Planning decisions), each naming the offending id.
 import { expect, test } from 'vitest'
 import { buildVisualTable, ManifestError, VISUAL_TABLE_BYTES, validateManifest } from './art.js'

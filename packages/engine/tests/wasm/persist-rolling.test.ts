@@ -1,4 +1,4 @@
-// docs/plan/22b-persistence-load-and-fs.md, Order of work step 3: segment rolling, snapshot
+// M22b, Order of work step 3: segment rolling, snapshot
 // pruning, and recovering from a crash between a roll's own log/snapshot writes and its manifest
 // rewrite -- driven through the real pipeline (a real `SimHost` + `Persistence` over the built
 // `.wasm`), the `segmentRollBytes` test option lowering `SEGMENT_ROLL_BYTES` so a roll costs a
@@ -170,7 +170,7 @@ describe('segment rolling and pruning (fx-persist)', () => {
     // `snapshotNow()`, then more frames logged in the new segment -- with an idle tick between them
     // too, so the second segment-1 frame's own `tick_delta` reference must be whatever the first
     // segment-1 frame actually left behind, not the segment's own base tick again. This is the
-    // "segment opened after an idle gap" shape docs/plan/22b-persistence-load-and-fs.md's own
+    // "segment opened after an idle gap" shape M22b's own
     // Deviations flagged M22 as never having tested.
     const storage = memoryStorage()
     const inst = await freshInstance()

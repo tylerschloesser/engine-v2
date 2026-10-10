@@ -1,4 +1,4 @@
-// `gc-ui.html`'s script (docs/plan/16b-ui-observation-and-clock.md, "What the brief does not say":
+// `gc-ui.html`'s script (M16b, "What the brief does not say":
 // a new M04-harness zero-GC page proving the Budgets claim "unchanged `Ui` adds 0 B/frame (main
 // row)"). A real, **connected** `createClient()` topology over `fx-puts` (`gc-sim.ts`'s own bare-
 // canvas, no-renderer shape, but `connect: true` like `gc-connected-terrain.ts`): `on_frame` only
@@ -64,7 +64,7 @@ const client = createClient({
   test: { flags: { gcHook: true } },
 })
 // `pumpUntilLive` (`engine/test`'s own doc comment): this page's ticks are test-driven, well after
-// this point, so a bare `await client.ready` would deadlock (docs/plan/16-action-round-trip.md).
+// this point, so a bare `await client.ready` would deadlock (M16.
 await pumpUntilLive(client)
 const harness = asHarness(client)
 await parkWorkers(client)

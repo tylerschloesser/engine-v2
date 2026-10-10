@@ -15,11 +15,11 @@ disallowed_types = "deny"
 [features]
 # Native test helpers (`engine::testing`). Dev-dependency use only; never on in a `.wasm` build.
 testing = []
-# M36b (docs/plan/36b-suite-audit-and-measurements.md): counts, beside the real encoding, what a
+# M36b ( counts, beside the real encoding, what a
 # byte-mask diff of every entity put would have sent (`host/measure_diff.rs`). Measurement only: no
 # `buildGame` call and no shipped `.wasm` turns it on, and the host sends the same bytes with it.
 measure-diff = []
-# M39y (docs/plan/39y-wasm-tick-cost.md): per-phase `sim_tick` timing (`bench_phase.rs`); in a `.wasm` it adds
+# M39y ( per-phase `sim_tick` timing (`bench_phase.rs`); in a `.wasm` it adds
 # the output-only import `engine.bench_mark`. Bench builds only: nothing shipped turns it on.
 bench-phases = []
 
@@ -51,12 +51,12 @@ required-features = ["testing"]
 name = "no_alloc_ui"
 required-features = ["testing"]
 
-# docs/plan/17-drawlist-and-sprites.md: same reason as `no_alloc_ui` above.
+# M17: same reason as `no_alloc_ui` above.
 [[test]]
 name = "no_alloc_drawlist"
 required-features = ["testing"]
 
-# docs/plan/24c-engine-edit-rebuild-time.md: every ordinary (non-`#[global_allocator]`,
+# M24c: every ordinary (non-`#[global_allocator]`,
 # non-`runner_control`) integration test lives in `tests/main.rs` (`#[path]`-including
 # `tests/main/*.rs`) so cargo links, and macOS ad-hoc-signs, one binary instead of ~14 -- the
 # dominant cost of a one-line `crates/engine/src/` edit (Deviations has the measurement). Most of

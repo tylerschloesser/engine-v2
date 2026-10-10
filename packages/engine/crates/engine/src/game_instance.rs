@@ -1,11 +1,11 @@
-//! `GameInstance<G>` (docs/plan/13-sim-host-tick-loop.md Scope): the generic `Instance`
+//! `GameInstance<G>` (M13 Scope): the generic `Instance`
 //! `export_game!` builds for a real `Game`, dispatching per role: `Role::Sim` ->
 //! [`host::Host<G>`](crate::host::Host), `Role::Gen` -> `worldgen::GenCore<G::Worldgen>`,
 //! `Role::Client` -> [`ClientInstance<G>`], the client-role instance M06b/M08b/M09/M11 each built
 //! once per hand-written fixture (`fixtures/terrain`, `fixtures/worldgen`), made generic over `G`
 //! here so a real game gets it for free from `export_game!` alone. Existing fixtures keep their
 //! own hand-written `Instance` impls unchanged (`Instance` is still implemented directly by any
-//! low-level fixture, docs/plan/13-sim-host-tick-loop.md Files touched: only `fixtures/puts`
+//! low-level fixture, M13 Files touched: only `fixtures/puts`
 //! switches to `export_game!` this milestone).
 
 use crate::abi::config::HexU64;
@@ -28,10 +28,10 @@ use crate::world_access::{WorldRead, chunk_of};
 use crate::worldgen::{GenCore, Pristine, Worldgen};
 
 /// `RegionId::Rx`'s size for input on the client role (mirrors `fixtures/terrain`'s own constant,
-/// docs/plan/11-camera-and-input.md): whatever the client worker's input-drain pump might hand
+/// M11: whatever the client worker's input-drain pump might hand
 /// `on_input` in one call is bounded by `InputQueue::CAPACITY` whole records.
 const INPUT_RX_BYTES: usize = InputQueue::CAPACITY * InputEvent::BYTES;
-/// One action-ring record's own worst case (docs/plan/16-action-round-trip.md Scope: `[seq u32
+/// One action-ring record's own worst case (M16 Scope: `[seq u32
 /// LE][len u32 LE][UTF-8 JSON]`): the 8-byte header plus generous headroom for the JSON. `on_input`
 /// and `on_action` are different message kinds sharing one `Rx` region (the client role's single
 /// receive buffer, `RegionId::region`'s own "one declaration per id" rule) -- declared at
@@ -56,19 +56,19 @@ const CLIENT_DOWNLINK_BYTES: u32 = 65536;
 /// uplink batch the client can ever build, matching `host::mod`'s own `SIM_RX_BYTES` for the same
 /// reason as [`CLIENT_DOWNLINK_BYTES`].
 const CLIENT_UPLINK_BYTES: u32 = 4096;
-/// Matches `worker/client-upload.ts`'s own `UPLOAD_BATCH_MAX` (docs/plan/09-renderer-terrain.md
+/// Matches `worker/client-upload.ts`'s own `UPLOAD_BATCH_MAX` (M09
 /// Planning decisions).
 const MAX_STAGE_BATCH: u32 = 16;
 /// 0007 §8's host/client cache budget default (1,024 chunks = 4 MiB at the default chunk size).
 const DEFAULT_CACHE_CHUNKS: u32 = 1024;
 
-/// Kind byte for a UI-ring `ActionResults` record (docs/plan/16-action-round-trip.md Scope:
+/// Kind byte for a UI-ring `ActionResults` record (M16 Scope:
 /// "`[kind u8 = 2][len][JSON ...]`"). Kind 1 (`Ui`, `G::Ui` changed) is M16b's, sharing this same
 /// region.
 const UI_RECORD_KIND_ACTION_RESULT: u8 = 2;
 
 /// Appends one `[kind u8 = 2][len u32 LE][JSON]` record to `buf` for one decoded `ActionResults`
-/// entry (docs/plan/16-action-round-trip.md Scope): `{"seq":n,"result":"Confirmed"}` or
+/// entry (M16 Scope): `{"seq":n,"result":"Confirmed"}` or
 /// `{"seq":n,"result":{"Rejected":{"Game":<G::Reject>}}}` /
 /// `{"seq":n,"result":{"Rejected":{"Engine":<EngineReject>}}}` -- `Rejected<G>`'s two variants
 /// (`Game`, `Engine`) keep their own tag (orchestrator ruling at the gate, not flattened away):
@@ -98,7 +98,7 @@ fn push_result_record<G: Game>(buf: &mut Vec<u8>, seq: u32, result: &Result<Appl
     buf.extend_from_slice(json.as_bytes());
 }
 
-/// M25 step 7 (docs/plan/25-prediction-core.md; 0003 "How the UI observes state": "a declined
+/// M25 step 7 (M25; 0003 "How the UI observes state": "a declined
 /// prediction is reported as `NotPredictable` at dispatch"; 0012 Planning decisions: "Statuses are
 /// re-evaluated on every replay ... TypeScript is told once: `NotPredictable` at dispatch"). Same
 /// kind byte and `[kind][len][json]` shape as [`push_result_record`] -- the TS side's
@@ -112,7 +112,7 @@ fn push_not_predictable_record(buf: &mut Vec<u8>, seq: u32) {
     buf.extend_from_slice(json.as_bytes());
 }
 
-/// docs/plan/28b-reconnect-and-lifecycle.md step 3 ("Pending-action resend"; 0013 Reconnect, 0004):
+/// M28b step 3 ("Pending-action resend"; 0013 Reconnect, 0004):
 /// one pending action `ClientCore::resend_after_welcome` popped because the host's own
 /// `Welcome.last_processed_action_seq` already covers it -- processed (applied or rejected) on the
 /// dead connection, its own ack never delivered, and 0013's host keeps no per-session state to
@@ -133,7 +133,7 @@ fn clamp_floor_tile_axis(v: f64) -> i32 {
     v.floor().clamp(TILE_MIN as f64, TILE_MAX as f64) as i32
 }
 
-/// This frame's own camera-derived `FrameView` fields (docs/plan/17-drawlist-and-sprites.md),
+/// This frame's own camera-derived `FrameView` fields (M17,
 /// cached on `ClientInstance` after every real `frame()` call so `on_frame`'s own `FrameView` (no
 /// `CameraBlock` in scope there -- `Instance::on_frame`'s signature is `bytes` only) can reuse the
 /// last real one instead of inventing a placeholder. `ui()` never reads these fields today (0003:
@@ -210,20 +210,20 @@ where
 )]
 struct TerrainConfig<P> {
     /// Both `seed` and `params` present, or both absent (a remote client that takes its world from
-    /// `Welcome`, docs/plan/33f-client-world-config-from-welcome.md; every other role needs
+    /// `Welcome`, M33f; every other role needs
     /// both). `params: null` is present (a game whose `Params` is `()`).
     #[serde(default)]
     seed: Option<HexU64>,
     #[serde(default, deserialize_with = "present")]
     params: Option<P>,
     /// Client role only: how many gen workers `TerrainFeed` sizes its in-flight bookkeeping for
-    /// (docs/plan/08b-gen-workers-and-queue.md). Ignored by the `gen` role.
+    /// (M08b. Ignored by the `gen` role.
     #[serde(default = "default_gen_workers")]
     gen_workers: u32,
     /// Client role only: host dense-chunk cache size (0009 `WorldConfig.cacheChunks`).
     #[serde(default = "default_cache_chunks")]
     cache_chunks: u32,
-    /// Client role only, docs/plan/28-sessions-and-reconnect.md (Scope: "the client worker config
+    /// Client role only, M28 (Scope: "the client worker config
     /// carries `{ secret, joinKey: \"\", buildHash }`"): this device's own 128-bit identity secret,
     /// lowercase hex (32 hex digits), `#[serde(default)]` all-zero so every config built before
     /// this milestone (native tests, a hand-rolled fixture) still boots. Ignored by the `gen` role.
@@ -240,7 +240,7 @@ struct TerrainConfig<P> {
     build_hash: String,
 }
 
-/// What a configured client knows about its world (docs/plan/33f-client-world-config-from-welcome.md),
+/// What a configured client knows about its world (M33f,
 /// kept to compare a later `Welcome` against and to hand the gen workers.
 struct InstalledWorld {
     seed: u64,
@@ -280,12 +280,12 @@ fn installed_world<P: serde::Serialize + serde::de::DeserializeOwned>(
     }
 }
 
-/// The client-role instance (docs/plan/13-sim-host-tick-loop.md Scope, extended by docs/plan/
+/// The client-role instance (M13 Scope, extended by docs/plan/
 /// 15b-ring-connection-and-replica-rendering.md): a [`ClientCore<G>`] (whose [`crate::client::
 /// Replica<G>`] owns the one `TerrainStore` over `Pristine<G::Worldgen>` this instance has), the
 /// `TerrainFeed` that turns cache misses into `genRequest`/`genResult` traffic (docs/plan/
 /// 08b-gen-workers-and-queue.md), the `Uploader` that turns residency into upload-ring records
-/// (docs/plan/09-renderer-terrain.md), and the `InputQueue` `on_input` decodes into (docs/plan/
+/// (M09, and the `InputQueue` `on_input` decodes into (docs/plan/
 /// 11-camera-and-input.md). Before 15b, this held its own standalone `TerrainStore` alongside a
 /// nonexistent replica; 15b merges the two (Deviations: "one client-role terrain store, not two")
 /// since `TerrainFeed`/`Uploader` only ever need `&TerrainStore`/`&mut TerrainStore`, which
@@ -303,21 +303,21 @@ pub struct ClientInstance<G: Game> {
     feed: TerrainFeed,
     uploader: Box<Uploader<G::Client, G>>,
     input_queue: Box<InputQueue>,
-    /// UI-ring bytes staged since the last `client_poll_ui` (docs/plan/16-action-round-trip.md
+    /// UI-ring bytes staged since the last `client_poll_ui` (M16
     /// Scope): kind-2 (`ActionResults`) records from `on_frame`, and kind-1 (`Ui`) records from
-    /// `frame`'s own `ui` call policy below (docs/plan/16b-ui-observation-and-clock.md). Copied
+    /// `frame`'s own `ui` call policy below (M16b. Copied
     /// out and cleared by `client_poll_ui`; each kind grows this only at its own event's rate
     /// (action result, or a real `Ui` change), never on a per-frame path with nothing to report.
     ui_buf: Vec<u8>,
     /// The game's own per-client-frame hooks (0003 `ClientSide<G>`): constructed once with
-    /// `Default` and lives for the instance (docs/plan/16b-ui-observation-and-clock.md Scope: "`G
+    /// `Default` and lives for the instance (M16b Scope: "`G
     /// ::Client` is constructed with `Default` at client init and lives for the instance"). `frame`
     /// (M18) and `extract` (M17) are still no-ops; `ui` is real as of this milestone.
     client: G::Client,
-    /// The `ui` call policy's own state (docs/plan/16b-ui-observation-and-clock.md): the reused
+    /// The `ui` call policy's own state (M16b: the reused
     /// `G::Ui` pair, the client-side dirty flag and the "since the last call" mutation counter.
     ui: UiObserver<G>,
-    /// The per-frame draw list `ClientSide::extract` fills (docs/plan/17-drawlist-and-sprites.md,
+    /// The per-frame draw list `ClientSide::extract` fills (M17,
     /// 0018 §2): scratch list + header/body-write state. Boxed for the same reason `core`/
     /// `uploader`/`input_queue` are (large, `Vec::with_capacity(65_536)` alone).
     drawlist: Box<DrawList>,
@@ -332,7 +332,7 @@ pub struct ClientInstance<G: Game> {
     /// `CachedCameraView`'s own doc comment): `on_frame` reuses this since it has no `CameraBlock`
     /// of its own.
     camera_view: CachedCameraView,
-    /// docs/plan/18-picking-and-overlay.md steps 4-6: the previous real `frame()` call's own
+    /// M18 steps 4-6: the previous real `frame()` call's own
     /// `camera.frame_time_ms`, so `FrameCx::dt_ms()` (Provides: "difference of successive `frame_
     /// time_ms`, clamped to `0..100`") has something to difference against. `0.0` at `init` --
     /// the very first real frame's own `dt_ms` is whatever that clamps to, the same "first call has
@@ -340,21 +340,21 @@ pub struct ClientInstance<G: Game> {
     /// on the TS side, just clamped instead of NaN-guarded since this value is never read before a
     /// subtraction.
     last_frame_time_ms: f64,
-    /// docs/plan/19-presence-channel.md step 2: this game's own persistent presence sample, one per
+    /// M19 step 2: this game's own persistent presence sample, one per
     /// client frame (0001: "the game's client-side Rust writes `G::Presence` once per client frame
     /// ... the engine samples it"). Replaces M18's scratch value, which `frame()` built fresh and
-    /// discarded every call (docs/plan/18-picking-and-overlay.md steps 4-6 Deviations) -- keeping it
+    /// discarded every call (M18 steps 4-6 Deviations) -- keeping it
     /// here instead means a game that only writes on change (the common case, e.g. a spring at
     /// rest) does not lose its last value between frames.
     presence: G::Presence,
-    /// docs/plan/28-sessions-and-reconnect.md: this device's own identity secret, join key and the
+    /// M28: this device's own identity secret, join key and the
     /// running build's own hash -- `TerrainConfig`'s own fields, retained so `client_hello` can
     /// build a real `Hello` on demand (it takes no other input; Seams: "config -> Hello").
     secret: [u8; 16],
     join_key: String,
     build_hash: [u8; 32],
     /// `None` until configured: from `engine_init`'s config when it carried seed and params, else
-    /// from the first `Welcome` (docs/plan/33f-client-world-config-from-welcome.md). While `None`,
+    /// from the first `Welcome` (M33f. While `None`,
     /// `frame` publishes an empty draw list and calls nothing of the game's, so the feed enqueues
     /// no gen job and `on_init`/`ui`/`extract` have not run.
     world: Option<InstalledWorld>,
@@ -376,7 +376,7 @@ impl<G: Game> ClientInstance<G> {
         layout.region(RegionId::Ui, UI_BYTES);
         layout.region(RegionId::DrawList, drawlist::REGION_BYTES as u32);
         let drawlist_region = layout.ptr(RegionId::DrawList);
-        // `ClientSide::on_init` (docs/plan/20b-reference-player-and-collect-ui.md, gate round 1
+        // `ClientSide::on_init` (M20b, gate round 1
         // fix): built and called *before* `cfg.params` moves into `Pristine::new` below (`Worldgen
         // ::Params` is not required to be `Clone`, so this must borrow it while `cfg` still owns
         // it) -- the one place a client can ever learn the seed/params its own world was created
@@ -402,7 +402,7 @@ impl<G: Game> ClientInstance<G> {
             }
             None => (None, None),
         };
-        // docs/plan/28-sessions-and-reconnect.md: `own_player` is `PlayerId(0)` ("none", `game::
+        // M28: `own_player` is `PlayerId(0)` ("none", `game::
         // PlayerId`'s own doc comment) until `Welcome` arrives -- M15's implicit accept (`PlayerId
         // = conn + 1`) and M27's own pre-handshake `my_player_id` config field are both deleted;
         // `client_on_welcome` (below) is the one production caller of `Replica::set_own_player`
@@ -414,7 +414,7 @@ impl<G: Game> ClientInstance<G> {
             CacheCapacity::Chunks(cfg.cache_chunks),
             PlayerId(0),
         );
-        // The silent trap (docs/plan/15b-ring-connection-and-replica-rendering.md, Planning
+        // The silent trap (M15b, Planning
         // decisions): a store paired with an `Uploader` -- the one consumer of cache events,
         // `Uploader::on_frame`'s drain -- must opt into recording them, or that drain silently
         // sees nothing and the renderer never updates. This replica's own `TerrainStore` is that
@@ -447,7 +447,7 @@ impl<G: Game> ClientInstance<G> {
 /// The `Instance` `export_game!` points every real `Game` at. `Sim`'s payload is boxed: `Host<G>`
 /// carries `host::warm::Warm`'s fixed 512-chunk scratch buffer (4 KiB), far larger than the other
 /// two variants, and an unboxed enum would size every `GameInstance<G>` to its biggest member.
-/// `Client`'s payload is boxed too (docs/plan/17-drawlist-and-sprites.md: `ClientInstance<G>` grew
+/// `Client`'s payload is boxed too (M17: `ClientInstance<G>` grew
 /// past clippy's `large_enum_variant` threshold once `drawlist`/`camera_view` joined it), same
 /// reasoning.
 pub enum GameInstance<G: Game> {
@@ -460,7 +460,7 @@ impl<G: Game> Instance for GameInstance<G>
 where
     G::Global: Default,
 {
-    // docs/plan/19-presence-channel.md step 2 (Deviations, carrying forward docs/plan/
+    // M19 step 2 (Deviations, carrying forward docs/plan/
     // 18-picking-and-overlay.md steps 4-6's own note): M18 added a `G::Presence: Default`
     // where-clause here to construct `frame()`'s scratch value, since `Presence`'s own supertraits
     // (M12) did not include `Default` yet. 0024 §6 now puts `Default` directly on `Presence` itself
@@ -530,7 +530,7 @@ where
         }
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md.
+    /// M28.
     fn sim_attach(&mut self, conn: u32, input: &[u8], tx: &mut [u8]) -> Result<u32, Status> {
         match self {
             GameInstance::Sim(h) => h.sim_attach(conn, input, tx),
@@ -538,7 +538,7 @@ where
         }
     }
 
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 2.
+    /// M28b step 2.
     fn sim_resync(&mut self, conn: u32, epoch: u32, tx: &mut [u8]) -> Result<u32, Status> {
         match self {
             GameInstance::Sim(h) => h.sim_resync(conn, epoch, tx),
@@ -560,7 +560,7 @@ where
         }
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md steps 3-5.
+    /// M28 steps 3-5.
     fn sim_last_superseded(&self) -> u32 {
         match self {
             GameInstance::Sim(h) => h.sim_last_superseded(),
@@ -568,7 +568,7 @@ where
         }
     }
 
-    /// docs/plan/34-reference-multiplayer.md.
+    /// M34.
     fn sim_last_detached_presence(&self, out: &mut [u8]) -> usize {
         match self {
             GameInstance::Sim(h) => h.sim_last_detached_presence(out),
@@ -611,7 +611,7 @@ where
         }
     }
 
-    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6.
+    /// M22 steps 4-6.
     fn sim_segment_header(
         &mut self,
         segment: u32,
@@ -645,7 +645,7 @@ where
         }
     }
 
-    /// docs/plan/22b-persistence-load-and-fs.md.
+    /// M22b.
     fn sim_restore_begin(&mut self, total_len: u32) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_restore_begin(total_len),
@@ -667,7 +667,7 @@ where
         }
     }
 
-    /// docs/plan/24b-upgrade-and-migration.md step 4.
+    /// M24b step 4.
     fn sim_upgrade_begin(&mut self, total_len: u32) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_upgrade_begin(total_len),
@@ -689,7 +689,7 @@ where
         }
     }
 
-    /// docs/plan/24b-upgrade-and-migration.md gate fix round 2.
+    /// M24b gate fix round 2.
     fn sim_identity_compare(&mut self, stored: &[u8], result: &mut [u8]) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_identity_compare(stored, result),
@@ -697,7 +697,7 @@ where
         }
     }
 
-    /// docs/plan/24-recovery-and-migration.md.
+    /// M24.
     fn sim_replay_scan_begin(&mut self, segment: u32) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_replay_scan_begin(segment),
@@ -754,7 +754,7 @@ where
         }
     }
 
-    /// docs/plan/24-recovery-and-migration.md.
+    /// M24.
     fn sim_log_skip(
         &mut self,
         segment: u32,
@@ -781,7 +781,7 @@ where
         }
     }
 
-    /// "20 Hz is hardcoded" gap (docs/plan/13-sim-host-tick-loop.md): `G::TICK_RATE`'s own value,
+    /// "20 Hz is hardcoded" gap (M13: `G::TICK_RATE`'s own value,
     /// the same for every variant (a game-level constant, not role-specific) -- `abi::tick_hz`
     /// only ever calls this while `role == Role::Sim` (its own "wrong role" branch never reaches
     /// an instance method at all), but the answer would be identical from any variant.
@@ -789,7 +789,7 @@ where
         G::TICK_RATE.hz_value()
     }
 
-    /// docs/plan/24b-upgrade-and-migration.md Scope: `G::CHUNK_BITS`, the same for every variant
+    /// M24b Scope: `G::CHUNK_BITS`, the same for every variant
     /// (a game-level constant, not role-specific) -- see `tick_hz`'s own doc comment.
     fn chunk_bits(&mut self) -> u32 {
         G::CHUNK_BITS
@@ -805,7 +805,7 @@ where
     fn frame(&mut self, _t_ms: f64, camera: &CameraBlock, _result: &mut [u8]) -> Status {
         match self {
             GameInstance::Client(c) => {
-                // docs/plan/33f-client-world-config-from-welcome.md: before the world is known
+                // M33f: before the world is known
                 // there is nothing to show and nothing to generate. An empty draw list is
                 // published (the JS pump copies the region either way), and neither the feed, the
                 // uploader nor any `ClientSide` call runs: no gen job, no `Ui` record. A branch on
@@ -825,7 +825,7 @@ where
                     c.input_queue.clear();
                     return Status::Ok;
                 }
-                // docs/plan/15b-ring-connection-and-replica-rendering.md, Planning decisions "The
+                // M15b, Planning decisions "The
                 // camera report is built in Rust from the camera-block copy, not in TS": every
                 // real frame's camera state feeds `ClientCore::set_camera`, which queues an
                 // uplink send only on change (0010 "Rates") -- `client_poll_uplink` (a separate
@@ -836,7 +836,7 @@ where
                 c.feed.on_frame(camera, terrain);
                 c.uploader.on_frame(camera, terrain);
 
-                // docs/plan/18-picking-and-overlay.md steps 4-6: `FrameCx::dt_ms()`'s own source --
+                // M18 steps 4-6: `FrameCx::dt_ms()`'s own source --
                 // computed (and this call's own `last_frame_time_ms` updated) before the destructure
                 // below, since it needs only `camera` (already in scope) and one scalar field of `c`
                 // itself, not any of the fields borrowed individually there.
@@ -844,7 +844,7 @@ where
                     ((camera.frame_time_ms - c.last_frame_time_ms) as f32).clamp(0.0, 100.0);
                 c.last_frame_time_ms = camera.frame_time_ms;
 
-                // docs/plan/16b-ui-observation-and-clock.md Scope: "inside frame(t_ms) ... iff a
+                // M16b Scope: "inside frame(t_ms) ... iff a
                 // frame mutated the replica since the last call or the client-side dirty flag is
                 // set". Gate fix ("Delivery order"): the mutation half of this policy now also
                 // runs inside `on_frame` itself (see there), right when a frame's own mutation
@@ -852,7 +852,7 @@ where
                 // (`mutations` already matches what `on_frame` just recorded). This call still
                 // exists for the dirty-flag-only case: client-side state changed (`FrameCx::
                 // ui_dirty()`, steps 4-6) with no new host frame since the last check.
-                // docs/plan/17-drawlist-and-sprites.md: this frame's own camera-derived `FrameView`
+                // M17: this frame's own camera-derived `FrameView`
                 // fields, cached for `on_frame`'s own reuse (`CachedCameraView`'s doc comment).
                 // Window origin: the camera centre's tile, snapped to a multiple of 64 (Planning
                 // decisions "Window origin").
@@ -900,7 +900,7 @@ where
                     ..
                 } = c.as_mut();
                 let mutations = core.mutations();
-                // docs/plan/26-prediction-rendering-and-clocks.md steps 4-6: `core.predicted_tick
+                // M26 steps 4-6: `core.predicted_tick
                 // ()`/`core.lead()`/`core.tick_fraction(..)` all take `&mut self` (`tick_fraction`
                 // feeds `HostClock` from this wake's own real local wall time, `camera.
                 // frame_time_ms`) -- read before `core.view()`'s own immutable borrow below, which
@@ -919,7 +919,7 @@ where
                     correction,
                 };
                 let me = replica.own_player();
-                // docs/plan/19-presence-channel.md steps 4-6: copied out *before* `client.frame`
+                // M19 steps 4-6: copied out *before* `client.frame`
                 // (below) writes `*presence` -- `FrameView::own_presence()`'s own doc comment
                 // explains why `FrameView` holds this by value rather than `&G::Presence`.
                 let own_presence = *presence;
@@ -941,11 +941,11 @@ where
                 .with_prediction(core.overlay(), core.pending_queue())
                 .with_render_time(core.render_time());
 
-                // docs/plan/18-picking-and-overlay.md Scope, steps 4-6: "frame(t_ms) order becomes
+                // M18 Scope, steps 4-6: "frame(t_ms) order becomes
                 // build FrameView -> ClientSide::frame -> extract -> header (follow, anchors) ->
                 // sort -> publish -> clear InputQueue". `cx` borrows `view` (the same value `extract`
                 // receives below), `camera` and `input_queue`'s own events for exactly this call;
-                // `presence` (docs/plan/19-presence-channel.md step 2) is this instance's own
+                // `presence` (M19 step 2) is this instance's own
                 // persistent field now, not a fresh scratch value -- a game that writes it only on
                 // change keeps its last value across frames the way the field's own doc comment
                 // says.
@@ -960,13 +960,13 @@ where
 
                 ui.maybe_run(client, &view, mutations, ui_buf);
 
-                // docs/plan/17-drawlist-and-sprites.md Scope: "frame(t_ms) now runs: build
+                // M17 Scope: "frame(t_ms) now runs: build
                 // FrameView -> G::Client::extract -> sort". `drawlist_region`: see
                 // `ClientInstance::drawlist_region`'s own doc comment for the safety argument.
                 drawlist.begin_frame(camera_view.window_origin);
                 client.extract(&view, drawlist.as_mut());
 
-                // docs/plan/19-presence-channel.md step 2: samples this frame's (possibly
+                // M19 step 2: samples this frame's (possibly
                 // just-written) presence into the uplink sampler (0010 "Rates": "presence sample at
                 // <= 10 Hz, on change") -- `core.poll_uplink` (a separate export, called right after
                 // this one every wake, matching `set_camera`'s own precedent above) is what actually
@@ -995,7 +995,7 @@ where
         }
     }
 
-    /// docs/plan/17-drawlist-and-sprites.md Provides: how many records the last `frame()` call's
+    /// M17 Provides: how many records the last `frame()` call's
     /// own `sort_into` wrote (`0` on a wrong role, same "always answer, cost nothing" shape as
     /// `sim_warm_one`/`tick_hz` -- no `Status` crosses here either).
     fn drawlist_len(&mut self) -> u32 {
@@ -1062,7 +1062,7 @@ where
         }
     }
 
-    /// docs/plan/26-prediction-rendering-and-clocks.md Planning decisions "One resolution point":
+    /// M26 Planning decisions "One resolution point":
     /// every `CHUNK` record now reads the prediction overlay too (`Uploader::stage_predicted`),
     /// not just pristine + the replica overlay.
     ///
@@ -1117,7 +1117,7 @@ where
         }
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: applies one whole host frame
+    /// M15b: applies one whole host frame
     /// (`ClientCore::on_frame`), then drains the two finer-grained halves of the replica's own
     /// dirty tracking straight into the `Uploader` this instance already owns -- Scope's "a tile
     /// delta becomes `patch_tile`... a snapshot or a leave becomes `enqueue_chunk`". A malformed
@@ -1142,7 +1142,7 @@ where
                             DirtyEvent::Whole(chunk) => uploader.enqueue_chunk(chunk),
                             DirtyEvent::Tile(pos, tile) => uploader.patch_tile(pos, tile),
                         });
-                        // docs/plan/16b-ui-observation-and-clock.md gate fix ("Delivery order"):
+                        // M16b gate fix ("Delivery order"):
                         // the `ui` call policy runs *here*, right after this frame's own mutation
                         // has landed on the replica and *before* this same frame's own results are
                         // pushed below -- not in `frame(t_ms)` (a separate ABI export the client
@@ -1175,7 +1175,7 @@ where
                             correction,
                         };
                         let me = replica.own_player();
-                        // docs/plan/17-drawlist-and-sprites.md: no `CameraBlock` is in scope here
+                        // M17: no `CameraBlock` is in scope here
                         // (`Instance::on_frame`'s own signature is `bytes` only) -- reuses the last
                         // real `frame()` call's own camera-derived fields (`CachedCameraView`'s doc
                         // comment); `ui()` never reads them today, so one-wake staleness is
@@ -1197,7 +1197,7 @@ where
                         )
                         .with_prediction(core.overlay(), core.pending_queue());
                         ui.maybe_run(client, &view, mutations, ui_buf);
-                        // docs/plan/16-action-round-trip.md Scope: "on_frame reads ActionResults
+                        // M16 Scope: "on_frame reads ActionResults
                         // and writes one result record per entry to RegionId::Ui".
                         core.drain_results(|seq, result| {
                             push_result_record::<G>(ui_buf, seq, result);
@@ -1211,7 +1211,7 @@ where
         }
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: `ClientCore::poll_uplink`.
+    /// M15b: `ClientCore::poll_uplink`.
     fn client_poll_uplink(&mut self, t_ms: u32, out: &mut [u8]) -> usize {
         match self {
             GameInstance::Client(c) => c.core.poll_uplink(t_ms, out),
@@ -1219,7 +1219,7 @@ where
         }
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md: `session::Hello` built straight from this instance's
+    /// M28: `session::Hello` built straight from this instance's
     /// own retained config (`secret`/`join_key`/`build_hash`, `ClientInstance`'s own doc comment).
     /// `client_hello` is always the very first thing a client instance sends on a connection --
     /// for the very first one this whole instance's lifetime ever makes, `ClientCore::camera()` is
@@ -1228,7 +1228,7 @@ where
     /// short/absent camera in the "Hello tail" as "no initial camera yet", the same state a fresh
     /// `connect()`'d `ConnSlot` already starts in.
     ///
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: on a **re**connect (this same `ClientCore`
+    /// M28b step 5: on a **re**connect (this same `ClientCore`
     /// redialing after a drop, `.camera()` already `Some` from before), `Hello.camera` carries that
     /// real, last-known camera instead -- `Host::attach`'s own doc comment explains why a *real*
     /// camera here (never a coincidental zero) is exactly what lets the host seed `ConnSlot.camera`
@@ -1281,7 +1281,7 @@ where
         }
     }
 
-    /// docs/plan/33f-client-world-config-from-welcome.md: `{"seed":"0x..","params":..}` into `tx`.
+    /// M33f: `{"seed":"0x..","params":..}` into `tx`.
     fn client_world_config(&mut self, tx: &mut [u8]) -> Result<u32, Status> {
         match self {
             GameInstance::Client(c) => match &c.world {
@@ -1298,13 +1298,13 @@ where
         }
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md: decodes `Welcome` (`session::read_welcome`) and
+    /// M28: decodes `Welcome` (`session::read_welcome`) and
     /// applies it: `own_player` (`Replica::set_own_player`), the game's own per-frame presence
     /// value plus the uplink sampler (`ClientCore::seed_presence`) when `Welcome` carried a sample,
     /// and the lead estimator (`ClientCore::seed_lead_rtt_ms`) from the caller's own measured round
     /// trip. `player_id`/`last_processed_action_seq` are echoed into `result` for the caller's own
     /// `session_state`/`seq_seed` bookkeeping (`Instance::client_on_welcome`'s own doc comment).
-    /// docs/plan/28-sessions-and-reconnect.md step 5 (`ABI_VERSION` 28 -> 29): `result` widened
+    /// M28 step 5 (`ABI_VERSION` 28 -> 29): `result` widened
     /// from 8 to 16 bytes -- `view_max_tiles_per_axis`/`view_max_chunks` (each zero-extended into
     /// an LE `u32`, matching every other crossing here) so the caller (`worker/client.ts`) can
     /// forward Welcome's own view clamps to the main thread's `setViewClamp` (0019 §1) without a
@@ -1321,7 +1321,7 @@ where
                 if result.len() < 20 {
                     return Status::BadLength;
                 }
-                // docs/plan/33f-client-world-config-from-welcome.md: the first `Welcome` of a
+                // M33f: the first `Welcome` of a
                 // client with no world configures it (validate first: nothing below runs for a
                 // `Welcome` this client must refuse). A later one for the same world (seed and
                 // the `Codec` bytes of the params: cheap and exact) changes nothing here; for
@@ -1357,7 +1357,7 @@ where
                     }
                     Some(_) => {}
                 }
-                // docs/plan/28b-reconnect-and-lifecycle.md step 5: only a real resync (the epoch
+                // M28b step 5: only a real resync (the epoch
                 // actually changed -- a host restart or panic recovery, `Host::resync`'s own
                 // doc comment) drops the replica. A same-epoch `Welcome` -- a plain join's first
                 // one (replica already empty: idempotent either way) or an ordinary reconnect's
@@ -1376,7 +1376,7 @@ where
                     c.presence = *sample;
                 }
                 c.core.seed_lead_rtt_ms(rtt_ms);
-                // docs/plan/28b-reconnect-and-lifecycle.md step 3: every pending action `Welcome`
+                // M28b step 3: every pending action `Welcome`
                 // proves already processed is popped and reported `Lost`; everything still
                 // outstanding is re-queued for the very next `poll_uplink` flush.
                 let ClientInstance { core, ui_buf, .. } = c.as_mut();
@@ -1398,7 +1398,7 @@ where
         }
     }
 
-    /// docs/plan/16-action-round-trip.md: `ClientCore::on_action`. `Status::Decode` on a
+    /// M16: `ClientCore::on_action`. `Status::Decode` on a
     /// malformed ring record; `Status::OutOfMemory` when the outbox is already at capacity
     /// (`client::ActionError`'s two variants -- untrusted/backstop cases only, since the ring
     /// producer on main is expected to enforce both before ever writing a record here).
@@ -1430,7 +1430,7 @@ where
         }
     }
 
-    /// docs/plan/16-action-round-trip.md: copies as many *whole* records as fit out of `ui_buf`
+    /// M16: copies as many *whole* records as fit out of `ui_buf`
     /// (staged by `on_frame`) into `out` -- the "always answer, cost nothing" shape `upload_stage`/
     /// `gen_take` already use, no `Status`. `out` is `RegionId::Ui`'s whole capacity (`UI_BYTES`).
     ///
@@ -1593,14 +1593,14 @@ where
         }
     }
 
-    /// docs/plan/16-action-round-trip.md: `ClientCore::last_summary()`'s `tick`/`ack_seq`, two LE
+    /// M16: `ClientCore::last_summary()`'s `tick`/`ack_seq`, two LE
     /// `u32` into `result` -- the client worker's own source for the clock block's
     /// `authoritative_tick`/`ack_seq` fields (`ticks_per_second`, `session_state` and `seq_seed`
-    /// are derived entirely in TS). docs/plan/26-prediction-rendering-and-clocks.md steps 4-6:
+    /// are derived entirely in TS). M26 steps 4-6:
     /// widened with `predicted_tick` (`ClientCore::predicted_tick`, real from this milestone) and
     /// `ClientCore::last_tick_fraction`'s `f32` bits (`Instance::client_clock_stats`'s own doc
     /// comment explains why this call has no `t_ms` of its own to feed `HostClock` fresh).
-    /// docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 26 -> 27): widened from 16 to 20
+    /// M28 (`ABI_VERSION` 26 -> 27): widened from 16 to 20
     /// bytes, same call signature (`params: 0`) -- a fifth LE `u32`, `ClientCore::revealed
     /// (camera_view.visible)` as `0`/`1` (`revealed`'s own doc comment: steps 3-5 consume it, this
     /// milestone only lands the field). An old caller reading only the first 16 bytes is
@@ -1624,7 +1624,7 @@ where
         }
     }
 
-    /// docs/plan/16b-ui-observation-and-clock.md, `engine/test` only: `UiObserver::mark_dirty()`.
+    /// M16b, `engine/test` only: `UiObserver::mark_dirty()`.
     /// No region crosses; the flag lives entirely on the WASM side.
     fn client_ui_mark_dirty(&mut self) -> Status {
         match self {
@@ -1636,7 +1636,7 @@ where
         }
     }
 
-    /// docs/plan/16b-ui-observation-and-clock.md, `engine/test` only: `UiObserver::{calls,
+    /// M16b, `engine/test` only: `UiObserver::{calls,
     /// records}`, two LE `u32` into `result`.
     fn client_ui_stats(&mut self, result: &mut [u8]) -> Status {
         match self {
@@ -1826,7 +1826,7 @@ mod tests {
         buf[..n].to_vec()
     }
 
-    // ---- docs/plan/33f-client-world-config-from-welcome.md ----
+    // ---- M33f ----
 
     thread_local! {
         /// Every `(seed, params)` a `CClient::on_init` saw on this thread (one test = one thread).
@@ -2133,14 +2133,14 @@ mod tests {
         assert_eq!(pristine_at_origin(&inst), Tile::new(1, 0, 0x2a ^ 7));
     }
 
-    /// docs/plan/16-action-round-trip.md: the exact `client_poll_ui` JSON for a `Confirmed` and a
-    /// docs/plan/16-action-round-trip.md: `client_clock_stats` reports zero before any frame is
+    /// M16: the exact `client_poll_ui` JSON for a `Confirmed` and a
+    /// M16: `client_clock_stats` reports zero before any frame is
     /// applied, and the applied frame's own `tick`/`ack_seq` afterwards -- the two values the
     /// client worker mirrors into the clock block after each `on_frame`.
     #[test]
     fn client_clock_stats_reports_last_applied_tick_and_ack_seq() {
         let mut inst = client_instance();
-        // docs/plan/28-sessions-and-reconnect.md: widened to 20 bytes (a fifth LE `u32`,
+        // M28: widened to 20 bytes (a fifth LE `u32`,
         // `revealed`).
         let mut out = [0u8; 20];
         assert_eq!(inst.client_clock_stats(&mut out), Status::Ok);
@@ -2271,7 +2271,7 @@ mod tests {
         out
     }
 
-    /// docs/plan/16-action-round-trip.md (gate ruling): `client_poll_ui` must never split a
+    /// M16 (gate ruling): `client_poll_ui` must never split a
     /// record across two polls. Ten `Confirmed` results are staged (bigger than a handful of
     /// polls' worth of `out`); a deliberately small `out` forces several polls to drain them all,
     /// and every record the caller ever sees must parse whole, none lost, none duplicated.
@@ -2346,7 +2346,7 @@ mod tests {
         assert_eq!(n2, 0);
     }
 
-    // Gate fix (docs/plan/16b-ui-observation-and-clock.md Deviations, "Delivery order"): a frame
+    // Gate fix (M16b Deviations, "Delivery order"): a frame
     // that both mutates state `ui` reads and carries an action result must produce a kind-1 record
     // reflecting that same mutation *before* the kind-2 record for that result, in the same
     // `ui_buf`/`client_poll_ui` drain -- "a result handler sees current state" (M16 brief, M16b
@@ -2500,7 +2500,7 @@ mod tests {
         assert_eq!(records[1].1, r#"{"seq":1,"result":"Confirmed"}"#);
     }
 
-    // docs/plan/16b-ui-observation-and-clock.md, steps 3-5: `client_ui_mark_dirty` (the test-only
+    // M16b, steps 3-5: `client_ui_mark_dirty` (the test-only
     // ABI export those steps add, `ABI_VERSION` 12 -> 13) reaches `ClientInstance::ui.mark_dirty()`
     // end to end. `MClient::ui` reads a `static` signal rather than anything in the replica
     // (mirroring `client::ui::tests::UClient`'s own "client-side state, not replica state" shape,
@@ -2510,7 +2510,7 @@ mod tests {
     // own process (nextest: `client/texel.rs`'s own doc comment on `VISUAL_TABLES`), so this
     // `static` is never shared across tests.
     static M_SIGNAL: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-    /// docs/plan/18-picking-and-overlay.md steps 4-6: when set, `MClient::frame` calls `cx.
+    /// M18 steps 4-6: when set, `MClient::frame` calls `cx.
     /// ui_dirty()` -- the real production path `FrameCx::ui_dirty()` -- so `framecx_ui_dirty_
     /// reruns_ui` (below) exercises the actual `frame()` -> `FrameCx` -> `UiObserver::mark_dirty`
     /// wiring end to end, not only the `client_ui_mark_dirty` test hook `client_ui_mark_dirty_
@@ -2665,7 +2665,7 @@ mod tests {
         assert_eq!(records, vec![(1, r#"{"n":5}"#.to_string())]);
     }
 
-    /// `framecx.ui_dirty_reruns_ui` (Tests added, docs/plan/18-picking-and-overlay.md steps 4-6):
+    /// `framecx.ui_dirty_reruns_ui` (Tests added, M18 steps 4-6):
     /// the real end-to-end path -- `ClientSide::frame` calls `cx.ui_dirty()` (not the `client_ui_
     /// mark_dirty` test-only ABI hook the test above uses) -- also forces `ui` to rerun this same
     /// `frame()` call with no new host mutation.

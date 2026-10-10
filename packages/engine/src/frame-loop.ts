@@ -1,9 +1,9 @@
 // The single rAF callback as a fixed, ordered phase list (docs/decisions/0018-renderer.md §1;
-// docs/plan/09-renderer-terrain.md Scope): `camera` (no-op until M11) -> `writeCamera`
+// M09 Scope): `camera` (no-op until M11) -> `writeCamera`
 // (`Client.writeCameraAndWake`, Deviations) -> `upload` (`render/upload.ts`'s byte-budgeted drain)
 // -> `render` (`renderer.writeFrameUniform` + `draw`) -> `overlay` (M18) -> `ui` (M16).
 //
-// docs/plan/09b-terrain-art-and-lifecycle.md Scope/Seams (M09b): a viewport-apply step runs before
+// M09b Scope/Seams (M09b): a viewport-apply step runs before
 // every other phase (not a new named `FRAME_PHASES` entry -- Seams only pins the phase list's own
 // name, not that it enumerates every internal step -- `renderer.onViewportChange(cb)` "called at
 // most once per frame, before the `camera` phase" is satisfied by `tick()` calling
@@ -72,11 +72,11 @@ export type FrameLoopOptions = {
   /** M11 fills this in for real (Non-scope): mutate `client.cameraState` from input/gestures
    * before this tick's `writeCamera` phase runs. Default no-op. */
   onCamera?(): void
-  /** docs/plan/18-picking-and-overlay.md: default no-op; a page wires this to `client.overlay.
+  /** M18: default no-op; a page wires this to `client.overlay.
    * update()` the same way `onCamera` wires `client.camera.tick(dtMs)` -- `frame-loop.ts` itself
    * only guarantees the phase ordering (`overlay` after `camera`/`render`), not the call. */
   onOverlay?(): void
-  /** docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): default omitted, which
+  /** M29 Scope ("Reveal gate"): default omitted, which
    * always draws (the pre-existing behaviour of every page before this milestone, unchanged) -- a
    * page wires this to `client.revealed` (or any other predicate) to gate the `render` phase's
    * terrain draw on it (`TerrainRenderer.draw`'s own `{ reveal }` option), so a join over a slow
@@ -86,7 +86,7 @@ export type FrameLoopOptions = {
   revealed?(): boolean
   /** M16 (Non-scope): default no-op. */
   onUi?(): void
-  /** M09b step 6 (docs/plan/09b-terrain-art-and-lifecycle.md, Tests added:
+  /** M09b step 6 (M09b, Tests added:
    * `frame-loop.production_runs_phases_in_order`): called with each of `FRAME_PHASES`, in order, at
    * the start of that phase's own work, every `tick()`. Purely observational (a diagnostic/test
    * hook, not a new phase: `FRAME_PHASES`' own six names are unchanged) -- default no-op, so
@@ -129,7 +129,7 @@ const noop = (): void => {}
 const NO_UPLOAD: FrameTickResult = { uploadBytes: 0, uploadRecords: 0 }
 const noopPhase = (_phase: FramePhase): void => {}
 
-// docs/plan/15d-client-clock-allocation.md: `opts.clock.now()` used to be read fresh every `tick()`
+// M15d: `opts.clock.now()` used to be read fresh every `tick()`
 // -- a fractional double, boxed as a new `HeapNumber` on every read (the same defect class 0030
 // fixed on the sim worker; measured on `test/client.ts`'s own `stepFrame`, which drives this same
 // camera-block phase in every zero-GC page: ~11.96 B/frame, Deviations). Fix round 2 (Deviations,
@@ -176,7 +176,7 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
   let handle = -1
   let running = false
   let everResumed = false
-  // docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): one reused object,
+  // M29 Scope ("Reveal gate"): one reused object,
   // mutated in place every frame (`.claude/rules/hot-paths.md`: no per-frame literal) -- `opts.
   // revealed` omitted keeps `reveal` permanently `true`, so `TerrainRenderer.draw`'s own default
   // ("no second argument" for every pre-existing caller) is what every page without this hook
@@ -190,11 +190,11 @@ export function createFrameLoop(opts: FrameLoopOptions): FrameLoop {
   function tick(tMs?: number): FrameTickResult {
     opts.viewport?.applyPending() // M09b: before every other phase, at most once per frame
     onPhase('acquire')
-    opts.client.pick.acquire() // docs/plan/18-picking-and-overlay.md: the newest DrawList slot, once
+    opts.client.pick.acquire() // M18: the newest DrawList slot, once
     onPhase('camera')
     onCamera() // camera (no-op until M11)
     opts.client.cameraState.frameTimeMs = tMs ?? frameClock.next(FRAME_MS)
-    // M17 (docs/plan/17-drawlist-and-sprites.md, steps 4-6): the real device-pixel viewport size,
+    // M17 ( steps 4-6): the real device-pixel viewport size,
     // straight off `renderer.viewport` (already refreshed this tick by `applyPending()`, above,
     // before the `camera` phase) -- plain number assignments, no allocation
     // (`.claude/rules/hot-paths.md`), the same pattern `frameTimeMs` just used on the line above.
@@ -273,11 +273,11 @@ export type RealFrameLoopOptions = {
   /** M09b step 7 (`device.html`): the page's own scripted camera (Non-scope: "the device page uses
    * scripted motion via `autopan` until [M11]"), forwarded straight to `createFrameLoop`. */
   onCamera?(): void
-  /** docs/plan/18-picking-and-overlay.md step 8 (`device.html?anchors=50`): forwarded straight to
+  /** M18 step 8 (`device.html?anchors=50`): forwarded straight to
    * `createFrameLoop`, the first real page to need it (`FrameLoopOptions.onOverlay`'s own doc
    * comment: "a page's own concern", default no-op). */
   onOverlay?(): void
-  /** docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): forwarded straight to
+  /** M29 Scope ("Reveal gate"): forwarded straight to
    * `createFrameLoop` (see its own doc comment). */
   revealed?(): boolean
   /** M09b step 6: forwarded straight to `createFrameLoop` (see its own doc comment). */
@@ -287,7 +287,7 @@ export type RealFrameLoopOptions = {
    * format (`GpuResourcesOptions.colorFormat`) must equal `format`. A page that probes the canvas
    * texture adds `COPY_SRC` to `usage`. */
   canvasConfig?: { format?: GPUTextureFormat; usage?: GPUTextureUsageFlags }
-  /** Fix round 1 (docs/plan/09b-terrain-art-and-lifecycle.md Deviations): forwarded straight to
+  /** Fix round 1 (M09b Deviations): forwarded straight to
    * `createViewportController`'s own `test.observeReal` -- see that option's own doc comment.
    * Never set by a production caller. */
   test?: { observeReal?: boolean }
@@ -302,7 +302,7 @@ export type RealFrameLoop = {
 }
 
 /**
- * M09b (docs/plan/09b-terrain-art-and-lifecycle.md Scope: "Wire `frame-loop.ts`'s `createFrameLoop`
+ * M09b (Scope: "Wire `frame-loop.ts`'s `createFrameLoop`
  * ... to a real canvas"): the one place a page assembles a real `Client`/`TerrainRenderer`/canvas
  * into a running `FrameLoop`. Configures the canvas's WebGPU context once, wires `ClientOptions.
  * render` into both the viewport controller and the frame uniform, and draws into

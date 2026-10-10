@@ -1,4 +1,4 @@
-// `gc-sim-paced.html`'s script (docs/plan/13b-tick-timing-allocation.md, Order of work 1: "add a
+// `gc-sim-paced.html`'s script (M13b, Order of work 1: "add a
 // zero-GC page ... that runs the real onFire pacing path" -- built as a *new* page, not by
 // converting `gc-sim.ts`, per the orchestrator's own correction: `gc-sim.ts` keeps testing the
 // deterministic `stepSimTickSync` path it was built for in M13; this page tests the production

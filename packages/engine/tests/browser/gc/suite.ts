@@ -1,4 +1,4 @@
-// `zeroGcSuite({ pageId, path, expectAdapter? })` (docs/plan/04-zero-gc-harness.md, Seams):
+// `zeroGcSuite({ pageId, path, expectAdapter? })` (M04, Seams):
 // generates the clean test and every permanent negative control from a page's `budgets.json` entry
 // alone, so "registering a zero-GC test later = a page that calls `installGcPage`, a `gc.pages.
 // <pageId>` entry, and a spec file calling `zeroGcSuite`" (M09, M13, M16, M18, M29).
@@ -75,7 +75,7 @@ function detail(r: GcResult): string {
 function assertEnvironment(r: GcResult, path: string, opts: { expectAdapter?: boolean }): void {
   expect(r.crossOriginIsolated, `${path}: crossOriginIsolated`).toBe(true)
   if (opts.expectAdapter) {
-    // docs/plan/10-ci-workflow.md, Scope ("adapter class recorded by every GPU test") and
+    // M10, Scope ("adapter class recorded by every GPU test") and
     // orchestrator's decision 4: mirrors `tests/browser/support/gpu.ts`'s `expectAdapter` so a
     // `zeroGcSuite`-generated GPU test's adapter also reaches `scripts/lib/report.mjs`'s
     // `adapters` (the runner's quiet-by-default log), not just `terrain-readback.spec.ts`'s
@@ -125,11 +125,11 @@ export function zeroGcSuite(opts: {
   expectAdapter?: boolean
   /** Which negative-control kinds to generate; default every kind (`gc-loop`'s own shape).
    * `object`/`burst` are generated per isolate, `post-message` per worker isolate only.
-   * docs/plan/06b-workers-and-spawn.md, orchestrator decision 2: a production-topology page (no
+   * M06b, orchestrator decision 2: a production-topology page (no
    * spare `postMessage` type to drive a message-round-trip tick) passes `['object', 'burst']`. */
   controlKinds?: readonly ControlKind[]
   /** Forwarded to `measure()`'s own `extraSettleFrames` (see its doc comment): `terrain`'s own gate
-   * fix round 2, docs/plan/09-renderer-terrain.md Deviations. Default 0, every other page
+   * fix round 2, M09 Deviations. Default 0, every other page
    * unaffected. */
   extraSettleFrames?: number
   /** Default false. `true`: this page's worker-isolate `object` negatives are `@slow` too (`main`'s
@@ -139,7 +139,7 @@ export function zeroGcSuite(opts: {
   /** Opt-in, page-specific check run once, after the `${pageId} clean` test's own environment/
    * verdict assertions (never inside a negative-control test, and never inside the measured
    * window itself: `run()` above has already finished by the time this fires) -- `gc-slice.ts`'s
-   * own `predictStats` check (docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures
+   * own `predictStats` check (M26, Open gate failures
    * item 3, gate round 1) is the first caller. Every other page passes nothing, so this is a no-op
    * for them. */
   afterClean?: (page: Page) => Promise<void>
@@ -154,7 +154,7 @@ export function zeroGcSuite(opts: {
   test(`${opts.pageId} clean`, async ({ page, browser }) => {
     const r = await run(page, browser, opts.pageId, opts.path, null, opts.extraSettleFrames)
     assertEnvironment(r, opts.path, opts)
-    // Gate round 3 (docs/plan/09-renderer-terrain.md, Deviations): with `burst` demoted to `@slow`
+    // Gate round 3 (M09, Deviations): with `burst` demoted to `@slow`
     // for every page but `gc-loop`, this is what proves, in the fast tier, that instrument A's own
     // thread discovery (`analyse.ts`'s `presentIsolates`) actually found every expected isolate's
     // thread in the trace -- not just that it saw zero GC events there, which a mark dropped by a

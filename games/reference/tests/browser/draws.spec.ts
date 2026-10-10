@@ -1,4 +1,4 @@
-// `reference_draws_player_furnace_and_ghost` (docs/plan/33c-drawables-on-real-pages.md Scope 3):
+// `reference_draws_player_furnace_and_ghost` (M33c Scope 3):
 // the DrawList reaches pixels on the real reference page (`game.ts`'s `attachClientDrawables`).
 // Every check compares the same pixel with the drawables pass on and off (`window.__pixelAt`,
 // `test-entry.ts`), so no exact GPU colour is asserted and it holds under SwiftShader. Stepped

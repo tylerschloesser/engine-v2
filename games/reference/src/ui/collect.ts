@@ -1,4 +1,4 @@
-// `createCollectUi` (docs/plan/20b-reference-player-and-collect-ui.md Scope): one `<button>` per
+// `createCollectUi` (M20b Scope): one `<button>` per
 // `Ui.in_range` entry, anchored over its tile; a click dispatches `StartCollect`; while
 // `Ui.collecting` names this button's own tile it fills over the collect duration and every other
 // button disables; a button whose tile drops out of `in_range` while it is the collecting one gets
@@ -202,7 +202,7 @@ export function createCollectUi(client: Client, doc: Document = document): Colle
     const key = pendingSeq.get(seq)
     if (key === undefined) return
     pendingSeq.delete(seq)
-    // docs/plan/28b-reconnect-and-lifecycle.md step 3: `Lost` (a reconnect popped this seq because
+    // M28b step 3: `Lost` (a reconnect popped this seq because
     // the host's own `Welcome` already covers it, its real ack lost with the old connection) has
     // no `Rejected` reason to show -- the resync itself already reflects the true outcome, so this
     // UI treats it exactly like `Confirmed`: nothing to animate.

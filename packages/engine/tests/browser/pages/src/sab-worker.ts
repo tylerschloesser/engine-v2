@@ -1,4 +1,4 @@
-// `sab.html`'s worker half of `sab.ring_both_directions` (docs/plan/06-sab-primitives-and-workers.md,
+// `sab.html`'s worker half of `sab.ring_both_directions` (M06,
 // Tests added): drains `toWorker` (main -> worker), checking its own sequence, and independently
 // produces `fromWorker` (worker -> main) traffic, so both directions carry real, separately
 // sequenced messages rather than an echo of one.

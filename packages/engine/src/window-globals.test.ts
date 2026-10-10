@@ -1,4 +1,4 @@
-// docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 5 (gate fix round): the
+// M23, "Open gate failures" 5 (gate fix round): the
 // exports-map test (`test.test.ts`) only checks *import* reachability -- production code never
 // reaches `src/test/**` through an `import`. It says nothing about a production file writing straight
 // onto the global object itself (`window.__foo = ...`), which would leak a debug hook into every real

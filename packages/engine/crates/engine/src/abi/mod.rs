@@ -159,7 +159,7 @@ pub fn sim_disconnect<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
     }
 }
 
-/// docs/plan/28b-reconnect-and-lifecycle.md step 4: `Instance::sim_log_disconnected`.
+/// M28b step 4: `Instance::sim_log_disconnected`.
 pub fn sim_log_disconnected<T: Instance>(slot: &Slot<T>, player: u32) -> Status {
     match slot.sim() {
         Ok(rt) => rt.inst.sim_log_disconnected(player),
@@ -174,7 +174,7 @@ pub fn sim_log_disconnected<T: Instance>(slot: &Slot<T>, player: u32) -> Status 
 /// each take the whole `&(mut) self`) -- fine off the tick path (`sim_attach` runs once per
 /// connection), unlike every per-tick region access elsewhere in this file.
 ///
-/// docs/plan/28-sessions-and-reconnect.md steps 3-5 (`ABI_VERSION` 27 -> 28): on success, also
+/// M28 steps 3-5 (`ABI_VERSION` 27 -> 28): on success, also
 /// writes `Instance::sim_last_superseded()` (one LE `u32`, `u32::MAX` = "nothing") into `Result`
 /// offset 0 -- a second, sequential borrow of `rt.layout` *after* the `Tx` borrow above has ended,
 /// not a simultaneous one, so no region-slicing helper is needed. `sim_attach`'s own contract
@@ -199,7 +199,7 @@ pub fn sim_attach<T: Instance>(slot: &Slot<T>, conn: u32, len: u32) -> i32 {
     }
 }
 
-/// docs/plan/28b-reconnect-and-lifecycle.md step 2: `sim_resync(conn, epoch) -> len`, or
+/// M28b step 2: `sim_resync(conn, epoch) -> len`, or
 /// `-(status)` -- the same shape as `sim_attach` minus the `Rx` input (there is nothing to parse,
 /// only a fresh `Welcome` to build and send). `tx` is the whole `Tx` region.
 pub fn sim_resync<T: Instance>(slot: &Slot<T>, conn: u32, epoch: u32) -> i32 {
@@ -213,7 +213,7 @@ pub fn sim_resync<T: Instance>(slot: &Slot<T>, conn: u32, epoch: u32) -> i32 {
     }
 }
 
-/// `sim_detach(conn)`. docs/plan/34-reference-multiplayer.md (`ABI_VERSION` 37 -> 38): on success
+/// `sim_detach(conn)`. M34 (`ABI_VERSION` 37 -> 38): on success
 /// also writes the presence sample the detach removed into `Result` (LE `u32` length at offset 0,
 /// `0` = none, then that many bytes) -- widened in place, the same way `sim_attach`'s `Result` was.
 pub fn sim_detach<T: Instance>(slot: &Slot<T>, conn: u32) -> Status {
@@ -350,7 +350,7 @@ pub fn sim_warm_one<T: Instance>(slot: &Slot<T>) -> u32 {
 /// `tick_hz()`: the sim role's own tick rate ("20 Hz is hardcoded" gap, docs/plan/
 /// 13-sim-host-tick-loop.md). Same "always answer, cost nothing on a wrong role" shape as
 /// `sim_warm_one`: the trait default (`20`) on anything but `Role::Sim`, not an error.
-/// docs/plan/16-action-round-trip.md: broadened from `slot.sim()` to "any initialised role"
+/// M16: broadened from `slot.sim()` to "any initialised role"
 /// (Deviations) -- `Instance::tick_hz`'s own doc comment already established the answer is
 /// role-independent (`GameInstance::tick_hz` ignores `self`'s variant), and the client worker now
 /// needs its own instance's tick rate for the clock block (`ticks_per_second`) the same way
@@ -365,7 +365,7 @@ pub fn tick_hz<T: Instance>(slot: &Slot<T>) -> u32 {
 }
 
 /// `chunk_bits()`: `G::CHUNK_BITS`, same "any initialised role, cost nothing" shape as `tick_hz`
-/// (docs/plan/24b-upgrade-and-migration.md Scope).
+/// (M24b Scope).
 pub fn chunk_bits<T: Instance>(slot: &Slot<T>) -> u32 {
     match slot.get().as_mut() {
         Some(rt) => rt.inst.chunk_bits(),
@@ -375,7 +375,7 @@ pub fn chunk_bits<T: Instance>(slot: &Slot<T>) -> u32 {
 
 /// The raw export argument is **unused** (hence `_raw_t_ms`), and the `t_ms` an `Instance::frame`
 /// receives is `camera.frame_time_ms`, read out of this role's own `Camera` region -- decision A of
-/// fix round 3 (docs/plan/06b-workers-and-spawn.md, Deviations). The JS side stopped computing the
+/// fix round 3 (M06b, Deviations). The JS side stopped computing the
 /// argument in fix round 2 (a `Float64Array` element read boxed a fresh `HeapNumber` on every real
 /// frame: `worker/client.ts` passes a constant instead), and a parameter that is silently always
 /// zero would be a trap for every brief that cites `frame(t_ms)`. Both channels carry the same
@@ -399,7 +399,7 @@ pub fn frame<T: Instance>(slot: &Slot<T>, _raw_t_ms: f64) -> Status {
 
 /// `gen_chunk(cx, cy)` (0008 §1, §2 table): the whole `GenOut` region is handed to the instance as
 /// `out`, its length whatever the gen-role `init` declared (`dims.slab_bytes()`, Seams of
-/// docs/plan/08-worldgen-and-gen-worker.md -- never a literal).
+/// M08 -- never a literal).
 pub fn gen_chunk<T: Instance>(slot: &Slot<T>, cx: i32, cy: i32) -> Status {
     let rt = match slot.gen_role() {
         Ok(rt) => rt,
@@ -411,7 +411,7 @@ pub fn gen_chunk<T: Instance>(slot: &Slot<T>, cx: i32, cy: i32) -> Status {
 
 /// `gen_take(worker) -> u32`: `1` when a 16-byte `genRequest` record now sits at offset 0 of
 /// `Result`, `0` otherwise -- including a wrong role or an instance with no `client::TerrainFeed`
-/// (docs/plan/08b-gen-workers-and-queue.md, orchestrator decisions: this must cost nothing and
+/// (M08b, orchestrator decisions: this must cost nothing and
 /// return 0 on a page whose client role has none, so no `Status` crosses here).
 pub fn gen_take<T: Instance>(slot: &Slot<T>, worker: u32) -> u32 {
     let rt = match slot.client() {
@@ -461,7 +461,7 @@ pub fn client_chunk_hash<T: Instance>(slot: &Slot<T>, cx: i32, cy: i32) -> Statu
 }
 
 /// `upload_stage(max_records) -> u32`: records staged into `ChunkTexels`, `0` on a wrong role or an
-/// instance with no `client::Uploader` (docs/plan/09-renderer-terrain.md, same "always answer, cost
+/// instance with no `client::Uploader` (M09, same "always answer, cost
 /// nothing" shape as `gen_take`, so no `Status` crosses here either).
 pub fn upload_stage<T: Instance>(slot: &Slot<T>, max_records: u32) -> u32 {
     let rt = match slot.client() {
@@ -473,7 +473,7 @@ pub fn upload_stage<T: Instance>(slot: &Slot<T>, max_records: u32) -> u32 {
 }
 
 /// `on_input(len) -> status`: decodes `len` bytes of `Rx` as whole `client::input::InputEvent`
-/// records (docs/plan/11-camera-and-input.md). `Rx` is read through a raw pointer taken before
+/// records (M11. `Rx` is read through a raw pointer taken before
 /// `Result` is borrowed mutably -- the same deferred-borrow shape `CameraBlock::ptr` uses
 /// (`client/camera.rs`'s own doc comment): `Rx` and `Result` are separate allocations
 /// (`RegionLayout::region`) that never move or resize after init, so reading one immutably while
@@ -619,7 +619,7 @@ pub fn on_action<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
 
 /// `client_poll_ui() -> len`: copies at most one batch of UI-ring records into the whole `Ui`
 /// region, same "always answer, cost nothing" shape as `upload_stage` -- no `Status` crosses here
-/// either (docs/plan/16-action-round-trip.md).
+/// either (M16.
 pub fn client_poll_ui<T: Instance>(slot: &Slot<T>) -> u32 {
     let rt = match slot.client() {
         Ok(rt) => rt,
@@ -630,7 +630,7 @@ pub fn client_poll_ui<T: Instance>(slot: &Slot<T>) -> u32 {
 }
 
 /// `client_clock_stats() -> status`: `authoritative_tick`, `ack_seq`, `predicted_tick`,
-/// `tick_fraction` (as `f32` bits) into `Result` (docs/plan/16-action-round-trip.md; docs/plan/
+/// `tick_fraction` (as `f32` bits) into `Result` (M16; docs/plan/
 /// 26-prediction-rendering-and-clocks.md steps 4-6 widened this from two fields to four,
 /// `ABI_VERSION` 23 -> 24; `Instance::client_clock_stats`'s own doc comment has the exact shape).
 pub fn client_clock_stats<T: Instance>(slot: &Slot<T>) -> Status {
@@ -681,7 +681,7 @@ pub fn client_ui_mark_dirty<T: Instance>(slot: &Slot<T>) -> Status {
 }
 
 /// `client_ui_stats() -> status`: `UiObserver::{calls, records}` as two LE `u32` into `Result`
-/// (docs/plan/16b-ui-observation-and-clock.md; `Instance::client_ui_stats`'s own doc comment).
+/// (M16b; `Instance::client_ui_stats`'s own doc comment).
 /// `engine/test`-only (`uiObserverStats`).
 pub fn client_ui_stats<T: Instance>(slot: &Slot<T>) -> Status {
     let rt = match slot.client() {
@@ -693,7 +693,7 @@ pub fn client_ui_stats<T: Instance>(slot: &Slot<T>) -> Status {
 }
 
 /// `client_predict_stats() -> status`: `ClientCore::predict_applied_ever` as one LE `u32` into
-/// `Result` (docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures item 3, gate
+/// `Result` (M26, Open gate failures item 3, gate
 /// round 1; `Instance::client_predict_stats`'s own doc comment). `engine/test`-only
 /// (`predictStats`).
 pub fn client_predict_stats<T: Instance>(slot: &Slot<T>) -> Status {
@@ -776,7 +776,7 @@ pub fn client_corrupt_chunk<T: Instance>(slot: &Slot<T>, cx: u32, cy: u32) -> St
 }
 
 /// `drawlist_len() -> u32`: `Instance::drawlist_len`'s own "always answer, cost nothing" shape --
-/// `0` on a wrong role (docs/plan/17-drawlist-and-sprites.md), not an error.
+/// `0` on a wrong role (M17, not an error.
 pub fn drawlist_len<T: Instance>(slot: &Slot<T>) -> u32 {
     match slot.client() {
         Ok(rt) => rt.inst.drawlist_len(),
@@ -784,7 +784,7 @@ pub fn drawlist_len<T: Instance>(slot: &Slot<T>) -> u32 {
     }
 }
 
-/// `sim_restore_begin(total_len)` (docs/plan/22b-persistence-load-and-fs.md).
+/// `sim_restore_begin(total_len)` (M22b.
 pub fn sim_restore_begin<T: Instance>(slot: &Slot<T>, total_len: u32) -> Status {
     match slot.sim() {
         Ok(rt) => rt.inst.sim_restore_begin(total_len),
@@ -816,7 +816,7 @@ pub fn sim_restore_end<T: Instance>(slot: &Slot<T>) -> Status {
     rt.inst.sim_restore_end(result)
 }
 
-/// `sim_upgrade_begin(total_len)` (docs/plan/24b-upgrade-and-migration.md step 4).
+/// `sim_upgrade_begin(total_len)` (M24b step 4).
 pub fn sim_upgrade_begin<T: Instance>(slot: &Slot<T>, total_len: u32) -> Status {
     match slot.sim() {
         Ok(rt) => rt.inst.sim_upgrade_begin(total_len),
@@ -848,7 +848,7 @@ pub fn sim_upgrade_end<T: Instance>(slot: &Slot<T>) -> Status {
     rt.inst.sim_upgrade_end(result)
 }
 
-/// `sim_identity_compare(len)`: gate fix round 2 (docs/plan/24b-upgrade-and-migration.md) -- `len`
+/// `sim_identity_compare(len)`: gate fix round 2 (M24b -- `len`
 /// bytes of `Persist`, reused as a receive buffer (same "in vs out, same region" convention as
 /// `sim_restore_push`'s own doc comment), decoded as an `Identity` and compared against this
 /// build's own via `persist::Identity::compare`. Needs both an input view of `Persist` and an
@@ -896,7 +896,7 @@ pub fn sim_replay_push<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
 }
 
 /// `sim_replay_end()`: also writes the dropped-undecodable-record count into `Result`
-/// (`Instance::sim_replay_end`'s own doc comment, docs/plan/24b-upgrade-and-migration.md).
+/// (`Instance::sim_replay_end`'s own doc comment, M24b.
 pub fn sim_replay_end<T: Instance>(slot: &Slot<T>) -> Status {
     let rt = match slot.sim() {
         Ok(rt) => rt,
@@ -922,7 +922,7 @@ pub fn sim_tick_now<T: Instance>(slot: &Slot<T>) -> u32 {
     }
 }
 
-/// `sim_replay_scan_begin(segment)`: starts the scan pass (docs/plan/24-recovery-and-migration.md).
+/// `sim_replay_scan_begin(segment)`: starts the scan pass (M24.
 pub fn sim_replay_scan_begin<T: Instance>(slot: &Slot<T>, segment: u32) -> Status {
     match slot.sim() {
         Ok(rt) => rt.inst.sim_replay_scan_begin(segment),
@@ -944,7 +944,7 @@ pub fn sim_replay_scan_push<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
 }
 
 /// `sim_replay_scan_end()`: also writes the total scanned record count into `Result`
-/// (`Instance::sim_replay_scan_end`'s own doc comment, docs/plan/24b-upgrade-and-migration.md).
+/// (`Instance::sim_replay_scan_end`'s own doc comment, M24b.
 pub fn sim_replay_scan_end<T: Instance>(slot: &Slot<T>) -> Status {
     let rt = match slot.sim() {
         Ok(rt) => rt,
@@ -968,7 +968,7 @@ pub fn sim_log_skip<T: Instance>(slot: &Slot<T>, segment: u32, offset: u32) -> i
 }
 
 /// `sim_test_trap()`: test-only by convention, reached only through `engine/test`'s `trapSim`
-/// (docs/plan/24-recovery-and-migration.md).
+/// (M24.
 pub fn sim_test_trap<T: Instance>(slot: &Slot<T>) -> Status {
     match slot.sim() {
         Ok(rt) => rt.inst.sim_test_trap(),

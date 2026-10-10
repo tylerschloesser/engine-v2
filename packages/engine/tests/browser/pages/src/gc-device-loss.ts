@@ -1,4 +1,4 @@
-// `gc-device-loss.html`'s script (docs/plan/37b-device-loss.md step 5, Tests added: `device loss then
+// `gc-device-loss.html`'s script (M37b step 5, Tests added: `device loss then
 // zero-GC window @slow`): `gc-connected-terrain.ts`'s page (a real local connected `fx-puts` client
 // panning under a real renderer) with the renderer owned by a `GpuHost`. `window.__lossThenGc.
 // loseAndRecover()` loses the device, steps frames through the outage, waits for the rebuild and

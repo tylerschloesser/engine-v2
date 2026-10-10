@@ -1,4 +1,4 @@
-// `createInventoryUi` (docs/plan/20b-reference-player-and-collect-ui.md Scope: "A plain inventory
+// `createInventoryUi` (M20b Scope: "A plain inventory
 // readout (six counts)."). No anchoring: a fixed DOM element, not tied to any tile.
 import type { RefUi } from '../bindings/RefUi.js'
 import { el } from './dom.js'

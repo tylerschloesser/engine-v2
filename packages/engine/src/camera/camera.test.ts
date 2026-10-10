@@ -20,7 +20,7 @@ import { screenToWorld } from './transform.js'
 
 // A wide, non-square viewport throughout: 1600x800 means `tilesAcross` maps to the *width*
 // (pxPerTile = 1600 / tilesAcross); every pivot point below is off-centre and asymmetric on
-// purpose (docs/plan/11-camera-and-input.md's own warning against a probe point where a sign
+// purpose (M11's own warning against a probe point where a sign
 // error, a half-tile offset or a swapped axis would still agree).
 const viewport = { widthPx: 1600, heightPx: 800 }
 

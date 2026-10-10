@@ -1,4 +1,4 @@
-// The flattened-session CDP transport (docs/plan/04-zero-gc-harness.md, Planning decisions "CDP
+// The flattened-session CDP transport (M04, Planning decisions "CDP
 // transport: both, behind one interface"; 0024 §12; PRE-PLAN.md risk 11). Node's own CDP WebSocket
 // against Chromium's `--remote-debugging-port`, `Target.attachToTarget` + `Target.setAutoAttach
 // {flatten: true}`, routed by `sessionId` on one connection -- the replacement named in 0016's
@@ -8,7 +8,7 @@
 import type { IsolateSession } from './sessions.ts'
 
 /** `ENGINE_CDP_PORT`: base port; a worker adds its own `parallelIndex` so two suites (or two
- * worktrees) never collide (docs/plan/04-zero-gc-harness.md notes). */
+ * worktrees) never collide (M04 notes). */
 export const ENGINE_CDP_PORT_BASE = Number(process.env.ENGINE_CDP_PORT ?? 9333)
 
 type Pending = {

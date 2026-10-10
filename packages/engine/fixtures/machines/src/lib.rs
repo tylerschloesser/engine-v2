@@ -1,4 +1,4 @@
-//! Fixture game `fx-machines` (docs/plan/21-entities-and-timers.md, docs/plan/
+//! Fixture game `fx-machines` (M21, docs/plan/
 //! 21b-timers-wakeups-and-tickcx.md): a 2x2 multi-tile entity that exercises footprint occupancy,
 //! footprint-scoped delta/snapshot delivery, the state-budget check and (M21b) the timer wheel,
 //! wake queue and an active-list "Spinner" end to end.
@@ -16,7 +16,7 @@
 //!
 //! **Tick rule (M21b)**: `Feed` sets `fed = true` and (through `Authority`'s auto-wake, being an
 //! apply-time put) queues the entity for the same tick's `next_woken()` -- the "put itself is the
-//! wake-up" pattern (docs/plan/21b-timers-wakeups-and-tickcx.md Planning decisions), since `apply`
+//! wake-up" pattern (M21b Planning decisions), since `apply`
 //! has no `wake_at` of its own to call. Woken + fed + idle (`done_at == 0`, i.e. not already
 //! smelting) schedules `done_at = now + SMELT` via `wake_at`; due pops from the timer wheel,
 //! `count += 1`, then sleeps (`fed = false`, `done_at = 0`) until fed again -- one smelt cycle per
@@ -45,7 +45,7 @@ pub const SMELT: Ticks = TickRate::HZ_20.secs(5);
 /// accumulator pattern). At the default 20 Hz, 10 ticks.
 pub const SPIN_PERIOD: Ticks = TickRate::HZ_20.millis(500);
 
-/// The active-list system the Spinner registers with (docs/plan/21b-timers-wakeups-and-tickcx.md
+/// The active-list system the Spinner registers with (M21b
 /// Scope: "a `Spinner` prototype lives on an active list"), set once by `Machines::register`
 /// (`Store::new`, before any tick runs) and read by `Machines::tick`. `Registry::system` always
 /// hands out the same sequential id (`0`, the only system this fixture ever registers) for any

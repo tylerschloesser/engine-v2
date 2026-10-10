@@ -9,7 +9,7 @@ import { lastLines, readLog } from './run.mjs'
 /**
  * Shared `parse`: exit 0 with no report file means 0 tests, pass; a non-zero exit that the report
  * does not explain becomes one failure holding the tail of the log. The failure's own name says
- * which of those two happened (docs/plan/10-ci-workflow.md, Deviations: a run whose `wasm` step
+ * which of those two happened (M10, Deviations: a run whose `wasm` step
  * exited 1 with a report that parsed cleanly and showed 0 failures was still reported as "without a
  * parseable report" -- true of neither the report nor the exit, and it cost a session real time to
  * find that out from the artefact instead of the message) -- a report present but the run still
@@ -68,11 +68,11 @@ export const adapters = {
       return {
         cmd: 'pnpm',
         // Without --passWithNoTests a project with no test files exits 1. `--reporter=default`
-        // alongside `--reporter=json` (docs/plan/17d-fast-tier-wall-time.md step 0): the `json`
+        // alongside `--reporter=json` (M17d step 0): the `json`
         // reporter's own summary has no field for an error the JSON schema doesn't model -- an
         // "Unhandled Rejection"/"Unhandled Error" Vitest catches outside any running test, which
         // still fails the run (exit 1) while the summary shows 0 failures (a real CI occurrence,
-        // `docs/plan/10-ci-workflow.md` Deviations). `default`'s own "⎯ Unhandled Errors ⎯" block
+        // `M10` Deviations). `default`'s own "⎯ Unhandled Errors ⎯" block
         // (with the offending stack) prints to this same log either way -- the log is only ever
         // excerpted into console output on a non-zero exit (`run.mjs`), so a passing run stays
         // exactly as quiet as before. Vitest accepts one bare `--outputFile=` with two reporters
@@ -106,12 +106,12 @@ export const adapters = {
   // playwright.config.ts`. `--grep` composes the `@slow` tag with `pattern` the same way the
   // `vitest` adapter's `-t` does. `suite.args` (from scripts/suites.mjs) picks projects: the
   // `browser` suite itself runs `chromium`+`gc` in every tier; a `legs` entry runs `webkit`+
-  // `firefox` only in the slow tier (`onlyTier`, gate round 3: docs/plan/09-renderer-terrain.md,
+  // `firefox` only in the slow tier (`onlyTier`, gate round 3: M09,
   // Deviations "Gate round 3") -- WebKit/Firefox carry no `@slow` title tag (their own
   // `@engines`/`@webkit-gpu` project-level `grep` already scopes them), so that leg's own grep is
   // `noSlowTag`: plain `pattern`, no `@slow` composition. A `pnpm gc` mode (GC_MODE=software,
   // GC_CDP=flat, --repeat-each) is a separate, local-only invocation of the same `gc` project
-  // (docs/plan/04-zero-gc-harness.md, Seams).
+  // (M04, Seams).
   playwright: {
     command({ suite, pattern, tier }) {
       if (suite.onlyTier && suite.onlyTier !== tier) return null
@@ -154,7 +154,7 @@ export const adapters = {
     // message, same as every other empty-grep case) -- so exit code cannot tell this apart from a
     // real crash before any test ran.
     //
-    // Gate round 1 fix (docs/plan/20-reference-game-v0.md): the previous version of this function
+    // Gate round 1 fix (M20: the previous version of this function
     // treated *any* parsed, empty (`tests: 0, failures: []`) report as this legitimate case, exit
     // code unchecked -- but a `webServer` that fails to start produces the exact same shape (a
     // crash before any spec runs still lets the JSON reporter finalize a valid, empty report), so it

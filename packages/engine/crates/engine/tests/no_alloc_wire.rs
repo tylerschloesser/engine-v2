@@ -1,6 +1,6 @@
 //! Own test binary (mirrors `no_alloc_codec.rs`/`no_alloc_store.rs`: a `#[global_allocator]` only
 //! counts allocations made inside the binary that installs it, so this cannot be an inline
-//! `#[cfg(test)]` module inside `wire/mod.rs` itself). Budget (docs/plan/14-wire-framing.md
+//! `#[cfg(test)]` module inside `wire/mod.rs` itself). Budget (M14
 //! Budgets): "Zero allocation in encode/decode." Setup (building the `Store`, the frame/uplink
 //! buffers, the values to encode) happens outside the measured region; only the wire encode/decode
 //! calls themselves are checked.

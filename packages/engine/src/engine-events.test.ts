@@ -1,4 +1,4 @@
-// `engine event surface` (docs/plan/37-robustness-events.md, Scope "Event-surface audit"): every
+// `engine event surface` (M37, Scope "Event-surface audit"): every
 // engine-to-game event the ADRs promise (0005 Consequences, 0013, 0018 §8; the table in the brief)
 // is on the TypeScript surface through one delivery style (`client.on<Name>(cb)`), and a behaviour
 // test named here exists in the test tree. (a) Types: `expectTypeOf` is checked by `tsc` (`pnpm

@@ -1,4 +1,4 @@
-//! Fixture game `fx-busy-field` (docs/plan/31-rates-and-integrity.md step 2): the load 0010's
+//! Fixture game `fx-busy-field` (M31 step 2): the load 0010's
 //! bandwidth rows are measured against.
 //!
 //! **Steady field** ([`BusyField`], the exported game): genesis lays out [`FIELD_MACHINES`] = 200

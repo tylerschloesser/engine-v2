@@ -1,4 +1,4 @@
-// `tarball-install @slow` (docs/decisions/0017 §8; docs/plan/35-packaging-and-adapters.md Tests
+// `tarball-install @slow` (docs/decisions/0017 §8; M35 Tests
 // added): the engine, packed with `pnpm pack` and installed with `--ignore-workspace` into a Vite
 // game under `<tmpdir>/engine-tarball-test/` (outside both workspaces, no lockfile), whose
 // `sim/Cargo.toml` path-depends on `node_modules/engine/crates/engine`. Four tarball cells (`vite

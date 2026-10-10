@@ -14,7 +14,7 @@ export default defineConfig({
             // M04: pure CDP-analysis and budgets-file logic, unit-testable without a browser.
             'packages/engine/tests/browser/gc/*.test.ts',
             'packages/engine/tests/support/*.test.ts',
-            // docs/plan/20-reference-game-v0.md: `games/reference`'s own unit tests (the asset
+            // M20: `games/reference`'s own unit tests (the asset
             // script's reproducibility, package/bindings hygiene), same two glob shapes as above.
             'games/*/src/**/*.test.ts',
             'games/*/scripts/**/*.test.mjs',
@@ -44,7 +44,7 @@ export default defineConfig({
           environment: 'node',
           include: [
             'packages/engine/tests/netcode/**/*.test.ts',
-            // docs/plan/34c-reference-scripted-multiplayer.md: the reference game's scripted multiplayer.
+            // M34c: the reference game's scripted multiplayer.
             'games/reference/tests/netcode/**/*.test.ts',
           ],
         },

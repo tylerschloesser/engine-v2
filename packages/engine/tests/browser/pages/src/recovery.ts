@@ -1,4 +1,4 @@
-// `recovery.html`'s script (docs/plan/37-robustness-events.md steps 1-3): one real `createClient()`
+// `recovery.html`'s script (M37 steps 1-3): one real `createClient()`
 // single-player topology (`host.connect`, optionally `persist`) over a fixture named in the URL, with
 // the `TestFlags` the test wants (`trapClientAtFrame`, `killSimWorkerAtTick`, `failStorageAtTick`)
 // and a manual clock, so every guard window below is measured on injected time. Everything is

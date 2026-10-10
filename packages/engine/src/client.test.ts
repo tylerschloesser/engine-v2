@@ -1,4 +1,4 @@
-// `client.ts`'s `dispatch`/`onActionResult`/the extended `ready` (docs/plan/16-action-round-trip.md
+// `client.ts`'s `dispatch`/`onActionResult`/the extended `ready` (M16
 // step 3), driven against the real `createClient()` -- real `SabSet`, real rings, real clock block
 // -- with a fake `Worker` (never a real one under Node) that just replies `{ type: 'ready' }`, and
 // a fake `Scheduler` this file pumps by hand instead of real timers/rAF (`.claude/rules/hot-paths.
@@ -108,7 +108,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-// docs/plan/29-net-worker-and-reference-server.md Tests added: "readInvite: parses #k= and ignores
+// M29 Tests added: "readInvite: parses #k= and ignores
 // unknown parameters" -- claimed built in steps 1-2's own Deviations but never actually landed in
 // this file (found while adding `wsUrl`'s own test below, next to it); added now.
 test('readInvite: parses #k= and ignores unknown parameters', () => {
@@ -306,7 +306,7 @@ test('onui_gets_only_latest_per_drain', async () => {
   const seen: unknown[] = []
   client.onUi((ui) => seen.push(ui))
 
-  // Three kind-1 records in one drain (docs/plan/16b-ui-observation-and-clock.md Planning
+  // Three kind-1 records in one drain (M16b Planning
   // decisions: "Ui is coalesced to the newest value per rAF"): only the last one's JSON reaches
   // `onUi`, parsed exactly once.
   pushUiBatch(h.sabs.uiRing, [
@@ -390,7 +390,7 @@ test('clock_returns_same_object', async () => {
   client.destroy()
 })
 
-// docs/plan/33f (ADR 0042 §5): a `fatal` the client worker posts after `ready` and whose message
+// M33f (ADR 0042 §5): a `fatal` the client worker posts after `ready` and whose message
 // names a world mismatch reaches the page as `onLink` `rejected`/`WorldMismatch`; every other
 // post-`ready` fatal is still ignored on main, exactly as before.
 test('client.world_mismatch_fatal_becomes_link_rejected', async () => {

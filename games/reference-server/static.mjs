@@ -1,4 +1,4 @@
-// `--static <dir>` (docs/plan/38-hosting-checks.md, Scope B): a file handler for the `node:http`
+// `--static <dir>` (M38, Scope B): a file handler for the `node:http`
 // server the `ws` server is attached to. A convenience of the reference server, not an engine
 // feature (`engine/server/node` stays free of HTTP, 0009). Both cross-origin isolation headers are
 // set on every response, 404s and refusals included, with the exact values of 0015 section 3.

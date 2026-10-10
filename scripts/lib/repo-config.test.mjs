@@ -1,5 +1,5 @@
 // Repository configuration that an ADR fixed and no behavioural test would notice changing: one
-// `test(...)` per decision (docs/plan/39c-acceptance-gap-tests.md). Each asserts the literal value
+// `test(...)` per decision (M39c. Each asserts the literal value
 // the ADR states, read from the file that carries it, so a loosened value fails here.
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'

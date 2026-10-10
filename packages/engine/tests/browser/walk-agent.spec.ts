@@ -1,8 +1,8 @@
-// The device-walk agent and runner page (docs/plan/39f-device-auto-runner.md step 3) in headless
+// The device-walk agent and runner page (M39f step 3) in headless
 // Chromium and WebKit, against the real phone API and the self-test state machine (no tunnel: the two
 // "origins" are `127.0.0.1` and `localhost` on one port). `@webkit-gpu` puts a test in WebKit as well as
 // Chromium (never Firefox, which has no WebGPU for the wrapper test); all are `@slow` (the browser
-// suite is full: docs/plan/39f, Tests added). The wake lock is a stub here: what the real iPhone does
+// suite is full: M39f, Tests added). The wake lock is a stub here: what the real iPhone does
 // with it is the phone self-test (`pnpm device:walk --selftest`), not something a headless engine can say.
 import { mkdtempSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'

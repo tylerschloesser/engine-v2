@@ -1,4 +1,4 @@
-//! Fixture game `fx-panicky` (docs/plan/24-recovery-and-migration.md Provides: "Fixture `panicky`:
+//! Fixture game `fx-panicky` (M24 Provides: "Fixture `panicky`:
 //! actions `PanicInAdmit`, `PanicInApply`, `ArmTickPanic { at: Tick }`, `ArmTickAlloc { at: Tick }`
 //! (the tick rule allocates past the arena), `OverflowStackInAdmit` (deterministic panics in each
 //! phase; `sim_test_trap` exists for harnesses running other fixtures)"). Every action panics
@@ -37,7 +37,7 @@ pub struct Entity;
 pub struct Player;
 
 /// Arms `Game::tick`'s own deterministic panics: `Some(tick)` means "panic (or over-allocate) the
-/// next time `Sim`'s tick counter reaches `tick`" (docs/plan/24-recovery-and-migration.md
+/// next time `Sim`'s tick counter reaches `tick`" (M24
 /// Provides). Plain sim state -- hashed and logged like any other `Global`, so replay reaches the
 /// exact same armed tick the live run did.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]

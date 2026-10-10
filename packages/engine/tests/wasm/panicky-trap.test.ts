@@ -1,4 +1,4 @@
-// docs/plan/24-recovery-and-migration.md step 1: the call-path/loader-level guarantees panic
+// M24 step 1: the call-path/loader-level guarantees panic
 // recovery depends on, proven against the `panicky` fixture and the raw ABI (no `SimHost`/
 // `recovery.ts` involved -- that machinery is the second implementer's, step 4).
 //
@@ -145,7 +145,7 @@ test('dead_instance_memory_still_readable', () => {
   expect(result.threw).toBe(true)
   expect(sim.dead).toBe(true)
 
-  // docs/plan/24-recovery-and-migration.md Provides: the `Progress` region is readable from a
+  // M24 Provides: the `Progress` region is readable from a
   // *dead* instance through `inst.region(id).u8`/`inst.mem`, which call no export at all (0014
   // §6) -- `region()`/`mem` never check `dead` (`loader.ts`'s own `Instance` methods; only
   // `call0`/`call1`/`call2` do). `phase u32 | tick u32 | record u32`, little-endian.

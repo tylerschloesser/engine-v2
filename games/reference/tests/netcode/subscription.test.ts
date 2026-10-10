@@ -1,4 +1,4 @@
-// M34c step 3 (docs/plan/34c-reference-scripted-multiplayer.md Scope): the subscription edge
+// M34c step 3 (M34c Scope): the subscription edge
 // (`NotPredictable`, "reached only by luck" in `0003` Consequences) and a furnace on a chunk corner
 // under partial subscription. Chunks are 32x32 tiles and a client holds ring 1 around its view
 // (`0010` "Subscription set").

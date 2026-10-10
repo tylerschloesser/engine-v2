@@ -33,7 +33,7 @@ export class PointerSlot {
   kind: PointerKindValue = PointerKind.Mouse
   x = 0
   y = 0
-  /** M11 step 6 (mandatory gap #1, docs/plan/11-camera-and-input.md delegation prompt): captured
+  /** M11 step 6 (mandatory gap #1, M11 delegation prompt): captured
    * at `recordPointerDown` (a button/modifier state doesn't change mid-press for `button`; the
    * modifiers are refreshed on every `recordPointerMove` too, since a real drag can start or stop
    * holding Shift etc partway through). `button` matches `PointerEvent.button` (0 primary, 1
@@ -125,7 +125,7 @@ export class PointerSlots {
 }
 
 // A fixed two-element indexed check, not `for...of` (`.claude/rules/hot-paths.md`; found by the
-// zero-GC `input` page, docs/plan/11-camera-and-input.md step 7: `for...of` over `state.slots` --
+// zero-GC `input` page, M11 step 7: `for...of` over `state.slots` --
 // a plain `Array`, not a `Set`/`Map` -- still goes through the iterator protocol on a path this
 // milestone is the first to drive hard inside a measured window, and `byFn` attributed real bytes
 // to `findSlot` itself). `MAX_POINTERS` is 2, so this never needs to generalise.
@@ -350,7 +350,7 @@ export function installPointerListeners(state: PointerSlots, canvas: HTMLElement
       e.altKey,
       e.metaKey,
     )
-    // Mandatory gap #2 (docs/plan/11-camera-and-input.md delegation prompt): a mouse fires
+    // Mandatory gap #2 (M11 delegation prompt): a mouse fires
     // `pointermove` whether or not any button is held, so this is written on every one of them --
     // not only while a `PointerSlot` happens to be press-active for this same event.
     if (e.pointerType === 'mouse') {

@@ -1,4 +1,4 @@
-//! Smelting on the host (docs/plan/33b-reference-furnace-operation.md Tests added): every test here
+//! Smelting on the host (M33b Tests added): every test here
 //! needs `advance` to have run. Deposit, take and pick-up validation is in `furnace.rs`.
 
 mod common;

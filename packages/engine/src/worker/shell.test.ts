@@ -7,7 +7,7 @@ const INDEX = 1
 const WAIT_MS = 400
 
 /**
- * The lost-wake window `Shell.observeWake` closes (fix round 3, docs/plan/06b-workers-and-spawn.md,
+ * The lost-wake window `Shell.observeWake` closes (fix round 3, M06b,
  * Deviations): a producer that sees `W_PARKED = 0` wakes the worker immediately, which can land
  * before the worker's blocking loop has read its own baseline. Re-entering with the value read
  * *before* the publish makes that wake a mismatch, so the first `Atomics.wait` returns at once
@@ -43,7 +43,7 @@ test('shell.resume_does_not_lose_a_wake', () => {
 })
 
 /**
- * M17c step 3, fix round 2 (docs/plan/17c-client-park-stall.md): a park request whose own
+ * M17c step 3, fix round 2 (M17c: a park request whose own
  * `W_YIELD = 1` store and wake land before `runBlockingLoop`'s own first wait -- inside the gap
  * `Shell.resume()` leaves between reading `W_WAKE` (`seen`) and calling here, or symmetrically at
  * `worker.ts`'s first entry or `Shell.runAsync`'s re-entry -- used to be invisible until a *further*
@@ -257,7 +257,7 @@ test('shell.runAsync_queues_a_second_call_while_one_is_in_flight', async () => {
 })
 
 /**
- * Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 3): `stop()` while a
+ * Gate fix (M23, "Open gate failures" 3): `stop()` while a
  * `runAsync` chain is in flight must prevent `#runQueued`'s own `.finally()` from re-entering the
  * loop at all, once that chain finally settles -- no further `body()` pass, ever. Proven failable: with
  * the `if (this.#stopped) return` guard removed from `#runQueued`'s `.finally()`, `bodyCalls` reaches
@@ -302,7 +302,7 @@ test('shell.stop_during_inflight_runAsync_prevents_reentry', async () => {
 })
 
 /**
- * Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 4): `runAsync`
+ * Gate fix (M23, "Open gate failures" 4): `runAsync`
  * called before this worker's first `runBlockingLoop` has ever recorded a loop (`#loop` still `null`,
  * e.g. a hypothetical caller during `setup()`) must not drop `fn` -- queued instead, and run the
  * moment `setLoop` gives it a loop to leave from, exactly like a `runAsync` call from inside a body
@@ -355,7 +355,7 @@ test('shell.runAsync_before_first_loop_is_queued_not_dropped', async () => {
 })
 
 /**
- * The entry-drain fix (docs/plan/08b-gen-workers-and-queue.md, orchestrator decision 2 at the
+ * The entry-drain fix (M08b, orchestrator decision 2 at the
  * step-5 boundary): `runBlockingLoop` must call `body(lastSeen)` once before its first
  * `Atomics.wait`, so a ring-driven worker resumed from parked drains whatever arrived while it
  * could not be woken (a wake issued while parked is not replayed on `resume()`, M06b Deviations).

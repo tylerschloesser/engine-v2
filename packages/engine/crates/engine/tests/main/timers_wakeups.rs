@@ -1,5 +1,5 @@
 //! Integration coverage of the timer wheel, wake queue and active lists end to end through
-//! `Authority`/`TickCx`/`Sim` (docs/plan/21b-timers-wakeups-and-tickcx.md Tests added). A small,
+//! `Authority`/`TickCx`/`Sim` (M21b Tests added). A small,
 //! self-contained `Game` ("WGame") whose one entity type can act as a timer-driven sleeper, an
 //! always-active spinner, a plain entity, or a "stop" sentinel that lets a test control exactly how
 //! much of the wake queue a tick rule drains -- the isolated unit tests in `sim::wake`/`sim::timers`/

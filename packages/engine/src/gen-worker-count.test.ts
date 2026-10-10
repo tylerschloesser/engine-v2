@@ -1,4 +1,4 @@
-// docs/plan/08b-gen-workers-and-queue.md, Tests added: `genWorkerCount rule` (0008 §2).
+// M08b, Tests added: `genWorkerCount rule` (0008 §2).
 import { expect, test } from 'vitest'
 import { genWorkerCount } from './client.js'
 

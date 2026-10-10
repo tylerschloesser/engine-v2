@@ -1,4 +1,4 @@
-// SPSC ring over one SAB (docs/decisions/0015-threads-memory-and-topology.md §2; docs/plan/06-sab-
+// SPSC ring over one SAB (docs/decisions/0015-threads-memory-and-topology.md §2; M06
 // primitives-and-workers.md, Planning decisions "Ring SAB layout"). Physical layout: a 32-byte
 // control block (`Int32Array[8]`), then `slots` fixed-size slots. Every slot starts with an 8-byte
 // header (`msg_len: u32`, `part: u16`, `parts: u16`); `msg_len` is non-zero only in part 0. `HEAD`
@@ -94,7 +94,7 @@ export class RingProducer {
 
   /** The maximum payload bytes a single slot holds (this ring's own `slotBytes` minus its 8-byte
    * slot header): what a caller that writes a whole record into one claimed slot (never spanning,
-   * `docs/plan/08b-gen-workers-and-queue.md`'s `genRequest`/`genResult`) must check a record
+   * `M08b`'s `genRequest`/`genResult`) must check a record
    * against, since `slotBytes`/`slots` are internal to `createRing` and the SAB's own `byteLength`
    * is the whole ring, not one slot. */
   slotPayloadBytes(): number {
@@ -110,7 +110,7 @@ export class RingProducer {
     return idx
   }
 
-  /** Slots free to claim right now (docs/plan/09-renderer-terrain.md Planning decisions:
+  /** Slots free to claim right now (M09 Planning decisions:
    * "`upload_stage` is called with `min(ring free slots, 16)`", so the worker's own conversion
    * burst never exceeds what the ring can currently accept -- no bytes staged and then dropped for
    * lack of a slot). A plain load and subtraction, no allocation. */
@@ -169,7 +169,7 @@ export class RingProducer {
   }
 
   /** Explicit drop accounting for a producer whose own policy is "drop the newest event, never
-   * block or retry" (docs/plan/11-camera-and-input.md Planning decisions "Full `inputRing`: drop
+   * block or retry" (M11 Planning decisions "Full `inputRing`: drop
    * and count"). Unlike `tryClaim`/`tryPush` returning `-1`/`false`, which is backpressure for a
    * producer that itself retries or waits (`ring.full_is_backpressure`: a failed claim there is
    * not by itself a loss), so the generic ring never assumes a failed claim is a drop on its own --
@@ -210,7 +210,7 @@ export class RingConsumer {
     return at(this.payload, i)
   }
 
-  /** Total slot count (docs/plan/09-renderer-terrain.md, Deviations "Steps 5-7"): lets a caller
+  /** Total slot count (M09, Deviations "Steps 5-7"): lets a caller
    * (`render/upload.ts`) precompute one derived view per slot up front, at setup, instead of
    * risking a first-sight allocation deep into a measured window. */
   slotCount(): number {
@@ -263,7 +263,7 @@ export class RingConsumer {
   /** The consumer-side counterpart of `RingProducer.recordDrop()`, same counter, same policy
    * ("drop the newest event, never block or retry"): for a message this ring successfully
    * delivered, but whose *consumer* then rejected on its own terms after popping it -- not a ring
-   * failure (docs/plan/16-action-round-trip.md gate item 3: `worker/client-action.ts`'s `on_action`
+   * failure (M16 gate item 3: `worker/client-action.ts`'s `on_action`
    * call returning anything but `Status.Ok`, a locally-dropped action main's own `dispatch()` has
    * already handed a `seq` for). Shares `RING_DROPS` with the producer's own drops rather than a
    * second counter, since both answer the same question a caller of `stats()` actually has: "how

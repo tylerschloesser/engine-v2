@@ -1,4 +1,4 @@
-// `dev-reload-keeps-world @slow` (docs/plan/37-robustness-events.md, Planning decisions "Snapshot ->
+// `dev-reload-keeps-world @slow` (M37, Planning decisions "Snapshot ->
 // reload -> restore on Rust edit"; closes the "keep the world across a Rust edit" question of 0017).
 //
 // Persistence already is the mechanism: a Rust edit changes the build hash, Vite full-reloads the page,

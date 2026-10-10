@@ -1,6 +1,6 @@
 //! Own test binary (mirrors `no_alloc_terrain.rs`/`no_alloc_gen_queue.rs`: a `#[global_allocator]`
 //! only counts allocations made inside the binary that installs it, and inline unit tests share
-//! the crate's own lib test binary, which installs none). Budget (docs/plan/12-store-and-game-
+//! the crate's own lib test binary, which installs none). Budget (M12
 //! trait.md Budgets): `Store::apply` must not allocate for an existing key with plain-data values.
 
 use engine::abi::Arena;

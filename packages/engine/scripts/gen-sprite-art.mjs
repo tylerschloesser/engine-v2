@@ -1,16 +1,16 @@
 // `node scripts/gen-sprite-art.mjs`: the `drawables` browser-suite fixture's own sprite asset script
 // (0018 §4: "the game's asset script (no engine tool, no npm dependency)"), run once by hand and its
 // output checked in like any other art asset -- mirrors `scripts/gen-terrain-art.mjs`'s own precedent
-// (docs/plan/09b-terrain-art-and-lifecycle.md), including where it writes: `tests/browser/pages/
+// (M09b, including where it writes: `tests/browser/pages/
 // public/drawables/`, Vite's `publicDir` for the browser-suite fixture app, so `drawables.html`
 // fetches `sprites.json`/`sprites.png` at `/drawables/*` under both `vite dev` and the built `vite
-// preview` the browser suite runs against (docs/plan/17b-sprites-and-frame-budget.md, Files touched
+// preview` the browser suite runs against (M17b, Files touched
 // names `packages/engine/fixtures/drawables/` for "generated sprites.png" -- the Rust fixture crate
 // there has no `public/` of its own, the same way `fixtures/terrain/` never held `tiles.png`; this
 // cut reads that line as "the art the `fx-drawables` game owns", served from the page's own public
 // dir, and records the deviation).
 //
-// Four sprites (docs/plan/17b-sprites-and-frame-budget.md Tests added), each with a fixed,
+// Four sprites (M17b Tests added), each with a fixed,
 // hand-computable purpose:
 //   id 0 "quad": an 8x8 four-quadrant flat-colour cell (red/green/blue/yellow, TL/TR/BL/BR), pivot
 //     [0.25, 0.75] (off-centre on both axes) and size [2, 1] tiles (non-square) -- proves pivot
@@ -24,7 +24,7 @@
 //     colour) -- `sprite.no_bleed_at_mip1` samples right at bleed's own edge, heavily minified (mip
 //     level 1), and must read pure red; removing the padding (this script's own `EXTRUDE_PX`, set to
 //     0 and rerun) lets mip 1's box filter blend in the neighbouring blue, which is how this test's
-//     own failability was proven (docs/plan/17b-sprites-and-frame-budget.md Deviations).
+//     own failability was proven (M17b Deviations).
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { encodePNG } from './lib/png.mjs'

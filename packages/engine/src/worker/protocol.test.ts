@@ -1,4 +1,4 @@
-// docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 2 (gate fix round): 0015 §2
+// M23, "Open gate failures" 2 (gate fix round): 0015 §2
 // fixes what `postMessage` may carry after setup ("fatal errors and lifecycle"), but nothing checked
 // it -- `worker/protocol.ts` used to just say M23's own new types were covered by "M06b's grep
 // criterion", "in prose". This scans every worker source for a `type: '<literal>'` string (a message

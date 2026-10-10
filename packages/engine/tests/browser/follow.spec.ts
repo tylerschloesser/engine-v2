@@ -1,4 +1,4 @@
-// docs/plan/18-picking-and-overlay.md Tests added (this cut's own share, steps 4-6): `follow.
+// M18 Tests added (this cut's own share, steps 4-6): `follow.
 // centres_in_same_frame_pan_ignored_zoom_works`. Drives `real-camera.html` (already the reused page
 // for every real-DOM/injection input test, `semantic.spec.ts`'s own precedent): a real
 // `createClient()`, a hand-filled DrawList header publish over the real `drawList` triple-buffer SAB

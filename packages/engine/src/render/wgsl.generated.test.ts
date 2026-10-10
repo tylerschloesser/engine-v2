@@ -1,4 +1,4 @@
-// docs/plan/09-renderer-terrain.md, Tests added: "wgsl.generated_is_fresh" -- `generate()` is the
+// M09, Tests added: "wgsl.generated_is_fresh" -- `generate()` is the
 // exact function `node scripts/embed-wgsl.mjs` runs to write this directory's own
 // `wgsl.generated.ts`; this compares its output against the checked-in file without shelling out.
 import { readFileSync } from 'node:fs'

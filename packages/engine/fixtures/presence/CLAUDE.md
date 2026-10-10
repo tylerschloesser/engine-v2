@@ -1,6 +1,6 @@
 # fixtures/presence (`fx-presence`)
 
-The presence-channel fixture (docs/plan/19-presence-channel.md, steps 1-3; docs/decisions/
+The presence-channel fixture (M19, steps 1-3; docs/decisions/
 0001-camera-and-presence.md). `Presence = PlayerPresence { pos: [i32; 2] /* Q24.8 */, vel: [i16;
 2] }` (0001's own reference-game shape, verbatim, 12 bytes). One witness-carrying action,
 `Action::Poke { tile, from }`:

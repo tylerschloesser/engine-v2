@@ -1,4 +1,4 @@
-//! Furnace placement (docs/plan/33-reference-furnace.md): the shared [`can_place`] rule (what both
+//! Furnace placement (M33: the shared [`can_place`] rule (what both
 //! `apply(PlaceFurnace)` and the client's ghost tint ask) and the action itself.
 //!
 //! **`can_place` names no terrain and no entity type** (0007 section 6): it asks `traits_at`, which the

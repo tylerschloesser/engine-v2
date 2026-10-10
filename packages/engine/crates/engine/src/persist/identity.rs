@@ -4,7 +4,7 @@
 //! (`WORLDGEN_VERSION` + fingerprint, 0007 §9). Embedded, not length-prefixed as a whole, inside
 //! [`crate::persist::SegmentHeader`] and a snapshot's own container.
 //!
-//! `Identity::compare` (M24b, docs/plan/24b-upgrade-and-migration.md Planning decisions 5): the
+//! `Identity::compare` (M24b, M24b Planning decisions 5): the
 //! whole reason `Identity` exists ("a log replays only against the `.wasm` that produced it",
 //! 0002) is this comparison. `container_version` is deliberately not a field of `Identity` (it
 //! lives in the snapshot envelope, 0005 Formats) and is never checked here: `SnapshotReader`
@@ -40,7 +40,7 @@ pub enum MismatchReason {
     Worldgen,
 }
 
-/// `Identity::compare`'s own outcome (docs/plan/24b-upgrade-and-migration.md Order of work 1;
+/// `Identity::compare`'s own outcome (M24b Order of work 1;
 /// decision 5's matrix, followed literally): `Same` (identical build hash, load the log tail
 /// as-is), `Direct` (a different build, but schema/tick-rate/worldgen all agree: load the
 /// snapshot then re-execute the tail), `NeedsMigrate` (`Game::migrate` must run first;

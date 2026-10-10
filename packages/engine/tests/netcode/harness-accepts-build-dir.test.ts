@@ -1,4 +1,4 @@
-// `harness-accepts-build-dir` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Tests added):
+// `harness-accepts-build-dir` (M27, Tests added):
 // `fixture` given as a `buildGame()` output directory path (`net-harness.ts`'s own `resolveFixture`
 // -- a plain string goes through `engine/server/node`'s `loadGame`), not the already-resolved
 // `{ wasm, buildHash }` object every other scenario passes.

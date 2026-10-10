@@ -1,4 +1,4 @@
-// `frame-loop.ts` unit coverage (docs/plan/09-renderer-terrain.md Scope, step 6): the ordered phase
+// `frame-loop.ts` unit coverage (M09 Scope, step 6): the ordered phase
 // list and the `Scheduler` wiring, against fakes for `Client`/`TerrainRenderer`/`Scheduler` rather
 // than a real GPU device or worker -- the real data path (residency, upload budget, one draw call)
 // is proven by the browser suite's `terrain-readback.spec.ts` instead, since the lockstep
@@ -43,7 +43,7 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
       setFollow() {},
       tick() {},
     },
-    // docs/plan/18-picking-and-overlay.md: `tick()` now calls `client.pick.acquire()`
+    // M18: `tick()` now calls `client.pick.acquire()`
     // unconditionally (the new `acquire` phase) -- unused otherwise by anything this file exercises
     // (a real `DrawListSlot`/`Overlay` needs a real SAB/canvas, Non-scope of this fakes-only file).
     pick: {
@@ -64,7 +64,7 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     },
     wakeCount: 0,
     flagsSet: 0,
-    // Unused by anything `frame-loop.ts` itself exercises (docs/plan/16-action-round-trip.md is a
+    // Unused by anything `frame-loop.ts` itself exercises (M16 is a
     // main-thread/worker/ring feature this file's fakes never touch): throwaway stubs, same
     // precedent as `camera`/`input` above.
     dispatch(): number {
@@ -92,7 +92,7 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
       return () => {}
     },
     raiseRendererLost(): void {},
-    // docs/plan/29-net-worker-and-reference-server.md steps 1-2: unused by anything
+    // M29 steps 1-2: unused by anything
     // `frame-loop.ts` itself exercises (no `{ kind: 'remote' }` host here), same precedent as
     // `onResyncing` above.
     onLink(): () => void {
@@ -101,7 +101,7 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     onVersionMismatch(): () => void {
       return () => {}
     },
-    // docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): unused by anything
+    // M29 Scope ("Reveal gate"): unused by anything
     // `frame-loop.ts` itself exercises here (this file's own `revealed` coverage is a plain
     // fixed/thunk predicate passed straight to `FrameLoopOptions.revealed`, never this method),
     // same precedent as `onLink` above.
@@ -113,7 +113,7 @@ function fakeClient(): Client & { wakeCount: number; flagsSet: number } {
     revealed(): boolean {
       return true
     },
-    // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: unused by anything `frame-loop.ts`
+    // M23 step 5: unused by anything `frame-loop.ts`
     // itself exercises, same precedent as `dispatch`/`clock` above.
     exportWorld(): Promise<Blob> {
       throw new Error('fakeClient: exportWorld not implemented')
@@ -185,7 +185,7 @@ function fakeRenderer(): TerrainRenderer & { drawCallTargets: unknown[] } {
   }
 }
 
-/** A fake `ViewportController` (docs/plan/09b-terrain-art-and-lifecycle.md): tracks calls instead of
+/** A fake `ViewportController` (M09b: tracks calls instead of
  * touching a real canvas/`ResizeObserver`, so `resume()`'s "re-check size" (`invalidate()`) is
  * provable against fakes alone, no browser needed. */
 function fakeViewport(): {
@@ -210,7 +210,7 @@ function fakeViewport(): {
   }
 }
 
-// docs/plan/18-picking-and-overlay.md Scope, step 1: `acquire` is a new first phase (Deviations:
+// M18 Scope, step 1: `acquire` is a new first phase (Deviations:
 // this necessarily changes `FRAME_PHASES`' own literal contents, which this test pins -- recorded
 // there rather than silently edited).
 test('frame-loop.phases_named_in_order', () => {
@@ -266,7 +266,7 @@ test('frame-loop.tick_calls_camera_write_upload_render_in_order', () => {
   expect(client.wakeCount).toBe(1)
 })
 
-// M09b step 6 (docs/plan/09b-terrain-art-and-lifecycle.md, Tests added): `onPhase` (the seam
+// M09b step 6 (M09b, Tests added): `onPhase` (the seam
 // `frame-loop.production_runs_phases_in_order`, a real-canvas browser test, drives against a real
 // `Client`/`TerrainRenderer`) fires with each of `FRAME_PHASES`, in that order, once per `tick()` --
 // proven here against fakes alone, the same split every other phase-order assertion in this file
@@ -341,7 +341,7 @@ test('frame-loop.pause_resume_drive_the_injected_scheduler', () => {
   expect(requested).toHaveLength(2)
 })
 
-// docs/plan/09b-terrain-art-and-lifecycle.md Scope/Seams: 0018 §8's backgrounding rule, against
+// M09b Scope/Seams: 0018 §8's backgrounding rule, against
 // fakes -- no browser needed to prove `resume()` distinguishes its very first call (an ordinary
 // start) from a restart after `pause()` (a real return from backgrounding).
 test('frame-loop.resume_after_pause_rechecks_viewport_and_sets_rebase', () => {

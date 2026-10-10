@@ -1,4 +1,4 @@
-//! `sampler_rate_and_on_change` (docs/plan/19-presence-channel.md Tests added): `ClientCore`'s own
+//! `sampler_rate_and_on_change` (M19 Tests added): `ClientCore`'s own
 //! presence sampler stays at or under 10 Hz while the sample keeps changing, sends nothing while it
 //! holds still, and sends the final at-rest value exactly once. Driven entirely by explicit `t_ms`
 //! values passed to `poll_uplink`/`set_presence` -- an injected clock, per the brief -- never a real
@@ -79,7 +79,7 @@ fn sampler_rate_and_on_change() {
             presence_field_bytes_this_second += field_bytes as u64;
         }
     }
-    // Budgets (docs/plan/19-presence-channel.md Budgets: "new budgets.json key
+    // Budgets (M19 Budgets: "new budgets.json key
     // uplink_presence_bytes_per_s, measured by sampler_rate_and_on_change"):
     // `counters.presence.uplinkBytesPerSec` mirrors `counters.subscription.*`'s own convention
     // (`packages/engine/crates/engine/src/testing/budgets.rs`). Counts only the presence field's

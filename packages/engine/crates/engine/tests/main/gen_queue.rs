@@ -216,7 +216,7 @@ fn queue_touches_retained() {
     );
 }
 
-/// Fix round 1 (docs/plan/15c-terrain-visibility-and-cache-invalidation.md Deviations): the gate
+/// Fix round 1 (M15c Deviations): the gate
 /// found the first fix livelocking `terrain-readback.spec.ts`'s "evicted slot shows new chunk"
 /// test (`clientCacheChunks: 2` under a wide view -- deliberately smaller than the generation set,
 /// so `materialize`'s own LRU capacity eviction is continuous). Counting *every* `Evicted` in
@@ -276,7 +276,7 @@ fn set_view_reaches_quiescence_under_lru_capacity_churn() {
 /// both `set_view` calls), `GenQueue::set_view` used to return early on `last_visible` alone and
 /// never re-request it, so `client_chunk_hash` would read `NotCached` forever.
 ///
-/// **M26 gate round 2** (docs/plan/26-prediction-rendering-and-clocks.md Deviations, "Gate fix
+/// **M26 gate round 2** (M26 Deviations, "Gate fix
 /// round 2"): gate fix round 1 changed what `replace_overlay` does to a chunk that *was* resident
 /// -- it now re-materializes immediately (0012/0018 §3: "a re-stage of a resident chunk must never
 /// pass through non-resident"), so the chunk this test evicts never actually goes `NotCached`

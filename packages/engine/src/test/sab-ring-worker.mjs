@@ -1,4 +1,4 @@
-// Test-only worker for `ring.test.ts`'s `ring.spsc_sequence` (docs/plan/06-sab-primitives-and-
+// Test-only worker for `ring.test.ts`'s `ring.spsc_sequence` (M06
 // workers.md): a producer on a real Node `worker_threads` thread, pushing sequenced, variable-size
 // messages (up to 5 slots) into a ring the main thread drains. Imports the built `dist/` output
 // (the `tsc` build step of `pnpm test` runs before `unit`; same pattern as `tests/wasm/bun-leg.mjs`)

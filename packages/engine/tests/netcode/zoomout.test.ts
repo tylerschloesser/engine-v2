@@ -1,4 +1,4 @@
-// `zoomout/*` (docs/plan/31-rates-and-integrity.md step 6, PRE-PLAN §9 risk 3): the 128-chunk cap
+// `zoomout/*` (M31 step 6, PRE-PLAN §9 risk 3): the 128-chunk cap
 // measured at full zoom-out (a 256-tile view, 9 x 9 visible chunks, ring 1 = 121) over a dense
 // `fx-busy-field` region, panning at one and two view-widths per second and oscillating under 64
 // tiles. One world is built once (a 25 x 11 block of dense chunks, about 55,000 entities) and every

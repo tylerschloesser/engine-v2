@@ -1,4 +1,4 @@
-//! `slow_heavy_large_save` (docs/plan/36-slow-tier-and-benchmarks.md step 7; 0002 section 3 "Heavy
+//! `slow_heavy_large_save` (M36 step 7; 0002 section 3 "Heavy
 //! mode"): the standard large save (0020 section 9) replayed twice for 300 ticks, one run
 //! uninterrupted and one snapshotting and restoring into a fresh `Sim` every 100 ticks, the same
 //! hashes at every tick. N = 100, not 1 (Planning decisions): a whole-save snapshot per tick takes

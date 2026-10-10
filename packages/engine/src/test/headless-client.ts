@@ -1,4 +1,4 @@
-// `HeadlessClient` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Seams; Planning
+// `HeadlessClient` (M27, Seams; Planning
 // decisions "One thread, stepped actors"): M15b's client-worker shell (`src/worker/client.ts`'s
 // `body()`) made callable without `Atomics.wait` -- a real `Role.Client` instance, driven directly
 // by `pump()`/`stepFrame(dt)` calls in this same thread rather than a spawned `Worker` woken across
@@ -13,7 +13,7 @@
 // real boundary this milestone's own goal is to exercise: the wire to a `Connection`.
 //
 // Terrain: "headless clients under Node (M27) have no gen workers; their client instance generates
-// synchronously on miss" (docs/plan/08b-gen-workers-and-queue.md, Consumes). A second, `Role.Gen`
+// synchronously on miss" (M08b, Consumes). A second, `Role.Gen`
 // instance of the same module is instantiated alongside the client one; `pumpGenGen()` below
 // replaces `worker/client-gen.ts`'s ring-mediated dance with a direct call: `gen_take` -> read the
 // request straight out of `Result` (no ring slot to copy through) -> `gen_chunk` on the gen
@@ -96,14 +96,14 @@ export interface HeadlessClientStatus {
   tick: number
   predictedTick: number
   ackSeq: number
-  /** docs/plan/28-sessions-and-reconnect.md: this connection's own `PlayerId`, learned from
+  /** M28: this connection's own `PlayerId`, learned from
    * `Welcome` (`0`, "none", before it arrives). */
   ownPlayerId: number
-  /** docs/plan/28-sessions-and-reconnect.md: `ClientCore::revealed()`'s own value, mirrored in
+  /** M28: `ClientCore::revealed()`'s own value, mirrored in
    * the clock block's `revealed` word -- true once every chunk of the visible rectangle is both
    * held by the replica and locally generated. */
   revealed: boolean
-  /** docs/plan/28-sessions-and-reconnect.md step 4: how many times `createLink`'s own `onUp` has
+  /** M28 step 4: how many times `createLink`'s own `onUp` has
    * fired for this client -- `1` for a connection that has never gone down and redialed. A
    * scenario proving a link *stayed* up (`liveness/heartbeat-idle-world`) watches this stay `1`
    * over a long idle stretch; one that forces a redial watches it increment. */
@@ -113,7 +113,7 @@ export interface HeadlessClientStatus {
    * terminal: no redial follows, so `linkUpCount` stays put. (`sessionState` is not told: the clock
    * block never reads the `Bye`.) */
   linkDown: { reason: DownReason; code?: number } | null
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: the clock block's own raw `session_state`
+  /** M28b step 2: the clock block's own raw `session_state`
    * (`SessionState`, `clock-block.ts`) -- `live` above collapses everything to a boolean, so a
    * resync scenario reads this instead to see `Resyncing` (`4`) on the way through, distinct from
    * `Online` (`1`) before and after. */
@@ -134,7 +134,7 @@ export interface HeadlessClient {
    * synthetic square viewport (Deviations above) so a real subscription still forms. Takes effect
    * on the next `stepFrame` call. */
   setCamera(opts: { x: number; y: number; tilesAcross: number }): void
-  /** docs/plan/31-rates-and-integrity.md Provides: scripted motion on the virtual clock. Every
+  /** M31 Provides: scripted motion on the virtual clock. Every
    * `stepFrame(dtMs)` moves the camera centre `tilesPerS * dtMs / 1000` tiles toward `(x, y)` (never
    * past it) and reports that speed as the view's velocity; on arrival the velocity is zero. The
    * view extent is whatever `setCamera`/`setView` last set. A later `setCamera`/`setView` cancels
@@ -151,9 +151,9 @@ export interface HeadlessClient {
   replicaHash(): string
   /** `client_chunk_hash(cx, cy)`: FNV hash (16 hex digits) of a resident chunk's effective slab
    * (pristine terrain plus replicated changes), or `null` when the chunk is not resident, which
-   * for a chunk in view means its pristine terrain has not been generated (docs/plan/33f). */
+   * for a chunk in view means its pristine terrain has not been generated (M33f. */
   chunkHash(cx: number, cy: number): string | null
-  /** This client's desync reports (docs/plan/31b-desync-hashes.md): `client_desync`. */
+  /** This client's desync reports (M31b: `client_desync`. */
   desyncs(): DesyncLog
   /** Hash-all dumps completed since the last call (`client_desync_dump`): empty unless the host's
    * `Welcome` carried `HASH_ALL` and a chunk hash mismatched and its resync snapshot has landed. */
@@ -171,7 +171,7 @@ export interface HeadlessClient {
    * `client_poll_ui()`, then flushes the uplink ring (`client_poll_uplink`'s own output) to the
    * attached `Connection` -- everything `stepFrame` does except writing the camera block and
    * calling `frame()` itself. Useful right after construction/join, before any camera has been set.
-   * docs/plan/28-sessions-and-reconnect.md: before the session has attached (`Welcome` applied),
+   * M28: before the session has attached (`Welcome` applied),
    * this instead looks for `Welcome` on the downlink and applies it (`client_on_welcome`) -- the
    * normal `on_frame`/`client_poll_uplink` pump only starts once that succeeds. */
   pump(): void
@@ -179,20 +179,20 @@ export interface HeadlessClient {
    * calls `frame(t_ms)` (so `ClientSide::frame`/`TerrainFeed::on_frame` produce presence and gen
    * requests, once M18/M19 land), then `pump()`. */
   stepFrame(dtMs: number): void
-  /** docs/plan/28-sessions-and-reconnect.md Scope: "Client `Bye{Leave}` on `client.leave()` /
+  /** M28 Scope: "Client `Bye{Leave}` on `client.leave()` /
    * `HeadlessClient.leave()`" -- sends `Bye{Leave}` over the attached `Connection` then closes
    * it (0009: an ordinary, self-initiated close, not one of 0013's host-driven `CloseCode`s).
    * Idempotent: closing an already-closed `Connection` is every real `Connection`'s own no-op
    * (`memory-connection.ts`'s own `if (end.closed) return`). */
   leave(): void
-  /** docs/plan/30-interpolation.md: every visible remote player as the last `stepFrame`
+  /** M30: every visible remote player as the last `stepFrame`
    * interpolated it (`client_presence_sample_at`), ascending `PlayerId`. */
   samplePresences(): PresenceSampleRow[]
   /** `interpRenderedFrames`, `interpExtrapolatedFrames`, `interpDelayMs` (same export). */
   interpCounters(): InterpCounters
   /** `client_rebase()`: what the client worker calls on `FLAG_REBASE` (0018 section 8). */
   rebase(): void
-  /** docs/plan/37-robustness-events.md step 1: kills this client's instance the way a WASM trap does
+  /** M37 step 1: kills this client's instance the way a WASM trap does
    * (`worker/test-trap.ts`). The next `pump()`/`stepFrame()`/`dispatch()` replaces it. */
   injectTrap(): void
   /** How many times the instance has been replaced after a trap. */
@@ -217,14 +217,14 @@ export interface HeadlessClientOptions {
   /** Omitted for a remote-style client (the default of a real page, ADR 0042): the client and its
    * generator take the world from `Welcome`. Given, they are configured at construction, as before. */
   game?: { seed: string; worldgen: unknown }
-  /** docs/plan/28-sessions-and-reconnect.md step 4: dials this client's own `Connection` --
+  /** M28 step 4: dials this client's own `Connection` --
    * `createLink`'s own `dial` (Seams). Called once immediately (the first join) and again on
    * every redial `createLink` itself decides to make (dead timer, probe, `HeadlessClient` never
    * drives this directly). `createNetHarness` hands back the one fixed conditioned end it already
    * built (no fresh dial per attempt yet -- Deviations: a real per-attempt redial is M29's own
    * transport concern, not this milestone's). */
   dial: () => Connection
-  /** docs/plan/28-sessions-and-reconnect.md: this device's own identity secret (16 bytes,
+  /** M28: this device's own identity secret (16 bytes,
    * `loadOrMintSecret`'s own shape) -- `client_hello`'s own source, via `TerrainConfig`'s `secret`
    * config field (hex). Replaces M27's pre-handshake `myPlayerId` stopgap: the client's own
    * `PlayerId` now comes from `Welcome` (`status().ownPlayerId`), not a config value. */
@@ -234,18 +234,18 @@ export interface HeadlessClientOptions {
   joinKey?: string
   /** The world's own build hash (32 bytes, full SHA-256) -- `WorldConfig.buildHash`, hex-decoded. */
   buildHash: Uint8Array
-  /** docs/plan/28-sessions-and-reconnect.md: a virtual clock for the Hello -> Welcome round trip
+  /** M28: a virtual clock for the Hello -> Welcome round trip
    * fed to `LeadEstimator.seed_rtt_ms` (M26, if ticked), *and* `createLink`'s own dead-timer/
    * backoff/probe clock (step 4) -- `createNetHarness` passes its own `VirtualClock` (a `Clock`
    * and a `Scheduler` both). Omitted (`rttMs` always `0`, liveness management inert) for a caller
    * that does not care, e.g. a `connectRaw()`-driven scenario that never applies `Welcome`
    * through this type at all. */
   clock?: Clock
-  /** docs/plan/28-sessions-and-reconnect.md step 4: `createLink`'s own `scheduler` -- defaults to
+  /** M28 step 4: `createLink`'s own `scheduler` -- defaults to
    * one that never fires (`noopScheduler`, above) when `clock` is given but this is not, so a
    * caller that only wants the `Hello`/`Welcome` RTT reading is unaffected. */
   scheduler?: Scheduler
-  /** docs/plan/28-sessions-and-reconnect.md step 4: seeds `createLink`'s own backoff jitter --
+  /** M28 step 4: seeds `createLink`'s own backoff jitter --
    * distinct from any network-conditioning seed (`createNetHarness`'s own `seed`), since this is
    * unrelated randomness. Defaults to `1` (every existing caller that never reconnects never
    * observes it). */
@@ -314,7 +314,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
   let netPump = buildNetPump()
   const bytePump = createBytePump({ uplink: sabs.uplink, downlink: sabs.downlink })
 
-  // docs/plan/28-sessions-and-reconnect.md: a second `RingConsumer` over the same `downlink` SAB,
+  // M28: a second `RingConsumer` over the same `downlink` SAB,
   // used only before `Welcome` lands -- safe (`sab/ring.ts`'s own module doc comment: head/tail
   // live in the ring's own control block, not per-instance state), since only one of this consumer
   // and `netPump`'s own internal one is ever popped from at a time (this one stops being used the
@@ -377,7 +377,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     }
   }
 
-  // docs/plan/28-sessions-and-reconnect.md step 4: `createLink` owns dialing (the first join and
+  // M28 step 4: `createLink` owns dialing (the first join and
   // every later redial its own dead timer/probe/backoff decide on) -- this client never calls
   // `opts.dial()` itself. `onUp` fires synchronously, once immediately (during this very
   // constructor call) and again on every future redial: `bytePump.attach(conn)` re-points the
@@ -487,7 +487,7 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     }
   }
 
-  /** docs/plan/37-robustness-events.md step 1 (0014 §6, client role): the instance is garbage. A
+  /** M37 step 1 (0014 §6, client role): the instance is garbage. A
    * fresh one from the kept `Module`, the same `Hello` a new connection sends (no resume hint: the
    * replica died with the instance) on the connection that is already up (the host re-handshakes a
    * settled connection that sends `Hello`, `server.ts`'s `reopenOnHello`), and `Lost` for the

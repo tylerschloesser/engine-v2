@@ -1,4 +1,4 @@
-// `gc-loop`: one sim-role worker on fixture `hash`, no WebGPU (docs/plan/04-zero-gc-harness.md,
+// `gc-loop`: one sim-role worker on fixture `hash`, no WebGPU (M04,
 // Planning decisions "No WebGPU on this page"). `zeroGcSuite` reads its isolates from
 // `budgets.json`'s `gc.pages.gc-loop` entry, so this file only names the page.
 import { expect, test } from '@playwright/test'

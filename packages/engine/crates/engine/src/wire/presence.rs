@@ -1,4 +1,4 @@
-//! `Presence` section (id 8, `wire/CLAUDE.md`; docs/plan/19-presence-channel.md Provides): a flat
+//! `Presence` section (id 8, `wire/CLAUDE.md`; M19 Provides): a flat
 //! list of entries running to the section body's own end -- no leading count, the same convention
 //! `deltas.rs`'s own entity-op list uses (the section's own length, from `FrameReader`, bounds it).
 //! Entries are in ascending `PlayerId` (the caller's own responsibility: `host::mod`'s

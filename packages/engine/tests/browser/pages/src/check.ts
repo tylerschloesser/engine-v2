@@ -1,4 +1,4 @@
-// `window.__check`: the reporter `pnpm device:walk --auto` reads (docs/plan/39f-device-auto-runner.md,
+// `window.__check`: the reporter `pnpm device:walk --auto` reads (M39f,
 // "The check reporter contract"). Fixture pages only: this file is imported by pages under
 // `tests/browser/pages/`, never by `src/` or a game, so no release build contains `__check` (the netcode
 // test `walk-preview: no production output contains the check reporter` reads the built output).

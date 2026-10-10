@@ -1,4 +1,4 @@
-//! Validates every `.wgsl` file the TypeScript renderer embeds (docs/plan/09-renderer-terrain.md
+//! Validates every `.wgsl` file the TypeScript renderer embeds (M09
 //! Planning decisions "Bind group layout": "`naga` validates every `.wgsl` in the Rust native suite
 //! (dev-dependency; 0017 §7 leaves those unrestricted)"). The engine crate owns no rendering code;
 //! this only proves the WGSL `scripts/embed-wgsl.mjs` embeds verbatim is syntactically and
@@ -36,7 +36,7 @@ fn wgsl_terrain_validates() {
     assert!(checked > 0, "no .wgsl files found under {}", dir.display());
 }
 
-/// docs/plan/17-drawlist-and-sprites.md Tests added: `wgsl.uberquad_validates`, named separately
+/// M17 Tests added: `wgsl.uberquad_validates`, named separately
 /// from the loop above so a broken uber-quad shader is named by test output rather than only by
 /// `wgsl_terrain_validates`'s generic loop -- also asserts the two entry points `render/
 /// drawables.ts` builds its pipeline against actually exist.

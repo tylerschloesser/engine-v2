@@ -1,4 +1,4 @@
-// `rates/*` (docs/plan/31-rates-and-integrity.md steps 3-4): chunk pacing, priority, soft cap and
+// `rates/*` (M31 steps 3-4): chunk pacing, priority, soft cap and
 // degrade, asserted through `assertBudget` against `counters.net.*` rows in `budgets.json` (each row
 // names its 0010 cell or worked number). Everything runs on the virtual clock: byte counts and tick
 // counts are functions of `(seed, scenario)` alone.

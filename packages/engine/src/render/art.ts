@@ -1,8 +1,8 @@
-// Tile art (docs/decisions/0018-renderer.md §4; docs/plan/09-renderer-terrain.md Scope, Planning
+// Tile art (docs/decisions/0018-renderer.md §4; M09 Scope, Planning
 // decisions "tiles.json schema v1", "Visual table comes from tiles.json on main"): fetches and
 // validates `tiles.json`, loads `tiles.png` with `createImageBitmap` + `copyExternalImageToTexture`
 // (`premultipliedAlpha: true`) into one `texture_2d_array<f32>` layer per sheet cell, generates the
-// mip chain to 1x1 for every layer (docs/plan/09b-terrain-art-and-lifecycle.md Scope: `render/
+// mip chain to 1x1 for every layer (M09b Scope: `render/
 // mips.ts`), and builds the 16 KiB visual-table buffer `render/terrain.ts` uploads once.
 import { generateMips, mipLevelCountFor } from './mips.js'
 
@@ -39,7 +39,7 @@ export const VISUAL_TABLE_BYTES = VISUAL_TABLE_ENTRIES * 16
 const VALID_FLAGS: readonly VisualFlag[] = ['flip_x', 'flip_y', 'rotate']
 /** Bit assignment for the visual table's packed `flags` field (Planning decisions "Visual table
  * comes from tiles.json on main": "flags" is a bitmask; the exact bit-per-flag choice is this
- * milestone's own, since 0018 §3 fixes only the field's existence -- docs/plan/09-renderer-terrain.md
+ * milestone's own, since 0018 §3 fixes only the field's existence -- M09
  * Deviations). */
 const FLAG_BITS: Record<VisualFlag, number> = { flip_x: 1, flip_y: 2, rotate: 4 }
 
@@ -137,7 +137,7 @@ export type LoadedArt = {
   readonly manifest: TilesManifest
   readonly visualTableBytes: Uint8Array
   readonly cellCount: number
-  /** Sum of every mip level's byte size for `texture` (docs/plan/17b-sprites-and-frame-budget.md fix
+  /** Sum of every mip level's byte size for `texture` (M17b fix
    * round 1: `gpuBytes` must cover "tile art with mips"): `cellCount` array layers x `rgba8unorm`'s
    * 4 bytes/texel x each of `mipLevelCountFor(manifest.tile_px)` levels' own `max(1, tile_px >>
    * level)^2` texels. `render/terrain.ts`'s `setTileArray` takes this alongside the texture. */
@@ -146,7 +146,7 @@ export type LoadedArt = {
 
 /** Fetches `manifestUrl`, validates it, fetches its (relative) `image`, loads every sheet cell into
  * its own array layer, and generates the mip chain to 1x1 for every layer (`render/mips.ts`).
- * `opts.checkCompilation` (docs/plan/09b-terrain-art-and-lifecycle.md Deviations: not in the
+ * `opts.checkCompilation` (M09b Deviations: not in the
  * brief's own Seams -- the mip blit shader needs the same "init, not per frame" `getCompilationInfo()`
  * check every other shader module gets, 0020 §6) is threaded straight to `generateMips`; a caller
  * with a `RendererDevice` passes its own `checkCompilation` method. */
@@ -163,7 +163,7 @@ export async function loadTileArt(
 
   // `manifestRes.url`, not the caller's (possibly relative) `manifestUrl`: `URL`'s second argument
   // must itself be absolute, and `Response.url` is the final, absolute, redirect-resolved one
-  // (docs/plan/09-renderer-terrain.md Deviations).
+  // (M09 Deviations).
   const imageUrl = new URL(manifest.image, manifestRes.url).toString()
   const imageRes = await fetch(imageUrl)
   if (!imageRes.ok) throw new Error(`loadTileArt: fetching ${imageUrl}: HTTP ${imageRes.status}`)
@@ -192,7 +192,7 @@ export async function loadTileArt(
       GPUTextureUsage.COPY_DST |
       GPUTextureUsage.RENDER_ATTACHMENT,
     // Compatibility mode (0018 §7): must match the `2d-array` view `render/terrain.ts`'s bind
-    // group creates of this texture (docs/plan/09-renderer-terrain.md Deviations).
+    // group creates of this texture (M09 Deviations).
     textureBindingViewDimension: '2d-array',
   })
   for (let cell = 0; cell < cellCount; cell++) {

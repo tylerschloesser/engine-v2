@@ -11,7 +11,7 @@ use crate::time::Tick;
 /// One predicted action's own outcome (0012 Decision, verbatim): `Applied`'s writes are already in
 /// the overlay; `NotPredictable` covers both a declined read (`Unknown`) and `G::predict(a) ==
 /// false`; `Rejected` is a *hint* only (0012 "A local `Rejected` is likewise a hint, never a
-/// verdict") -- never surfaced to the UI on its own (docs/plan/25-prediction-core.md Planning
+/// verdict") -- never surfaced to the UI on its own (M25 Planning
 /// decisions).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Prediction<R> {
@@ -23,19 +23,19 @@ pub enum Prediction<R> {
 /// One action still awaiting its host ack, tracked purely for prediction (this is *not* the outbox
 /// -- `client::core::ClientCore`'s existing `outbox: Vec<(u32, Vec<u8>)>` still owns sending the
 /// encoded bytes exactly once; M28b's resend seam is the first thing that reads this queue for
-/// retransmission, docs/plan/25-prediction-core.md Non-scope).
+/// retransmission, M25 Non-scope).
 pub struct Pending<G: Game> {
     pub seq: u32,
     pub action: G::Action,
     /// Frozen at submit time (0012 "Frozen predicted tick"): every replay re-predicts against this
     /// same tick, never a freshly read one.
     pub predicted_tick: Tick,
-    /// Re-evaluated on every replay (docs/plan/25-prediction-core.md Planning decisions: "Statuses
+    /// Re-evaluated on every replay (M25 Planning decisions: "Statuses
     /// are re-evaluated on every replay").
     pub status: Prediction<G::Reject>,
     /// The authoritative tick this client held at the moment this action was dispatched -- M26's
     /// `on_ack_sample` hook pairs this with the tick the ack itself lands on, to estimate lead
-    /// (docs/plan/25-prediction-core.md Provides).
+    /// (M25 Provides).
     pub auth_tick_at_dispatch: Tick,
 }
 
@@ -45,7 +45,7 @@ pub struct Pending<G: Game> {
 /// no second limit") -- `ClientCore::on_action` refuses a further dispatch once *this* queue
 /// itself reaches `OUTBOX_CAPACITY`, so nothing here needs to enforce a second cap of its own.
 ///
-/// **Post-`done` fix (docs/plan/26-prediction-rendering-and-clocks.md, "PendingQueue never drains
+/// **Post-`done` fix (M26, "PendingQueue never drains
 /// under bench.frame_worstcase"):** `on_action`'s guard used to check `outbox.len()`, the
 /// transient *send* buffer `poll_uplink` clears on every flush regardless of whether anything has
 /// been acked -- so this queue had no real cap at all in practice, and grew one entry per
@@ -86,7 +86,7 @@ impl<G: Game> PendingQueue<G> {
     /// with `seq <= ack_seq`" -- the game's own `Confirmed`/`Rejected` notification already travels
     /// through the existing `ActionResults`/`drain_results` path, M16; this only retires the
     /// pending queue's own bookkeeping copy, one entry per call so the caller can sample each ack
-    /// individually, docs/plan/25-prediction-core.md Provides "`on_ack_sample`"). Every pending
+    /// individually, M25 Provides "`on_ack_sample`"). Every pending
     /// `seq` is monotonic (`ClientCore::on_action`'s own `next_seq`-free ordering: the ring
     /// producer assigns `seq`, 0003), so the front of the queue is always the oldest.
     pub fn pop_acked_through(&mut self, ack_seq: u32) -> Option<Pending<G>> {
@@ -96,7 +96,7 @@ impl<G: Game> PendingQueue<G> {
         }
     }
 
-    /// M28b's resend seam (docs/plan/25-prediction-core.md Provides, verbatim): every action still
+    /// M28b's resend seam (M25 Provides, verbatim): every action still
     /// pending after `seq`, oldest first. Since [`Self::pop_acked_through`] already drops every
     /// acked entry each frame, every entry this queue holds is by definition unacked -- `seq` lets
     /// the caller resend only what a reconnect's own last-known-ack has not already covered.

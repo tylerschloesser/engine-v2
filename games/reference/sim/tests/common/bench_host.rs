@@ -1,4 +1,4 @@
-//! The standard large save's tick load (docs/decisions/0020 section 9; docs/plan/36-slow-tier-and-
+//! The standard large save's tick load (docs/decisions/0020 section 9; M36
 //! benchmarks.md step 4), shared by `bench_large_save.rs` (wall clock, system allocator) and
 //! `bench_high_water.rs` (arena live-byte peak): a `Host<RefGame>` on the bench world with eight
 //! connections, each holding a maximum view (256 x 256 tiles, ring 1: 121 chunks of the furnace

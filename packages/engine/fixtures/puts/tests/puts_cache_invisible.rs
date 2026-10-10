@@ -1,4 +1,4 @@
-//! `puts_cache_invisible` (docs/plan/12b-world-access-and-sim-driver.md Tests added; 0007
+//! `puts_cache_invisible` (M12b Tests added; 0007
 //! Consequences: "replay one log with cache capacity 1, default, and unlimited ... all state
 //! hashes equal"). Reruns a real `Authority<Puts>` script at capacity 1, the default and
 //! unlimited, crossed with the M07 harness's three prewarm orders, and requires identical

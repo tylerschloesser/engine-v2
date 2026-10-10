@@ -1,4 +1,4 @@
-//! `FrameCx<'a, G>` (docs/plan/18-picking-and-overlay.md Scope, steps 4-6: "fills M12's `FrameCx`
+//! `FrameCx<'a, G>` (M18 Scope, steps 4-6: "fills M12's `FrameCx`
 //! shell"; 0003, 0019 §1/§4): the per-client-frame context `ClientSide::frame` receives -- the
 //! camera block, this frame's own `dt_ms`, the input events drained from `inputRing` since the
 //! previous `frame` call, the same `FrameView` `extract` receives, and the write-only `follow`/
@@ -6,7 +6,7 @@
 //! real `frame(t_ms)` call, in the order the brief's Scope pins: "build `FrameView` -> `ClientSide
 //! ::frame` -> `extract` -> header (`follow`, anchors) -> sort -> publish -> clear `InputQueue`".
 //!
-//! No `dispatch` here (Planning decisions, docs/plan/18-picking-and-overlay.md): action `seq` is
+//! No `dispatch` here (Planning decisions, M18: action `seq` is
 //! assigned on main so `client.dispatch` can return it synchronously (0003); a game turns a tap into
 //! an action in `client.input.on('tap', ..)`, not here.
 

@@ -1,4 +1,4 @@
-//! M15 (docs/plan/15-connection-and-subscriptions.md "Tests added"): `SubscriptionSet` is tested
+//! M15 ("Tests added"): `SubscriptionSet` is tested
 //! inline (`host::subs`); this file is the native, byte-level `Loopback` proof end to end --
 //! `Host::{connect, on_uplink, tick, build_frame, seal, region_hash}` into
 //! `ClientCore::{on_frame, view, set_camera, poll_uplink, region_hash}`.
@@ -41,7 +41,7 @@ pub enum LAction {
         pos: LPos,
     },
     /// A 2x1-footprint entity (`PrototypeId(1)`, registered in `LGame::register`), used only by
-    /// the footprint-straddling tests (docs/plan/21-entities-and-timers.md Deviations: M15's
+    /// the footprint-straddling tests (M21 Deviations: M15's
     /// `entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once` needed a real
     /// footprint to rewrite against). Every other test's `Spawn`/`Move` stays 1x1, unaffected.
     SpawnWide {
@@ -251,7 +251,7 @@ fn pristine_chunk_enters_as_coord_only() {
     );
 }
 
-/// docs/plan/28b-reconnect-and-lifecycle.md step 2: `Host::resync` sends a fresh `Welcome`
+/// M28b step 2: `Host::resync` sends a fresh `Welcome`
 /// (carrying the given epoch) and resets the connection's own subscription bookkeeping to empty,
 /// so the very next tick's own `subs.update` re-enters every chunk the connection's last-known
 /// camera still wants (Seams: "treats every chunk as unsent").
@@ -341,7 +341,7 @@ fn leave_frees_overlay_keeps_pristine() {
     );
 }
 
-/// 0011 Scopes, M21-widened (docs/plan/21-entities-and-timers.md Deviations: this test was
+/// 0011 Scopes, M21-widened (M21 Deviations: this test was
 /// M12b/M14's own `entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once`, written
 /// against anchor-only delivery -- "straddling" meant only that an entity's *anchor* moved between
 /// a subscribed and an unsubscribed chunk, since no wider footprint existed in that milestone's
@@ -435,7 +435,7 @@ fn entity_move_between_subscribed_and_unsubscribed_delivered_once() {
     );
     lb.step();
     // `entity(id)`'s `Unknown`-vs-`None` distinction for a real id the replica does not hold
-    // (0022 §7, landed by M25, docs/plan/25-prediction-core.md): the client cannot tell
+    // (0022 §7, landed by M25, M25: the client cannot tell
     // "despawned" from "outside my subscription", so this is `Err(Unknown)`, not `Ok(None)`
     // (`client::Replica::entity`, M25's own fix).
     assert_eq!(lb.client(idx).view().entity(id), Err(Unknown));
@@ -499,7 +499,7 @@ fn view_unknown_outside_subscription() {
     );
 }
 
-/// docs/plan/28-sessions-and-reconnect.md step 4 (0010 Rates: "a heartbeat frame at least every
+/// M28 step 4 (0010 Rates: "a heartbeat frame at least every
 /// 500 ms"): an idle tick builds nothing *until* the heartbeat interval elapses, at which point it
 /// builds the wire format's own header-only heartbeat frame (`wire/CLAUDE.md`: "no sections =
 /// heartbeat", 10 bytes: `type · flags · tick · ack_seq`) -- tick-based (`G::TICK_RATE.millis
@@ -946,7 +946,7 @@ fn chunks_warmed_becomes_live() {
     );
 }
 
-/// Measurement, not an assertion (docs/plan/15-connection-and-subscriptions.md Planning
+/// Measurement, not an assertion (M15 Planning
 /// decisions: "flag this as a known cost to measure... not a defect to fix blind"):
 /// `encode_chunk_snapshot`'s O(all entities in Store), twice, per chunk (M14 Deviations) under a
 /// realistic many-chunk join. 2,000 entities spread across a 121-chunk view (0010's own worked
@@ -1000,7 +1000,7 @@ fn small_camera_wide() -> CameraReport {
     }
 }
 
-// -- M31 gate round 2 (docs/plan/31-rates-and-integrity.md Deviations, "Gate round 2") ---------
+// -- M31 gate round 2 (M31 Deviations, "Gate round 2") ---------
 
 use engine::host::pacing::{BandwidthConfig, EnterKind, EnterPriority};
 

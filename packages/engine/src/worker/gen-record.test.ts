@@ -5,7 +5,7 @@ test('gen record layout', () => {
   const u8 = new Uint8Array(GEN_RECORD_HEADER_BYTES)
   writeGenHeader(u8, 0, 7, -3)
 
-  // [cx i32][cy i32][0 u32][0 u32] (docs/plan/08b-gen-workers-and-queue.md, Seams).
+  // [cx i32][cy i32][0 u32][0 u32] (M08b, Seams).
   expect(readI32LE(u8, 0)).toBe(7)
   expect(readI32LE(u8, 4)).toBe(-3)
   expect(readI32LE(u8, 8)).toBe(0)

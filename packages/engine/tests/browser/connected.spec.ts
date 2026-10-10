@@ -1,4 +1,4 @@
-// `connected.html`'s tests (docs/plan/15b-ring-connection-and-replica-rendering.md, step 6): a real
+// `connected.html`'s tests (M15b, step 6): a real
 // `SimHost.accept`ed connection over `fx-puts`, driven deterministically through `stepTick`
 // (`CB_SIM_STEP_REQ`, no real-time pacing armed -- `connected-paced.spec.ts` is the one page that
 // arms it, for the ADR 0030 wake test). Chromium only (no `@engines`): nothing here is
@@ -50,7 +50,7 @@ test('pan_changes_subscription', async ({ page }) => {
   expect(after?.downlinkRetries).toBe(0)
 })
 
-// docs/plan/15b-ring-connection-and-replica-rendering.md, Tests added: "join_at_max_zoom_out_never_
+// M15b, Tests added: "join_at_max_zoom_out_never_
 // drops" -- born `@slow` (ADR 0020 §4 rung 3: this milestone's own trip-wire), with a shrunk
 // fast-tier variant covering the same backpressure path at a scenario small enough for the 20 s
 // budget (0020 §4's "never demote the only test covering a feature; shrink its scenario").

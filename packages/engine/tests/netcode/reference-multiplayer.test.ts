@@ -1,4 +1,4 @@
-// M34 (docs/plan/34-reference-multiplayer.md Tests added, netcode): the reference game on the
+// M34 (Tests added, netcode): the reference game on the
 // netcode harness, the real `reference-sim` dev build, the reference world's worldgen (`world.json`:
 // the harness seed is a number, so the seed itself is the harness's own; `{}` is the worldgen).
 import { readFileSync } from 'node:fs'

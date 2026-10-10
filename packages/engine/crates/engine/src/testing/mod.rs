@@ -35,7 +35,7 @@ pub fn assert_golden(fixture_dir: impl AsRef<Path>, checkpoints: &[u64]) {
 }
 
 /// `assert_golden`, against `<fixture_dir>/golden/<file_name>` instead of the canonical `golden.
-/// json` (docs/plan/16-action-round-trip.md step 5): a fixture with more than one scenario/golden
+/// json` (M16 step 5): a fixture with more than one scenario/golden
 /// pair (`scripts/golden.mjs`'s own `scenario<suffix>.json` -> `golden<suffix>.json` convention,
 /// e.g. `fixtures/puts/golden/golden-script-a.json`) names its own file explicitly.
 pub fn assert_golden_named(fixture_dir: impl AsRef<Path>, file_name: &str, checkpoints: &[u64]) {

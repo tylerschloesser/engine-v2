@@ -1,5 +1,5 @@
 // `engine/test`: wraps an already-created `Harness` with the API `tests/browser/gc/instrument.ts`
-// drives over `page.evaluate` (docs/plan/04-zero-gc-harness.md, Seams). A page also keeps
+// drives over `page.evaluate` (M04, Seams). A page also keeps
 // `window.__harness` (the M03 convention): `instrument.ts` still calls `park()`/`resume()` on it
 // directly around the CDP heap-profiler/tracing calls (Planning decisions "Sequence"); `window.__gc`
 // only adds what a plain `Harness` cannot do (windowed `run`, isolate marks, the negative-control
@@ -13,7 +13,7 @@ export type { NegativeControl } from './controls.js'
 export type GcPageReady = {
   isolates: string[]
   crossOriginIsolated: boolean
-  /** No page built by this milestone has a WebGPU adapter (docs/plan/04-zero-gc-harness.md,
+  /** No page built by this milestone has a WebGPU adapter (M04,
    * Planning decisions "No WebGPU on this page"); a later page's script fills this in. */
   adapter: object | null
   gcExposed: Record<string, boolean>
@@ -55,7 +55,7 @@ export function installGcPage(
 ): void {
   let control: NegativeControl = null
 
-  // docs/plan/10-ci-workflow.md, orchestrator's decision 1 (2026-09-21): the `main`-isolate
+  // M10, orchestrator's decision 1 (2026-09-21): the `main`-isolate
   // control fires *inside* `drive`, on the identical attribution path every page's own clean
   // measurement already uses for `main` (`attributionRoots` names `drive` -- or, since this makes
   // the previously-anonymous default drive a real named function too, now also `topology`, whose
@@ -94,7 +94,7 @@ export function installGcPage(
     if (marked) performance.mark('window-end')
 
     await harness.park()
-    // Indexed loop, not `for...of` (fix round 2, docs/plan/06b-workers-and-spawn.md, Deviations):
+    // Indexed loop, not `for...of` (fix round 2, M06b, Deviations):
     // a `for...of` over `workerNames` goes through the array iterator protocol, which under an
     // unoptimised JIT tier allocates a `{value, done}` result object per `.next()` call -- the same
     // class of cost `src/test/harness.ts`'s own `stepAll` comment already flags for `for...of`.
@@ -123,7 +123,7 @@ export function installGcPage(
     ready: Promise.resolve({
       isolates: ['main', ...harness.workerNames],
       crossOriginIsolated: window.crossOriginIsolated,
-      // docs/plan/09-renderer-terrain.md, step 7: the first zero-GC page with a real WebGPU
+      // M09, step 7: the first zero-GC page with a real WebGPU
       // adapter (M04's own comment here: "a later page's script fills this in").
       adapter: opts.adapter ?? null,
       gcExposed: { main: typeof window.gc === 'function', ...harness.workerGcExposed() },

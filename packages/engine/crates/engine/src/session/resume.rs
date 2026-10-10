@@ -1,6 +1,6 @@
 //! Resume hint: building one from a client's held chunks (`build_resume_hint`) and diffing one
 //! against a host's own per-chunk versions and new subscription (`diff_resume_hint`) --
-//! docs/plan/28b-reconnect-and-lifecycle.md steps 1-2, 0013-sessions-and-integrity.md "Reconnect".
+//! M28b steps 1-2, 0013-sessions-and-integrity.md "Reconnect".
 //! Pure, native-tested functions only: wiring `build_resume_hint`'s output into a real
 //! `client_hello`, and `diff_resume_hint`'s output into a live `sim_attach`/`build_frame` call
 //! (the `ChunkKeeps` section, `SectionId::ChunkKeeps` = 11, actually going out on the wire), is

@@ -1,6 +1,6 @@
-// `gen.html`'s script (docs/plan/08b-gen-workers-and-queue.md, Tests added): the imperative debug
+// `gen.html`'s script (M08b, Tests added): the imperative debug
 // API `gen.spec.ts` drives through `page.evaluate`, the same pattern `topology.ts` uses for
-// `workers.spec.ts`/`start.spec.ts` (docs/plan/06b-workers-and-spawn.md) -- a `Client`'s own shape
+// `workers.spec.ts`/`start.spec.ts` (M06b -- a `Client`'s own shape
 // is not itself serialisable across the CDP boundary `page.evaluate`'s return value crosses. The
 // first browser page over `fx-worldgen` rather than `fx-hash` (`fixtureWasm`, `packages/engine/
 // CLAUDE.md`). `host: { kind: 'remote', ... }`: `fx-worldgen` has no `Sim` role (`fixtures/worldgen/
@@ -69,7 +69,7 @@ declare global {
     }) => void
     __genStep?: (dtMs: number) => void
     __genStats?: () => Promise<gen.GenStats>
-    /** docs/plan/37-robustness-events.md step 1: how many times `gen0` replaced a trapped instance. */
+    /** M37 step 1: how many times `gen0` replaced a trapped instance. */
     __genTraps?: () => Promise<number>
     /** `client.onFatal` events so far (registered when the client is created). */
     __genFatal?: () => FatalEvent[]

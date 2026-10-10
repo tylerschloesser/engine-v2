@@ -1,4 +1,4 @@
-// `integrity/*` (docs/plan/31b-desync-hashes.md, Tests added): the desync hashes through the real
+// `integrity/*` (M31b, Tests added): the desync hashes through the real
 // `.wasm` and the netcode harness. Most scenarios opt into production-cadence hashing
 // (`world.debugHashMode: 'production'`); the dump and Welcome-flag scenarios use the harness default
 // (hash-all), and `hash-bytes-per-second` measures production bytes.

@@ -1,4 +1,4 @@
-// `deno-adapter @slow` (docs/plan/35b-bun-and-deno-adapters.md, Tests added): the scenario behind
+// `deno-adapter @slow` (M35b, Tests added): the scenario behind
 // `bun-adapter loopback` (`adapter-loopback.mjs`), run under a real `deno run` with
 // `engine/server/deno` on `Deno.serve`. Deno is best-effort (0009 "Targets"): when `deno` is not on
 // `PATH` this prints the named warning `deno-missing` and passes, unless `REQUIRE_DENO=1` (CI sets

@@ -1,5 +1,5 @@
 // `engine/test`: the production-topology counterparts of `src/test/harness.ts`'s M03 helpers, this
-// time driving a real `createClient()` result (docs/plan/06b-workers-and-spawn.md, Seams). Never
+// time driving a real `createClient()` result (M06b, Seams). Never
 // imported by production code.
 
 import { Status } from '../abi.js'
@@ -74,7 +74,7 @@ function now(): number {
   return typeof performance !== 'undefined' ? performance.now() : Date.now()
 }
 
-/** Per-worker state for a timeout's failure message (docs/plan/16e-park-timeout-diagnosis.md,
+/** Per-worker state for a timeout's failure message (M16e,
  * Provides): built only when a wait is about to fail, never on the success path. Distinguishes the
  * four causes a bare "timed out" message cannot (Scope: (a) a worker stuck inside `body()`, (b) a
  * lost wake, (c) main's own poll/spin starved, (d) a dead worker). */
@@ -121,7 +121,7 @@ function describeTimeout(
 
 /**
  * The per-worker-diagnostic message for one of this file's three spin-wait ack loops, once `spins`
- * has already exceeded `SPIN_LIMIT` (docs/plan/16e-park-timeout-diagnosis.md, CI round): called
+ * has already exceeded `SPIN_LIMIT` (M16e, CI round): called
  * *only* on that already-failing path, exactly once, so this is the one place these loops ever call
  * `now()` -- no periodic wall-clock check remains (removed after CI's software-mode `sim`/
  * `no_ui_change` budgets caught real allocation attributed to `main` from a *slow-but-succeeding*
@@ -192,7 +192,7 @@ function pollUntil(predicate: () => boolean, what: string, h: ClientTestHandle):
  * `Client` itself (`resultsFrame`, below, off the injected `Scheduler`), not by a worker, but it is
  * still *this* file's/`Client`'s own responsibility, not a caller's.
  *
- * **Deliberately excludes `uploadRing`** (docs/plan/20c-client-ack-freeze-under-untilquiescent.md):
+ * **Deliberately excludes `uploadRing`** (M20c:
  * unlike every ring above, nothing in `engine/test` or `Client` ever constructs a consumer over it
  * -- `client.uploadRing` is exposed as a public field precisely so a *page's own* renderer (`frame-
  * loop.ts`'s real per-rAF "upload" phase) or test code (`connected.ts`'s own interval,
@@ -234,7 +234,7 @@ function ringDrained(sab: SharedArrayBuffer): boolean {
 /** `Array.prototype.every` with an inline arrow allocates a fresh callback closure on every call
  * (`.claude/rules/hot-paths.md`'s "no per-iteration closures/`Array.prototype` callbacks", and
  * `src/test/**` is exempt from the *rule* but not from this being a real cost on this path: fix
- * round 2, docs/plan/06b-workers-and-spawn.md, Deviations). `parkWorkers`/`resumeWorkers` are
+ * round 2, M06b, Deviations). `parkWorkers`/`resumeWorkers` are
  * called from inside `installGcPage`'s own measured window (`harness.park()`/`resume()`), and
  * `pollUntil` below calls its `predicate` once per macrotask until it is true -- normally 1-3
  * ticks, but under CPU contention a worker's own OS thread can take many more event-loop turns to
@@ -266,7 +266,7 @@ function allEqual(h: ClientTestHandle, field: number, want: number): boolean {
 
 /**
  * Resolves once a remote client is configured from its first `Welcome` and its gen workers exist
- * and have posted `ready` (docs/plan/33f, ADR 0042; M34's two-page tests call this before parking
+ * and have posted `ready` (M33f, ADR 0042; M34's two-page tests call this before parking
  * or measuring). Awaits `workersReady` first, then `ClientTestHandle.genWorkersUp`, and rejects
  * after `POLL_TIMEOUT_MS` when no `Welcome` ever arrives (a bad join key, no server): never hangs.
  * For a client whose world is known at start it is `workersReady`. Call it *before* `parkWorkers`:
@@ -326,7 +326,7 @@ function allResumed(h: ClientTestHandle): boolean {
 
 /** Resumes every *parked* worker: `W_YIELD = 0`, `{ type: 'resume' }` (a parked worker is not
  * blocked, so this is the one way to reach it: Planning decisions "`yield` protocol"). Skips a
- * worker whose `W_PARKED` is not currently 1 (docs/plan/08b-gen-workers-and-queue.md, Deviations):
+ * worker whose `W_PARKED` is not currently 1 (M08b, Deviations):
  * a worker blocked in `Atomics.wait` cannot process a `postMessage` at all, so sending it a
  * `resume` anyway would not be a no-op -- the message sits queued until that worker's *next* park,
  * at which point it fires and un-parks it again immediately, racing whatever the caller of that
@@ -373,7 +373,7 @@ export async function untilQuiescent(client: Client): Promise<void> {
   await parkWorkers(client)
 }
 
-// docs/plan/15d-client-clock-allocation.md: `clockLike.now()` used to be read fresh on every call
+// M15d: `clockLike.now()` used to be read fresh on every call
 // -- a fractional double, which V8 boxes as a new `HeapNumber` on every read (the same defect class
 // 0030 fixed on the sim worker; measured here, `gc-sim-paced`'s `main`: ~11.96 B/frame,
 // `stepFrame@client-*.js` the only entry, Deviations). Unlike 0030's own finding, this box is not
@@ -467,7 +467,7 @@ function findWorkerEntry(h: ClientTestHandle, isolate: string): WorkerEntry {
 
 /**
  * Reads a worker's own instance state from main through the parked-only `test-call` channel
- * (docs/plan/08b-gen-workers-and-queue.md, orchestrator decision 1 at the step-5 boundary): calls
+ * (M08b, orchestrator decision 1 at the step-5 boundary): calls
  * ABI export `name` with `args` (0, 1 or 2 numbers) on the `isolate`-named worker and returns its
  * return value plus a copy of the first `resultBytes` bytes of `Result`. Rejects immediately,
  * without sending anything, when that worker's `W_PARKED` is not 1 -- a worker blocked in
@@ -527,7 +527,7 @@ export function stepSimTickSync(client: Client, n = 1): void {
   // `allEqual`/`allResumed`, above): this runs inside a zero-GC page's own measured `drive()`
   // call
   // every frame (`gc-sim.ts`/`gc-connected-terrain.ts`), and an inline-arrow `.some()` here was the
-  // whole of `main`'s +28 B/frame in the interpreter tier (docs/plan/15f-step-sim-tick-sync-
+  // whole of `main`'s +28 B/frame in the interpreter tier (M15f
   // allocation.md).
   let hasSim = false
   for (let i = 0; i < h.workers.length; i++) {
@@ -558,7 +558,7 @@ export function stepSimTickSync(client: Client, n = 1): void {
 
 /**
  * Runs `n` ticks on the sim-kind worker deterministically, bypassing real-time pacing entirely
- * (docs/plan/13-sim-host-tick-loop.md, Scope: "A `CB_*` step-tick request word serves `stepTick`"):
+ * (M13, Scope: "A `CB_*` step-tick request word serves `stepTick`"):
  * `stepSimTickSync` (above), then resolves with `untilQuiescent(client)`, which also settles every
  * worker back to parked (a precondition `worldHash`/`simCounters`'s own `callParked` calls
  * require).
@@ -569,7 +569,7 @@ export function stepTick(client: Client, n = 1): Promise<void> {
 }
 
 /**
- * docs/plan/16-action-round-trip.md: a `host.connect: true` page's own bootstrap. `Client.ready`
+ * M16: a `host.connect: true` page's own bootstrap. `Client.ready`
  * now also waits for `session_state = 1`, which the client worker only ever sets after it applies
  * a real host frame -- and a page whose own ticks are test-driven (no `test.flags.pace`) produces
  * one only by driving the sim itself, which normally happens through a test hook this same page
@@ -615,7 +615,7 @@ export async function pumpUntilLive(client: Client): Promise<void> {
 }
 
 /**
- * docs/plan/16-action-round-trip.md Provides: pre-encoded `dispatch`, for a zero-GC window that
+ * M16 Provides: pre-encoded `dispatch`, for a zero-GC window that
  * must not encode JSON inside the measured window (0016 §2) -- `jsonBytes` is caller-supplied,
  * already-UTF-8 bytes of one action's JSON, written through the exact same producer/scratch
  * `client.dispatch` itself uses (`ClientTestHandle.writeActionRecord`, never a second, independent
@@ -635,7 +635,7 @@ export function dispatchRaw(client: Client, seq: number, jsonBytes: Uint8Array):
 const uiBoxes = new WeakMap<Client, { current: unknown }>()
 
 /**
- * docs/plan/16b-ui-observation-and-clock.md Provides: the most recent value `client.onUi` has
+ * M16b Provides: the most recent value `client.onUi` has
  * delivered so far (`undefined` before the first one), read-back counterpart of `onUi` for a test
  * that just wants "what does the page currently see" rather than a log of every value in order
  * (`Ui` is coalesced to the newest per drain by construction, so a log would only ever grow by one
@@ -662,7 +662,7 @@ const actionResultLogs = new WeakMap<
 >()
 
 /**
- * docs/plan/16-action-round-trip.md Provides: every `{ seq, result }` `client.onActionResult` has
+ * M16 Provides: every `{ seq, result }` `client.onActionResult` has
  * delivered so far, in ring order -- the read-back counterpart of `dispatch`/`dispatchRaw` a test
  * needs without hand-rolling its own listener. Subscribes exactly once per `Client` (lazily, on
  * first call: `client.onActionResult` itself is the only way to observe the UI-ring drain, so this
@@ -721,7 +721,7 @@ export async function simCounters(client: Client): Promise<SimHostCounters> {
 }
 
 /**
- * docs/plan/23-persistence-opfs-and-lifecycle.md step 6, Seams: forces exactly one real snapshot
+ * M23 step 6, Seams: forces exactly one real snapshot
  * (`Persistence.snapshotNow()`, bypassing `sim_dirty()`'s own cadence guard) on the persisted sim
  * worker, the same "bump a `CB_*` word, wake, spin on `W_ACK`" shape as `stepSimTickSync` -- safe to
  * call from inside a zero-GC page's own measured `drive()` loop (`gc-sim.ts`), unlike a
@@ -754,7 +754,7 @@ export function forceSnapshot(client: Client): void {
   }
 }
 
-/** docs/plan/23-persistence-opfs-and-lifecycle.md step 6, Seams: `PersistenceCounters` (`host/
+/** M23 step 6, Seams: `PersistenceCounters` (`host/
  * persistence.ts`) plus the OPFS adapter's own `snapshotDeferred`, read through the synthetic
  * `test-call` name `worker/sim.ts`'s `testCall` handles directly (`PERSISTENCE_DEBUG_CALL`) -- the
  * "real, public seam" `PERSISTENCE_DEBUG_CALL`'s own doc comment named this range as owning.
@@ -785,7 +785,7 @@ export async function persistenceCounters(client: Client): Promise<{
   }
 }
 
-/** docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`: `host::Host::region_
+/** M15b, `engine/test`: `host::Host::region_
  * hash(conn)` (`sim_region_hash`, an ABI export reached directly by name through `callParked` --
  * no wrapper in `server.ts`, the same way `worldHash` reaches `sim_hash`). Requires the sim worker
  * parked. */
@@ -797,7 +797,7 @@ export async function hostRegionHash(client: Client, conn = 0): Promise<string> 
   return hex64(result)
 }
 
-/** docs/plan/16b-ui-observation-and-clock.md, `engine/test` (coordinator gate, M16b cut 2):
+/** M16b, `engine/test` (coordinator gate, M16b cut 2):
  * `UiObserver::{calls, records}` (`client_ui_stats`) -- `calls` is how many times `ClientSide::ui`
  * actually ran, `records` is how many of those calls wrote a real kind-1 record. Requires the
  * client worker parked. */
@@ -810,7 +810,7 @@ export async function uiObserverStats(client: Client): Promise<{ calls: number; 
   return { calls: view.getUint32(0, true), records: view.getUint32(4, true) }
 }
 
-/** docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures item 3, gate round 1:
+/** M26, Open gate failures item 3, gate round 1:
  * `ClientCore::predict_applied_ever` (`client_predict_stats`) -- cumulative count of dispatch-time
  * predictions that came back `Applied`, ever. Requires the client worker parked. */
 export async function predictStats(client: Client): Promise<{ appliedEver: number }> {
@@ -822,7 +822,7 @@ export async function predictStats(client: Client): Promise<{ appliedEver: numbe
   return { appliedEver: view.getUint32(0, true) }
 }
 
-/** docs/plan/30-interpolation.md, `engine/test`: every visible remote player as the client's last
+/** M30, `engine/test`: every visible remote player as the client's last
  * `frame()` interpolated it (`client_presence_sample_at`), ascending `PlayerId`. Requires the
  * client worker parked. */
 export async function samplePresences(client: Client): Promise<PresenceSampleRow[]> {
@@ -841,7 +841,7 @@ export async function samplePresences(client: Client): Promise<PresenceSampleRow
   })
 }
 
-/** docs/plan/30-interpolation.md, `engine/test`: `interpRenderedFrames`, `interpExtrapolatedFrames`
+/** M30, `engine/test`: `interpRenderedFrames`, `interpExtrapolatedFrames`
  * and `interpDelayMs` (same export). Requires the client worker parked. */
 export async function interpCounters(client: Client): Promise<InterpCounters> {
   const { value, result } = await callParked(
@@ -857,7 +857,7 @@ export async function interpCounters(client: Client): Promise<InterpCounters> {
   return decodeCounters(result)
 }
 
-/** docs/plan/16b-ui-observation-and-clock.md, `engine/test`: forces `UiObserver::mark_dirty()`
+/** M16b, `engine/test`: forces `UiObserver::mark_dirty()`
  * (`client_ui_mark_dirty`, a test-only ABI export -- see that milestone's Deviations, "the dirty
  * flag has no browser-reachable setter yet"), the same "reached directly by name through
  * `callParked`" shape as `replicaHash`/`hostRegionHash`. Requires the client worker parked. No
@@ -869,7 +869,7 @@ export async function markUiDirty(client: Client): Promise<void> {
   }
 }
 
-/** docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`: `client::Replica::
+/** M15b, `engine/test`: `client::Replica::
  * region_hash()` (`client_region_hash`). Requires the client worker parked. */
 export async function replicaHash(client: Client): Promise<string> {
   const { value, result } = await callParked(client, 'client', 'client_region_hash', [], 8)
@@ -879,7 +879,7 @@ export async function replicaHash(client: Client): Promise<string> {
   return hex64(result)
 }
 
-/** docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test`: this milestone's own
+/** M15b, `engine/test`: this milestone's own
  * "M15 counters + `downlinkRetries`" bundle for one connection -- `host::ConnCounters` (a real ABI
  * export, `sim_conn_counters`, reached directly by name), the underlying ring's own `drops`/
  * `pushed`/`popped` for both `uplink` and `downlink` (read straight out of the shared `SabSet`
@@ -888,7 +888,7 @@ export async function replicaHash(client: Client): Promise<string> {
  * piece with no ABI export at all). Requires the sim worker parked (the two `sim`-targeted calls
  * do); the ring reads do not.
  *
- * `uplinkPresenceBytes` (docs/plan/19-presence-channel.md steps 4-6): `host::ConnCounters::
+ * `uplinkPresenceBytes` (M19 steps 4-6): `host::ConnCounters::
  * presence_bytes_up`'s own field, appended to `sim_conn_counters`'s 56-byte reply -- cumulative
  * presence-field wire bytes this connection has had recorded into the host's `PresenceTable`
  * (`presence-worker-path.spec.ts`'s own "reaches the sim worker's table" proof, and the row
@@ -947,7 +947,7 @@ export async function netCounters(client: Client, conn = 0): Promise<NetCounters
   }
 }
 
-/** docs/plan/17-drawlist-and-sprites.md, `engine/test`: one 32-bit FNV-1a pass over `bytes[offset,
+/** M17, `engine/test`: one 32-bit FNV-1a pass over `bytes[offset,
  * offset+len)`, seeded with `seed`. Two independent seeds (below) give `drawListHash` a 64-bit-wide
  * hash without `BigInt` (`.claude/rules/hot-paths.md`'s own "no `BigInt`... per call" bullet is
  * about a per-frame/per-message path, which this test-only helper is not, but there is no reason to
@@ -964,7 +964,7 @@ function fnv1a32(bytes: Uint8Array, offset: number, len: number, seed: number): 
 const FNV32_SEED_LO = 0x811c_9dc5
 const FNV32_SEED_HI = 0x1000_193b
 
-/** docs/plan/17-drawlist-and-sprites.md, M17 cut-1 gate ("native-vs-`.wasm` equality, not
+/** M17, M17 cut-1 gate ("native-vs-`.wasm` equality, not
  * self-consistency"): a hash that is a **pure function of replica + camera**, deliberately
  * excluding `frame_seq` (header offset 0, a session-local call counter -- a `.wasm` instance driven
  * through several real ticks before the assertion has a different one than a native one-shot
@@ -992,8 +992,8 @@ export function hashDrawListFields(
 }
 
 /** `hashDrawListFields` over the newest `drawList` triple-buffer slot -- read through the client's
- * own single `DrawListSlot` (docs/plan/18-picking-and-overlay.md, `render/drawlist-slot.ts`), never
- * a second, independent `TripleReader` over the same SAB (docs/plan/17-drawlist-and-sprites.md
+ * own single `DrawListSlot` (M18, `render/drawlist-slot.ts`), never
+ * a second, independent `TripleReader` over the same SAB (M17
  * Deviations, "Two-reader torn read": `TripleReader.acquire()` mutates shared state on every call,
  * so two readers racing it tear the handoff -- now that every `Client` keeps one of its own alive
  * for picking, a second one here would reintroduce exactly that bug). */
@@ -1026,7 +1026,7 @@ export type DrawRecord = {
   pickId: number
 }
 
-/** docs/plan/17-drawlist-and-sprites.md, `engine/test`: decodes every `Draw` record of the newest
+/** M17, `engine/test`: decodes every `Draw` record of the newest
  * `drawList` slot into `out` (cleared first), returning the count. Test-only (allocates one object
  * per record; `src/test/**` is exempt, `.claude/rules/hot-paths.md`). */
 export function drawListRecords(client: Client, out: DrawRecord[]): number {
@@ -1084,20 +1084,20 @@ export function drawListWindowOrigin(client: Client): { x: number; y: number } {
   return windowOriginOf(clientTestHandle(client).drawListSlot)
 }
 
-/** docs/plan/18-picking-and-overlay.md `engine/test`: a thin wrapper over `Client.pick.at` -- the
+/** M18 `engine/test`: a thin wrapper over `Client.pick.at` -- the
  * same `pick_id` `input/semantic.ts`'s recognizer would compute for a `tap`/`hover`/... at this same
  * CSS-pixel point, without needing a real pointer event. */
 export function pickAt(client: Client, cssX: number, cssY: number): number {
   return client.pick.at(cssX, cssY)
 }
 
-/** docs/plan/18-picking-and-overlay.md `engine/test` counter: how many times the picker has actually
+/** M18 `engine/test` counter: how many times the picker has actually
  * scanned the DrawList body (cache misses only) since this `Client` was created. */
 export function pickScanned(client: Client): number {
   return clientTestHandle(client).picker.scanned()
 }
 
-/** docs/plan/18-picking-and-overlay.md `engine/test` counter: cumulative overlay style/custom-
+/** M18 `engine/test` counter: cumulative overlay style/custom-
  * property writes since this `Client` was created (`overlay/anchors.ts`'s own `styleWrites()`). */
 export function styleWrites(client: Client): number {
   return clientTestHandle(client).overlay.styleWrites()
@@ -1106,7 +1106,7 @@ export function styleWrites(client: Client): number {
 const WASM_PAGE_BYTES = 65536
 
 /**
- * M36's bench HUD readout (docs/plan/36-slow-tier-and-benchmarks.md step 6): the worker timings of a
+ * M36's bench HUD readout (M36 step 6): the worker timings of a
  * client created with `test.flags.timing` and the grow counters, each one `Atomics.load` of the
  * control block, no park. `frameN`/`tickN` move when a new duration is available (`frameUs`/
  * `tickUs`, whole microseconds). Without `timing` the durations stay 0.
@@ -1116,14 +1116,14 @@ export type BenchProbe = {
   frameUs(): number
   tickN(): number
   tickUs(): number
-  /** docs/plan/39o: the parts of that pass (`CB_SIM_SEAL_US` ...), valid once `tickN()` has moved. */
+  /** M39o: the parts of that pass (`CB_SIM_SEAL_US` ...), valid once `tickN()` has moved. */
   sealUs(): number
   simTickUs(): number
   frameBuildUs(): number
   /** 0 when the pass ran no resync. */
   resyncUs(): number
   catchupTicks(): number
-  /** docs/plan/39y: whole microseconds `sim_tick` spent in phase `id` (1-13), 0 outside a `bench-phases` build. */
+  /** M39y: whole microseconds `sim_tick` spent in phase `id` (1-13), 0 outside a `bench-phases` build. */
   phaseUs(id: number): number
   /** `engine_mem_grows` of the sim worker (`W_MEM_GROWS`); the client worker's is `clientGrows`. */
   simGrows(): number
@@ -1153,7 +1153,7 @@ export function benchProbe(client: Client): BenchProbe {
 /**
  * `engine/test`: adapts a real `createClient()` result to the `Harness` shape `installGcPage`/
  * `zeroGcSuite` (M04) already drive, so the same generated zero-GC suite runs unchanged against a
- * production topology (docs/plan/06b-workers-and-spawn.md, Seams; orchestrator decision 4).
+ * production topology (M06b, Seams; orchestrator decision 4).
  * `park`/`resume` map to the `yield` protocol (`parkWorkers`/`resumeWorkers` above), `stepFrame` to
  * this file's own `stepFrame` (its `W_ACK` lockstep), `stepTick` wakes every `sim`/`gen` worker and
  * locksteps on their own `W_ACK` the same way (they have no ring traffic of their own to
@@ -1165,7 +1165,7 @@ export function benchProbe(client: Client): BenchProbe {
  * ongoing fault-reporting channel past `ready`/`fatal` yet -- Deviations).
  *
  * It snapshots the worker set when called: on a remote client with no `test.game` call it after
- * `untilConfigured(client)`, or the late-spawned gen workers are not in it (docs/plan/33f).
+ * `untilConfigured(client)`, or the late-spawned gen workers are not in it (M33f.
  */
 export function asHarness(client: Client): Harness {
   const h = clientTestHandle(client)
@@ -1196,7 +1196,7 @@ export function asHarness(client: Client): Harness {
       const w = tickTargets[i] as WorkerEntry
       const want = tickWant[i] as number
       let spins = 0
-      // `< want`, not `!== want` (docs/plan/08b-gen-workers-and-queue.md, Deviations: found by
+      // `< want`, not `!== want` (M08b, Deviations: found by
       // `gc-gen.ts`, the first zero-GC page whose `gen` target also has real, independent ring
       // traffic waking it -- a `genRequest`/`genResult` commit wakes `gen0` the same way this
       // synthetic tick does). `W_WAKE` is a monotonic counter shared by every wake source for this

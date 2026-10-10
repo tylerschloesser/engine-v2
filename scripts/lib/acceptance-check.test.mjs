@@ -1,4 +1,4 @@
-// `scripts/acceptance-check.mjs` (docs/plan/39-acceptance.md): fixture tables over a throwaway
+// `scripts/acceptance-check.mjs` (M39: fixture tables over a throwaway
 // repo layout. A missing test name, a gap row and an unticked device id each fail; a good table
 // passes. Hermetic: nothing here reads the real `docs/plan/acceptance/`.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'

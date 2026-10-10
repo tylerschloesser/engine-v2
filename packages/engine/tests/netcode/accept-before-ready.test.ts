@@ -1,4 +1,4 @@
-// `accept-before-ready` (docs/plan/38-hosting-checks.md Deviations, found on the second spawn of
+// `accept-before-ready` (M38 Deviations, found on the second spawn of
 // `reference-server/sigterm-snapshots`): a connection accepted before `ready` keeps what it sends. The
 // `Hello` of a client that dials while the world is still loading (a woken Fly machine, a Durable
 // Object) used to be dropped -- `accept` only queued the connection and left `onMessage` unset, so an

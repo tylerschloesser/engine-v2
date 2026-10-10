@@ -1,4 +1,4 @@
-// `script.ts` (docs/plan/34b-reference-scripted-single-player.md): one fluent description of a play
+// `script.ts` (M34b: one fluent description of a play
 // of the reference game, run by one of two drivers: `headlessDriver` (a `HeadlessClient` on the
 // netcode harness, what `golden:record` and M34c use) and `domDriver` (a Playwright page on
 // `/test.html`: real clicks, real mouse taps). Both run the same `Script`, so the DOM run proves the

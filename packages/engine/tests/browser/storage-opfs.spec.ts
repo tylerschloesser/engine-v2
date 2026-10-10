@@ -1,4 +1,4 @@
-// docs/plan/23-persistence-opfs-and-lifecycle.md step 2, Tests added: `storage_conformance_opfs`
+// M23 step 2, Tests added: `storage_conformance_opfs`
 // (also WebKit, Firefox -- `@engines`, `pnpm test:slow` for the latter two, `playwright.config.ts`'s
 // own convention). Uses `./support/opfs-context.ts`'s persistent-context `test`/`opfsPage` (step 1,
 // Deviations: WebKit's OPFS needs one), not the default `page` fixture every other spec here uses.
@@ -48,7 +48,7 @@ test('storage_conformance_opfs @engines', async ({ opfsPage }) => {
     readsSameValueAfterRename: true,
   })
 
-  // Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 1): `flush()` must
+  // Gate fix (M23, "Open gate failures" 1): `flush()` must
   // wait for a rename `pendingAsync()` already handed out and running elsewhere, not just one still
   // sitting untaken in the slot.
   expect(result.flushWaitsForInFlightRename).toEqual({

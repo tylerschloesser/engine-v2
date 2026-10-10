@@ -1,4 +1,4 @@
-// The dev-server path of `engine()` (docs/plan/02b-vite-plugin.md): headers on every response, the
+// The dev-server path of `engine()` (M02b: headers on every response, the
 // wasm route, the virtual module, `server.fs.allow`, and the watch → rebuild → full-reload loop.
 // Against the real fixture app (tests/browser/pages), through Vite's JS API, on an ephemeral port.
 
@@ -113,7 +113,7 @@ describe('plugin-dev', () => {
     // left at "now", it makes cargo see the *real* fixture source as newer than the fingerprint
     // recorded by this same `pnpm test` run's own build phase, so the next `pnpm test`'s
     // `fixtures`/`cargo-tests` steps recompile fx-hash for a fingerprint reason the source diff
-    // never explains (docs/plan/17d-fast-tier-wall-time.md, Fix round 1:
+    // never explains (M17d, Fix round 1:
     // `CARGO_LOG=...fingerprint=info`'s own `FsStatusOutdated(StaleItem(ChangedFile { ..
     // reference_mtime: T0, stale_mtime: T1 > T0 }))` named this file exactly).
     const beforeStat = await stat(LIB_RS)

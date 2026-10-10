@@ -1,4 +1,4 @@
-// Ambient `window.__terrainClient` type (docs/plan/09-renderer-terrain.md, step 5), shared by
+// Ambient `window.__terrainClient` type (M09, step 5), shared by
 // `terrain-client.html`'s page script and `terrain-readback.spec.ts`, the same split
 // `terrain-window.d.ts` already uses for the hand-filled `window.__terrain`.
 export {}

@@ -102,10 +102,10 @@ impl Clocks {
 
 /// Every replica entity whose footprint (`G::prototype`'s own `Footprint`, anchored at `G::anchor`)
 /// intersects `FrameView::visible()`, ascending `EntityId` (`BTreeMap`'s own iteration order --
-/// makes DrawList hashes stable, docs/plan/17-drawlist-and-sprites.md Seams). Built by
+/// makes DrawList hashes stable, M17 Seams). Built by
 /// `FrameView::entities()`; a game never constructs this directly.
 ///
-/// M26 (docs/plan/26-prediction-rendering-and-clocks.md Scope: "`entities()` becomes
+/// M26 (Scope: "`entities()` becomes
 /// overlay-aware"): with no overlay attached (`FrameView::with_prediction` never called, every
 /// pre-M26 caller), `Base` is the exact pre-M26 code path -- unchanged, so no existing DrawList
 /// hash moves. With one attached, `Merged` walks a reused, sorted id list (overlay ids covering
@@ -257,7 +257,7 @@ fn merge_render_ids<G: Game>(
 /// one `FrameView` shape serves every `Game` with no generic read implementation per caller.
 /// `entities`/`registry` are borrowed the same way, straight out of `client::Replica` (`pub(crate)`
 /// accessors added this milestone) -- `WorldRead` itself stays object-safe, so entity iteration
-/// cannot go through it (docs/plan/17-drawlist-and-sprites.md Deviations).
+/// cannot go through it (M17 Deviations).
 pub struct FrameView<'a, G: Game> {
     world: &'a dyn WorldRead<G>,
     clocks: Clocks,
@@ -272,7 +272,7 @@ pub struct FrameView<'a, G: Game> {
     time_ms: f64,
     own_presence: G::Presence,
     remote_presences: &'a RemotePresences<G>,
-    /// docs/plan/30-interpolation.md: the render time (host ticks) [`Self::presences`] evaluates
+    /// M30: the render time (host ticks) [`Self::presences`] evaluates
     /// the interpolation buffer at; `None` (every caller that never calls
     /// [`Self::with_render_time`]) yields each remote's raw newest sample, as M19 did.
     render_t: Option<f64>,
@@ -285,7 +285,7 @@ pub struct FrameView<'a, G: Game> {
 }
 
 /// One remote player's presence, as `FrameView::presences()` hands it to a game's own callback
-/// (docs/plan/19-presence-channel.md Provides, verbatim field list). `alpha` is always `1.0` until
+/// (M19 Provides, verbatim field list). `alpha` is always `1.0` until
 /// M30 (Goal: "remote samples are exposed raw (snapped)").
 pub struct RemotePresence<'a, G: Game> {
     pub who: PlayerId,
@@ -296,7 +296,7 @@ pub struct RemotePresence<'a, G: Game> {
 }
 
 impl<'a, G: Game> FrameView<'a, G> {
-    /// docs/plan/19-presence-channel.md steps 4-6, Deviations: `own_presence` crosses *by value*
+    /// M19 steps 4-6, Deviations: `own_presence` crosses *by value*
     /// (`G::Presence: Copy`), not `&'a G::Presence` as the brief's own Provides literally spells
     /// it -- `game_instance.rs`'s fixed call order (M18: "build `FrameView` -> `ClientSide::frame`
     /// -> `extract`") builds this `FrameView` *before* `ClientSide::frame` runs, and `frame`
@@ -366,7 +366,7 @@ impl<'a, G: Game> FrameView<'a, G> {
     /// Every remote player's newest known presence sample, ascending `PlayerId` (Provides).
     ///
     /// With a render time attached ([`Self::with_render_time`]; always so in the client worker)
-    /// `pos`, `vel` and `alpha` are interpolated (docs/plan/30-interpolation.md, 0012 "Remote
+    /// `pos`, `vel` and `alpha` are interpolated (M30, 0012 "Remote
     /// motion") and a remote that has faded out entirely is skipped; `sample` stays the newest raw
     /// sample.
     pub fn presences(&self, f: &mut dyn FnMut(RemotePresence<'_, G>)) {
@@ -478,7 +478,7 @@ impl<'a, G: Game> FrameView<'a, G> {
         }
     }
 
-    /// Every action still pending, oldest first (docs/plan/26-prediction-rendering-and-clocks.md
+    /// Every action still pending, oldest first (M26
     /// Provides): `seq` plus its most recently (re-)predicted status, for a game that wants to
     /// show "pending" independent of any single entity or tile (e.g. `NotPredictable`). No-op
     /// with no pending queue attached.
@@ -1049,7 +1049,7 @@ mod tests {
     // `frameview_zoom_matches_camera_block` used to live here, built by hand through `view()`
     // above -- it proved `FrameView::zoom()` reads back whatever field it was constructed with,
     // never the real wiring (`game_instance.rs`'s `camera_view.zoom = camera.tiles_across`).
-    // Fix round 1 (docs/plan/17-drawlist-and-sprites.md, coordinator review): moved to
+    // Fix round 1 (M17, coordinator review): moved to
     // `fixtures/drawables/tests/drawlist_golden.rs`, which can drive a real `GameInstance<
     // Drawables>` through the actual `Instance::frame` ABI method with a real `CameraBlock` --
     // `crates/engine` itself has no concrete `Game` whose `extract()` exposes `zoom()`/

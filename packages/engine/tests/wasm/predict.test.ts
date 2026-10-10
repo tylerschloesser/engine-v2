@@ -1,4 +1,4 @@
-// docs/plan/25-prediction-core.md Tests added, WASM-under-Node suite: `predict_not_predictable_
+// M25 Tests added, WASM-under-Node suite: `predict_not_predictable_
 // event` -- dispatch at the subscription edge yields `NotPredictable` then `Confirmed` from
 // `onActionResult`, driven from a real `.wasm` host (sim role) and a real `.wasm` client (client
 // role), not a stub. No `createClient()` here (that needs real `Worker`s and a canvas, browser

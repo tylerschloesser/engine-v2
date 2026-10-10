@@ -1,5 +1,5 @@
 //! Furnace actions through the real host <-> client round trip (`Loopback`, M25's testkit),
-//! docs/plan/33b-reference-furnace-operation.md Tests added: prediction of deposit and pick-up, the
+//! M33b Tests added: prediction of deposit and pick-up, the
 //! `FurnaceTake` prediction (R2), a rejected predicted pick-up, and the host-side half of a pick-up racing
 //! another player's panel. The client's `open` panel state is step 3's and is asserted there.
 //!

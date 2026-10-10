@@ -1,4 +1,4 @@
-// `busy-furnace-field @slow` (docs/plan/36b-suite-audit-and-measurements.md, "Byte diffing: measure,
+// `busy-furnace-field @slow` (M36b, "Byte diffing: measure,
 // do not build"; 0010's worked example, M15's question, 0011's byte-diffing deferral). The reference
 // game on its `bench` save with 200 (then 1,000, for scale) lit, stocked furnaces whose smelt timers
 // are uniformly staggered, all inside one client's view, plus two players taking once per second,

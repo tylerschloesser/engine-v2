@@ -1,4 +1,4 @@
-// The client worker's net pump (docs/plan/15b-ring-connection-and-replica-rendering.md, step 4):
+// The client worker's net pump (M15b, step 4):
 // built and run only when this topology is linked (`worker/client.ts`'s own `message.link` gate,
 // Orchestrator ruling 1). Drains the downlink ring straight into WASM linear memory --
 // `on_frame(len)`, one call per message, over `RegionId.Downlink`'s own preallocated view (created
@@ -10,7 +10,7 @@
 // `Tx` region onto the uplink ring -- `RingProducer`'s own `wake` option notifies the sim worker on
 // every successful push, the external wake ADR 0030's `poll()` fix (`worker/sim.ts`) exists for.
 //
-// docs/plan/16-action-round-trip.md: also the clock block's own writer (Scope: "written by the
+// M16: also the clock block's own writer (Scope: "written by the
 // client worker after each `on_frame`"). Only this pump ever learns whether `on_frame` actually
 // applied a real frame (its own `Status` return, `Status.Ok`) -- the one reliable "a session is
 // live" signal (`ClientCore::last_summary()`'s default is indistinguishable from a genuine first
@@ -42,13 +42,13 @@ const POLL_UPLINK_ARG = 0
  * CLAUDE.md`: "no TS code parses frames, ever") -- it is the one byte every message opens with
  * regardless of direction (`wire/CLAUDE.md`'s own "Message type byte" table), read here only to
  * route an already-attached connection's downlink message to `client_on_welcome` instead of
- * `on_frame` (docs/plan/28b-reconnect-and-lifecycle.md step 2: a second `Welcome` is the resync
+ * `on_frame` (M28b step 2: a second `Welcome` is the resync
  * signal, Planning decisions). */
 const MSG_TYPE_WELCOME = 0x03
 
 export type NetPump = {
   pump(): void
-  /** docs/plan/28-sessions-and-reconnect.md (Scope: "seq_seed/session_state in the clock block are
+  /** M28 (Scope: "seq_seed/session_state in the clock block are
    * set from `Welcome` instead of the first frame's `ack_seq`, M16's interim rule"): the caller
    * (whoever just applied `client_on_welcome`, e.g. `HeadlessClient`) calls this once, right after
    * a successful attach and before this pump's own `pump()` ever runs for the first time. Writes
@@ -58,7 +58,7 @@ export type NetPump = {
    * used when `handshake` (below) is given -- that caller's `pump()` seeds itself once it applies
    * `Welcome` internally. */
   seedFromWelcome(seqSeed: number): void
-  /** docs/plan/37-robustness-events.md step 1: the highest `ack_seq` this pump knows the host had
+  /** M37 step 1: the highest `ack_seq` this pump knows the host had
    * processed: the last one a frame carried, or the `Welcome`'s own `last_processed_action_seq`,
    * whichever is later. The client worker reads it off a dead pump to learn which pending actions
    * to report `Lost`. */
@@ -71,7 +71,7 @@ export type NetPump = {
   hasFrame(): boolean
 }
 
-/** docs/plan/28-sessions-and-reconnect.md step 5: opt-in argument to `createNetPump` -- when
+/** M28 step 5: opt-in argument to `createNetPump` -- when
  * given, `pump()` itself sends `client_hello()` on its first call and applies `Welcome` off the
  * downlink ring before ever touching `on_frame`/`client_poll_uplink` (Scope: "the client instance
  * emits `Hello` first ... `ready` means `Welcome` applied"). Omitted, `pump()` behaves exactly as
@@ -90,7 +90,7 @@ export type NetPumpHandshake = {
     viewMaxTilesPerAxis: number
     viewMaxChunks: number
   }) => void
-  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2 (`SetupMessage.remoteLinked`,
+  /** M29 steps 1-2 (`SetupMessage.remoteLinked`,
    * `worker/client.ts`'s own doc comment): `true` only for a `{ kind: 'remote' }` topology --
    * `pumpHandshake` then waits for `CB_LINK_STATE` (`sab/control.ts`, written by the `net`-kind
    * worker) to read `Up` at least once before ever sending `client_hello()`, instead of sending it
@@ -98,21 +98,21 @@ export type NetPumpHandshake = {
    * `RingConnection` link, which has no net worker and so never writes that word at all -- gating
    * on it there would block `Hello` forever. */
   remoteLinked?: boolean
-  /** docs/plan/33f: called once, synchronously, on the one `client_on_welcome` that configured
+  /** M33f: called once, synchronously, on the one `client_on_welcome` that configured
    * this client's world (the `u32` at offset 16 of its `Result`, `1` exactly once per client
    * instance), before `onAttached`. The caller reads `client_world_config` and tells main. */
   onConfigured?: () => void
-  /** docs/plan/33f: `client_on_welcome` answered `Status.WorldMismatch` (a `Welcome` for another
+  /** M33f: `client_on_welcome` answered `Status.WorldMismatch` (a `Welcome` for another
    * world than the one this client was configured from). Nothing was applied; the caller ends the
    * worker with a fatal a page can tell from a trap. */
   onWorldMismatch?: () => void
-  /** docs/plan/37-robustness-events.md step 1: this pump belongs to a client instance that replaced
+  /** M37 step 1: this pump belongs to a client instance that replaced
    * a trapped one (0014 §6), on a link that is already up. It writes `Resyncing` to the clock block
    * at once (so `dispatch` refuses until the new `Welcome`) and its `Hello` goes out on the first
    * pump: the host sees a `Hello` on a settled connection and re-handshakes it (`server.ts`,
    * `reopenOnHello`), so no redial is needed on either transport. */
   restart?: boolean
-  /** docs/plan/37-robustness-events.md step 4: called once per new entry of the instance's desync
+  /** M37 step 4: called once per new entry of the instance's desync
    * report ring (M31b), oldest first, right after the frame that recorded it was applied. Checking
    * costs one allocation-free call after each applied frame; a report allocates (a rare event). A
    * rebuilt instance starts a new ring and a new count. */
@@ -147,7 +147,7 @@ export function createNetPump(
   result: RegionView | null,
   ticksPerSecond: number,
   handshake?: NetPumpHandshake,
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 2: called synchronously, once, the instant a
+  /** M28b step 2: called synchronously, once, the instant a
    * second `Welcome` is detected on an already-attached connection -- before it is applied (so a
    * caller that bridges this to `client.onResyncing` posts/fires while `session_state` still reads
    * `Resyncing`, matching `NetPumpHandshake.onAttached`'s own "called the instant Welcome is
@@ -185,14 +185,14 @@ export function createNetPump(
     clockFields.sessionState = SessionState.Resyncing
     writeClockBlock(clockView, clockFields)
   }
-  // docs/plan/28-sessions-and-reconnect.md step 5: `attached` starts `true` (the whole handshake
+  // M28 step 5: `attached` starts `true` (the whole handshake
   // block below never runs) when no `handshake` was given -- every existing caller (`HeadlessClient`,
   // any hand-rolled fixture) keeps exactly today's behaviour (Deviations: this is an additive,
   // opt-in parameter, not a renamed seam).
   let attached = handshake === undefined
   let helloSent = false
   let helloSentAtMs = 0
-  // docs/plan/29-net-worker-and-reference-server.md step 4 (real bug, found live by `mp/reconnect`:
+  // M29 step 4 (real bug, found live by `mp/reconnect`:
   // steps 1-2's own Deviations already flagged this as deliberately deferred here): the net
   // worker's own `CB_LINK_GEN` (`net/link.ts`'s `dial()` counter) advances on *every* dial, the
   // very first one and every later reconnect alike -- `lastHelloLinkGen` is the last generation
@@ -200,7 +200,7 @@ export function createNetPump(
   // is told apart from an ordinary wake with nothing new to do. `-1`: no generation sent yet (`net/
   // link.ts`'s own `gen` starts at `1` on the first real dial, so this sentinel never collides).
   let lastHelloLinkGen = -1
-  // docs/plan/37-robustness-events.md step 2: a local (ring) link has no net worker to count dials, so
+  // M37 step 2: a local (ring) link has no net worker to count dials, so
   // main bumps `CB_LINK_GEN` itself after it respawned the sim worker; a change from the value seen at
   // construction means "the host end is new: send `Hello` again" (warm, with the resume hint).
   let localLinkGenSeen = Atomics.load(shell.control.words, CB_LINK_GEN)
@@ -228,9 +228,9 @@ export function createNetPump(
   function pumpHandshake(): void {
     const hs = handshake as NetPumpHandshake
     if (hs.remoteLinked) {
-      // docs/plan/29-net-worker-and-reference-server.md steps 1-2: for a remote topology, wait for
+      // M29 steps 1-2: for a remote topology, wait for
       // the net worker's own `CB_LINK_STATE` to read `Up` before sending -- a wake with no link yet
-      // just re-checks next time. docs/plan/30c-ci-reds-after-m30.md (red C): once per link
+      // just re-checks next time. M30c (red C): once per link
       // generation, not once per pump. Every redial before the first `Welcome` is a fresh
       // server-side slot that stays `'garbage'` until it hears a `Hello`: a link that died before
       // its `Hello` landed (the dead timer runs from the dial, so a client worker slower than 3 s
@@ -281,7 +281,7 @@ export function createNetPump(
       pumpHandshake()
       if (!attached) return // still waiting on Welcome; on_frame/client_poll_uplink wait too
     } else if (handshake?.remoteLinked) {
-      // docs/plan/29-net-worker-and-reference-server.md step 4: the reconnect-resend path
+      // M29 step 4: the reconnect-resend path
       // `pumpHandshake` alone can never reach (`attached` is already `true` by now, permanently --
       // it is set once, at the first `Welcome`, and this pump has no reason to ever clear it: the
       // *replica* survives a reconnect, only the *socket* is new). A new `CB_LINK_GEN` at `Up`
@@ -310,7 +310,7 @@ export function createNetPump(
       for (;;) {
         const len = downlinkConsumer.popInto(downlink.u8, 0)
         if (len < 0) break
-        // docs/plan/28b-reconnect-and-lifecycle.md step 2: a second `Welcome` (0013 Reconnect/0005
+        // M28b step 2: a second `Welcome` (0013 Reconnect/0005
         // Panic recovery: "clients see `Resyncing`, then the reconnect-style full resync") arrives
         // on the same downlink stream as every ordinary `Frame` -- the one-byte `MsgType` peek
         // (`MSG_TYPE_WELCOME`, above) is what tells them apart, since this pump is always already
@@ -356,13 +356,13 @@ export function createNetPump(
     if (sawFrame && result && inst.call0(inst.x.client_clock_stats) === Status.Ok) {
       const tick = readU32LE(result.u8, 0)
       const ackSeq = readU32LE(result.u8, 4)
-      // docs/plan/26-prediction-rendering-and-clocks.md steps 4-6 (`ABI_VERSION` 23 -> 24):
+      // M26 steps 4-6 (`ABI_VERSION` 23 -> 24):
       // `client_clock_stats`'s own widened result -- `predicted_tick` (real from this milestone,
       // 0012 "Two clocks") and `tick_fraction` (`ClientCore::last_tick_fraction`'s bits).
       const predictedTick = readU32LE(result.u8, 8)
       const tickFraction = tickFractionReader.read(result.u8, 12)
       const revealed = readU32LE(result.u8, 16)
-      // docs/plan/28-sessions-and-reconnect.md: `live`/`seqSeed`/`sessionState` are now seeded by
+      // M28: `live`/`seqSeed`/`sessionState` are now seeded by
       // `seedFromWelcome` (below), called once by the caller right after a successful `Welcome`,
       // *before* this pump's own first `pump()` call -- this bootstrap-from-the-first-frame path
       // (M16's interim rule) is unreachable in production from this milestone on, and kept only so

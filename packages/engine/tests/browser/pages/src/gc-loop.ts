@@ -1,4 +1,4 @@
-// `gc-loop.html`'s script (docs/plan/04-zero-gc-harness.md, Scope): one sim-role worker named `sim`
+// `gc-loop.html`'s script (M04, Scope): one sim-role worker named `sim`
 // on fixture `hash`. Per frame: `stepFrame` + `stepTick`; per tick the worker copies a fixed block
 // SAB -> `Rx`, calls `sim_admit`, `sim_tick`, `sim_build_frame`, copies the fixed frame block
 // `Tx` -> SAB through view pairs created at init (`harness-worker.ts`'s `coreTick`); main reads that

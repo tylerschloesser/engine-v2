@@ -1,5 +1,5 @@
 //! Own test binary (mirrors `no_alloc_store.rs`: a `#[global_allocator]` only counts allocations
-//! made inside the binary that installs it). Budget (docs/plan/12b-world-access-and-sim-driver.md
+//! made inside the binary that installs it). Budget (M12b
 //! Budgets): `Authority`'s put path (`Store::apply` plus scope derivation and the `ChangeLog`
 //! push) must not allocate for an existing key once the `Vec`s involved have reached steady state.
 

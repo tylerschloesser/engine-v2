@@ -1,4 +1,4 @@
-// The wall-clock benchmark gate (docs/decisions/0020 §9, §10; docs/plan/36-slow-tier-and-
+// The wall-clock benchmark gate (docs/decisions/0020 §9, §10; M36
 // benchmarks.md step 5). One helper for every benchmark that has a checked-in baseline in
 // `packages/engine/baselines/<name>.json`:
 //

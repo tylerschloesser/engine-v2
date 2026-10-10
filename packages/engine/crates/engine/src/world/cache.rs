@@ -10,7 +10,7 @@
 //! "resident, then invalidated" -- the two look identical from `TerrainStore::is_cached` alone.
 //! Before M15c, `evict_if_present` evicted silently: a chunk a client had already pristine-
 //! generated, then received a host snapshot for, stayed evicted forever with the camera held still,
-//! because nothing re-read it (docs/plan/15c-terrain-visibility-and-cache-invalidation.md, "The
+//! because nothing re-read it (M15c, "The
 //! bug, confirmed at M15b's gate"). [`Cache::invalidation_seq`] is a second, always-on signal for
 //! exactly this: a monotonic counter, bumped only in [`Cache::evict_if_present`] (**not** on every
 //! `Evicted` -- fix round 1 found that counting `materialize`'s own LRU capacity eviction too turns
@@ -57,7 +57,7 @@ struct SlotMeta {
 }
 
 /// Fixed-hasher open addressing over `mix64(chunk_key)`, tombstone-free via backward-shift delete
-/// (Planning decisions 4 of docs/plan/07-world-model-core.md). Not a `HashMap`: entries are
+/// (Planning decisions 4 of M07. Not a `HashMap`: entries are
 /// `(chunk_key, slot)` pairs in a plain `Vec`, linear-probed.
 struct IndexTable {
     slots: Vec<Option<(u64, u32)>>,
@@ -189,7 +189,7 @@ pub(crate) struct Cache {
     record_events: bool,
     /// Monotonic count of [`Cache::evict_if_present`] calls that actually removed something --
     /// **not** every `CacheEvent::Evicted` (fix round 1, gate feedback on
-    /// docs/plan/15c-terrain-visibility-and-cache-invalidation.md): counting `materialize`'s own
+    /// M15c: counting `materialize`'s own
     /// LRU capacity eviction here too closed a feedback loop under a cache smaller than the working
     /// set (`clientCacheChunks: 2` in `terrain-readback.spec.ts`'s own "evicted slot shows new
     /// chunk" test, exactly the shape `set_view`'s retention-ring touch pass exists to keep quiet):
@@ -369,7 +369,7 @@ impl Cache {
     /// (0007 §1). Pushes a [`CacheEvent::Evicted`] the same way `materialize`'s own LRU-eviction
     /// path does (`Cache::acquire`'s caller in `terrain.rs`), so this eviction is distinguishable
     /// from "never resident" -- previously this returned silently, which is the bug this method's
-    /// fix closes (docs/plan/15c-terrain-visibility-and-cache-invalidation.md). Also bumps
+    /// fix closes (M15c. Also bumps
     /// [`Cache::invalidation_seq`], **unlike** the LRU eviction `materialize`/`insert_pristine`
     /// report through the same `CacheEvent::Evicted` variant (fix round 1: only this method's own
     /// eviction is a genuine content invalidation; see the field's doc comment for why LRU capacity
@@ -597,7 +597,7 @@ mod tests {
         assert_eq!(c.queued_events(), 0);
     }
 
-    /// Fix round 1 (docs/plan/15c-terrain-visibility-and-cache-invalidation.md Deviations):
+    /// Fix round 1 (M15c Deviations):
     /// `acquire`'s own LRU capacity eviction pushes a `CacheEvent::Evicted` (`client::upload` still
     /// needs it, to free the GPU page slot), but it must **not** move `invalidation_seq` -- only
     /// [`Cache::evict_if_present`]'s own content-invalidation eviction does. Reproduces the

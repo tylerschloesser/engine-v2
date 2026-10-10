@@ -1,4 +1,4 @@
-// docs/plan/22b-persistence-load-and-fs.md, Order of work step 5 (Exit criteria): "`engine/test`
+// M22b, Order of work step 5 (Exit criteria): "`engine/test`
 // exports `replayWorld` and `runHeavy`; production entrypoints do not import them (exports-map test
 // from M02/M35 pattern)." No such test exists yet (M35's own `exports-map` test is not built), so
 // this is the first one.

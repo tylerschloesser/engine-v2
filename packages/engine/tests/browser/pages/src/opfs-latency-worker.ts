@@ -1,4 +1,4 @@
-// `opfs-latency.html`'s own worker (docs/plan/23-persistence-opfs-and-lifecycle.md step 7, Planning
+// `opfs-latency.html`'s own worker (M23 step 7, Planning
 // decision 7): a device-check probe, not a test -- Tyler runs this by hand on his iPhone through
 // `pnpm device:serve --tunnel`, since OPFS append/flush latency is deferred to a real device (0005
 // Consequences). Runs entirely inside a dedicated Worker: every browser this milestone supports only

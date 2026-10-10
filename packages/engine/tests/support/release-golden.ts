@@ -1,5 +1,5 @@
 // The golden hashes of every recorded log and scenario, replayed against whichever build the caller
-// names (docs/plan/36-slow-tier-and-benchmarks.md, `release-golden @slow`; docs/decisions/0017 §9: a
+// names (M36, `release-golden @slow`; docs/decisions/0017 §9: a
 // replay of the golden hashes on the release module). Runtime-light like `reference-golden.ts`:
 // Node (Vitest) and Bun (`release-golden-bun.mjs`) load it as it is, so the loader entry points come
 // in through `api` rather than from `src/` or `dist/`, and each runtime keeps one module graph.

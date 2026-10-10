@@ -21,7 +21,7 @@ import {
 } from '../render/drawables.js'
 import type { DrawListSlot } from '../render/drawlist-slot.js'
 
-// `client/drawlist.rs`'s own header layout (docs/plan/17-drawlist-and-sprites.md Deviations,
+// `client/drawlist.rs`'s own header layout (M17 Deviations,
 // "Header, as landed"): the one field picking needs beyond what `DrawListSlot` already parses.
 // Duplicated the same way `render/drawables.ts`'s own `OFF_*` constants mirror the Rust layout.
 const HEADER_OFF_LAYER_COUNT = 16

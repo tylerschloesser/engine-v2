@@ -1,4 +1,4 @@
-// `camera: block reaches worker each frame` (docs/plan/11-camera-and-input.md, Tests added):
+// `camera: block reaches worker each frame` (M11, Tests added):
 // injected pan input drives the real camera integration, one `camera` + `writeCamera` phase per
 // tick (`topology.ts`'s own `__tickCamera`, mirroring `frame-loop.ts`'s `tick()` order), and the
 // client worker's own WASM instance is read back over CDP after *every* tick -- not just the last
@@ -63,7 +63,7 @@ function resume(page: Page): Promise<void> {
 }
 
 /** Reads the client worker's own `RegionId.Result` (index 2), the same 24 bytes `fx-hash`'s
- * `frame()` writes `[centre.x, centre.y, t_ms]` into (docs/plan/06b-workers-and-spawn.md,
+ * `frame()` writes `[centre.x, centre.y, t_ms]` into (M06b,
  * Deviations "Decision A as built"). Caller must have `park()`-ed first (a blocked worker receives
  * no CDP, 0015 §2). */
 async function readEchoedCentre(clientWorker: PageWorker): Promise<{ x: number; y: number }> {
@@ -125,7 +125,7 @@ test('camera: block reaches worker each frame', async ({ page }) => {
   }
 })
 
-// `camera: persisted and restored` (docs/plan/11-camera-and-input.md, Tests added; also: "`restored`
+// `camera: persisted and restored` (M11, Tests added; also: "`restored`
 // is false on a fresh key" and "two `cameraKey`s do not share a camera"): a real `client.camera`
 // (`real-camera.html`, this range's own page), a deliberately off-default position/zoom (a no-op
 // save, or two clients sharing one `localStorage` slot, would both be caught by comparing exact

@@ -1,4 +1,4 @@
-// docs/plan/37-robustness-events.md steps 1-3, Tests added (`browser`): a trapped client instance
+// M37 steps 1-3, Tests added (`browser`): a trapped client instance
 // recovers and resyncs, the client-trap loop guard is fatal, a dead sim worker is respawned, and a
 // failed storage write raises `onFatal` with every file left alone. `recovery.html` runs the real
 // single-player topology on stepped frames and ticks and an injected clock: nothing here sleeps.

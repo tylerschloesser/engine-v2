@@ -1,4 +1,4 @@
-// `input` zero-GC page (docs/plan/11-camera-and-input.md, step 7): the proof for the *whole*
+// `input` zero-GC page (M11, step 7): the proof for the *whole*
 // milestone's rAF path -- 600 frames of injected drag, pinch, wheel and WASD, with a `tap` every 30
 // frames, against a real `createClient()` over `fx-terrain` (chunk streaming and the renderer both
 // active, `gc-terrain.ts`'s own shape: a small cache forces continuous generate/upload/evict inside

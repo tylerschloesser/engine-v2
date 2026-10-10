@@ -1,4 +1,4 @@
-//! `apply_range_is_replayable` (docs/plan/19-presence-channel.md Tests added, step 1): `apply`'s
+//! `apply_range_is_replayable` (M19 Tests added, step 1): `apply`'s
 //! own `dist(from, tile)` check is self-contained (no `PresenceTable` in scope at all -- its
 //! signature cannot name one), so `testkit::run_script` (which never touches `admit` either)
 //! reproduces the same hash across two independent runs of the same script.

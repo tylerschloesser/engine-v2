@@ -1,4 +1,4 @@
-// Ambient `window.__device` type (docs/plan/09b-terrain-art-and-lifecycle.md, step 7), shared by
+// Ambient `window.__device` type (M09b, step 7), shared by
 // `device.html`'s page script and `canvas.spec.ts`, the same split every other real-client page's
 // `.d.ts` in this directory already uses.
 export {}

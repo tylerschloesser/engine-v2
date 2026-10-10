@@ -1,4 +1,4 @@
-// `pnpm setup:tools`'s Playwright-browsers row (docs/plan/03-browser-harness.md, Scope: "the
+// `pnpm setup:tools`'s Playwright-browsers row (M03, Scope: "the
 // Playwright browsers as a TOOLS row"). `playwright install --dry-run` always describes the full
 // plan, installed or not (measured), so it cannot say what is missing; `playwright install --list`
 // can: it prints one block per Playwright version found in the global cache, each with the browser

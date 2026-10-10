@@ -1,4 +1,4 @@
-// Ambient `window.__terrain` type (docs/plan/09-renderer-terrain.md), shared by two separate `tsc`
+// Ambient `window.__terrain` type (M09, shared by two separate `tsc`
 // programs: `terrain.html`'s page script (`tests/browser/pages/tsconfig.json`) and
 // `terrain-readback.spec.ts` (`tests/tsconfig.json`) -- written once here and included by both
 // (`tests/browser/pages/tsconfig.json`'s own `include`), rather than duplicated `declare global`
@@ -42,13 +42,13 @@ declare global {
         height: number,
       ): Promise<{ width: number; height: number; data: number[] }>
       errors(): string[]
-      /** Open gate failures item 6, gate round 1 negative (docs/plan/09-renderer-terrain.md
+      /** Open gate failures item 6, gate round 1 negative (M09
        * Deviations "Gate fix round 1"): builds a shader module from a deliberately invalid WGSL
        * string, awaits `checkCompilation` on it, and returns `errors()` afterwards -- must be
        * non-empty. */
       checkBadWgsl(): Promise<string[]>
       /** `terrain.patch_one_texel` (Tests added): a real `uploadRing`-shaped SAB driven by
-       * hand-built records, not a worker (docs/plan/09-renderer-terrain.md Deviations
+       * hand-built records, not a worker (M09 Deviations
        * "Steps 5-7") -- proves `render/upload.ts`'s CHUNK/PATCH handling directly. */
       createTestRing(): void
       /** `bytes.length` must be exactly 4,112 (`RECORD_BYTES`): a whole record, little-endian,

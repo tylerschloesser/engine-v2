@@ -1,6 +1,6 @@
 # fixtures/terrain (`fx-terrain`)
 
-The renderer data-path fixture (docs/plan/09-renderer-terrain.md, step 5): not real worldgen --
+The renderer data-path fixture (M09, step 5): not real worldgen --
 `FixtureTerrain::generate` is deterministic (chunk (0, 0) grass with one ore tile at local index 5,
 chunk (1, 0) water, everywhere else void) so `terrain-readback.spec.ts`'s pixel probes stay exact
 while exercising the real gen-worker -> `TerrainFeed` -> `TerrainStore` -> `Uploader` -> upload-ring

@@ -1,5 +1,5 @@
 //! Predicted furnace placement through the real host <-> client round trip (`Loopback`, M25's
-//! testkit), docs/plan/33-reference-furnace.md Tests added. The player earns the furnace the honest
+//! testkit), M33 Tests added. The player earns the furnace the honest
 //! way (five stone, one craft) because the loopback host offers no direct write.
 
 use engine::client::drawlist::{HEADER_BYTES, KIND_SPRITE, REGION_BYTES};

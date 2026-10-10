@@ -1,11 +1,11 @@
-// `reference_depletion_visible` (docs/plan/20-reference-game-v0.md Tests added; moved onto the
-// stepped test entry by docs/plan/20b-reference-player-and-collect-ui.md step 0): dispatches
+// `reference_depletion_visible` (M20 Tests added; moved onto the
+// stepped test entry by M20b step 0): dispatches
 // `StartCollect` through the production `client.dispatch` path (`window.__dispatchStartCollect`,
 // `test-entry.ts`) and confirms the iron tile at `(0, 0)` (`tests/fixtures/landmarks.json`,
 // `TEST_SEED`'s nearest resource to the origin) visibly depletes.
 //
 // One completed collect only removes one of `content::UNITS_PER_TILE` (10) units, staying inside
-// the "full" depletion-stage bucket (7-10, docs/plan/20-reference-game-v0.md Planning decisions) --
+// the "full" depletion-stage bucket (7-10, M20 Planning decisions) --
 // the *rendered* texel cannot show anything finer than the three stage buckets (`scripts/
 // gen-assets.mjs` has exactly one flat colour per stage). Four collects (`content::COLLECT` = 40
 // ticks each) bring `aux` from 10 to 6, crossing into "half" -- the fewest collects that cross any
@@ -55,7 +55,7 @@ test('reference_depletion_visible', async ({ page }) => {
 
   const full = await probe()
   // Iron, full stage (`content::IRON` = 16, `RESOURCE_STAGE_FULL` offset 0): `scripts/
-  // gen-assets.mjs`'s own committed colour (docs/plan/20-reference-game-v0.md Deviations).
+  // gen-assets.mjs`'s own committed colour (M20 Deviations).
   expect(full).toEqual({ r: 230, g: 140, b: 60, a: 255 })
 
   // `admit`'s own witness check (0001 "Witness-carrying actions" step 1) rejects `StartCollect`

@@ -1,5 +1,5 @@
 // The 0005 Upgrades sequence (docs/decisions/0005-persistence-and-recovery.md "Upgrades";
-// docs/plan/24b-upgrade-and-migration.md step 4), driven from inside `Persistence.loadLatest`
+// M24b step 4), driven from inside `Persistence.loadLatest`
 // (`persistence.ts`) in place of a plain `sim_restore_begin`/`push`/`end` call: since M24b, a
 // candidate snapshot's own identity may legitimately differ from the running build's, and only
 // `sim_upgrade_end` (`crates/engine/src/host/mod.rs`) -- which alone has `persist::Identity::
@@ -37,7 +37,7 @@ function decodeIncompatReason(byte: number): IncompatReasonName {
 const MISMATCH_REASON_BY_BYTE = ['Schema', 'TickRate', 'Worldgen'] as const
 export type MismatchReasonName = (typeof MISMATCH_REASON_BY_BYTE)[number]
 
-/** Gate fix round 2 (docs/plan/24b-upgrade-and-migration.md: "known gap" flagged in this
+/** Gate fix round 2 (M24b: "known gap" flagged in this
  * milestone's own Deviations; round 1's own TS-side `compareIdentity` deleted -- a second copy of
  * `Identity::compare`'s decision matrix drifted silently under a swapped-reason mutation test,
  * "every fact lives in one file"). `Persistence.loadLatest`'s genesis-replay fallback (no snapshot

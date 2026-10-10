@@ -1,4 +1,4 @@
-//! `RefWorldgen`/`RefParams` (docs/plan/20-reference-game-v0.md Scope, Order of work step 2):
+//! `RefWorldgen`/`RefParams` (M20 Scope, Order of work step 2):
 //! five-octave height / three-octave moisture f64 simplex fBm gives five base terrains (deep
 //! water, water, sand, grass, dirt); a `hash2` scatter puts iron, wood, stone or coal on land
 //! tiles only, per Planning decisions ("Scatter is per-tile and independent ... Wood only on
@@ -13,7 +13,7 @@ use crate::{content, noise};
 
 /// Chunk edge this game always generates at (0007 §3's default, `Game::CHUNK_BITS`'s own default
 /// of 5): fixed at compile time, like every other game's `CHUNK_BITS` (`fx-worldgen`'s own
-/// precedent, docs/plan/08-worldgen-and-gen-worker.md Deviations) -- `Worldgen::generate`'s
+/// precedent, M08 Deviations) -- `Worldgen::generate`'s
 /// signature carries no `ChunkDims` parameter, so this is the only way `out`'s length and this
 /// file's own tiling math agree.
 const EDGE: i32 = 32;

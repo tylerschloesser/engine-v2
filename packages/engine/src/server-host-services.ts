@@ -1,5 +1,5 @@
 // `HostServices` for a wall-clock-paced server process (0009), shared by `nodeHostServices`,
-// `bunHostServices` and `denoHostServices` (docs/plan/35b-bun-and-deno-adapters.md step 1): every
+// `bunHostServices` and `denoHostServices` (M35b step 1): every
 // runtime has `setTimeout`, so the three adapters differ by name only. Not an `exports` subpath.
 import { systemClock, systemScheduler } from './clock.js'
 import type { HostServices } from './server.js'

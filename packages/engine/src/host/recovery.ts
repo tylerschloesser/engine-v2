@@ -1,4 +1,4 @@
-// 0005 Panic recovery 2-4 (docs/plan/24-recovery-and-migration.md): the state machine `SimHost`
+// 0005 Panic recovery 2-4 (M24: the state machine `SimHost`
 // (`../server.ts`) runs after any trap kills its current instance. `server.ts` owns the loop guard,
 // `onRecovered`/`onFatal`, pacing and connection re-attach (`SimInstance.simReattach`); this module
 // owns only the pure decision logic (Planning decisions 1: "'recurs' is decided from the progress

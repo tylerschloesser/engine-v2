@@ -1,13 +1,13 @@
 //! The upgrade path of 0005 ("Upgrades"), 0006 ("What a tick-rate change does") and 0007 §9
 //! (worldgen stamping), for the half of it that runs before any ABI or storage code touches it
-//! (docs/plan/24b-upgrade-and-migration.md, steps 1-3): [`OldStore`]/[`OldValue`] (Planning
+//! (M24b, steps 1-3): [`OldStore`]/[`OldValue`] (Planning
 //! decisions 1), [`Rescale`]/[`RescaleTicks`] (Planning decisions 2), and [`Migrating`] (Planning
 //! decisions 4) plus the [`migrate`] driver that ties them to the engine's own game-type-free
 //! carry-over (Planning decisions 3). `persist::identity::{Comparison, MismatchReason}` is the
 //! sibling half of the same decision: it says *whether* a load needs this module at all; nothing
 //! here reads it.
 //!
-//! **Seam for steps 4-5** (docs/plan/24b-upgrade-and-migration.md's own instruction; recorded
+//! **Seam for steps 4-5** (M24b's own instruction; recorded
 //! again, verbatim-in-spirit, in this milestone's Deviations): [`OldStore::decode`] takes a
 //! `&mut ByteReader` already positioned right after a decoded snapshot's own `SimRng` field (0005
 //! Snapshot: "engine section ... player table onward" is exactly `Store::write_canonical`'s wire

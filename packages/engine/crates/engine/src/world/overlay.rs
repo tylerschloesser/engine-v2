@@ -3,7 +3,7 @@
 //! effective world, not of write history, so the modified-tile count can fall.
 //!
 //! Each entry also caches the pristine value it replaces, so a later canonical check needs no
-//! regeneration (Planning decisions 5 of docs/plan/07-world-model-core.md). That cache is never
+//! regeneration (Planning decisions 5 of M07. That cache is never
 //! serialized or hashed and is filled only when the chunk is materialized, so it lives in a `Cell`:
 //! [`ChunkOverlay::apply_onto`] (called from `TerrainStore::materialize`, which reads terrain
 //! through `&self`, 0007 §1) learns it without needing `&mut` on the overlay.
@@ -44,7 +44,7 @@ impl ChunkOverlay {
     /// overlay-run encoding and `TerrainStore::write_canonical` both build on this same iterator.
     /// `Clone` (a plain `slice::Iter` under a non-capturing `.map`, so this is free) lets
     /// `wire::OverlayRunsWriter` walk it twice -- once to count runs, once to write them -- without
-    /// collecting it into a buffer first (docs/plan/14-wire-framing.md).
+    /// collecting it into a buffer first (M14.
     pub fn entries(&self) -> impl Iterator<Item = (u16, Tile)> + Clone + '_ {
         self.entries.iter().map(|e| (e.index, e.tile))
     }
@@ -59,7 +59,7 @@ impl ChunkOverlay {
     }
 
     /// The pristine value this entry replaced, if materialization has already learned it (Planning
-    /// decisions 5 of docs/plan/07-world-model-core.md: unknown until the chunk holding this entry
+    /// decisions 5 of M07: unknown until the chunk holding this entry
     /// is next materialized). `pub`, not `pub(crate)`, so a test -- or a future replica -- can
     /// observe exactly when that happens.
     pub fn cached_pristine(&self, index: u16) -> Option<Tile> {

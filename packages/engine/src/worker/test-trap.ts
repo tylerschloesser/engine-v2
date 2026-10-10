@@ -1,4 +1,4 @@
-// Test-only trap injection (docs/plan/37-robustness-events.md step 1; `TestFlags.trapClientAtFrame`/
+// Test-only trap injection (M37 step 1; `TestFlags.trapClientAtFrame`/
 // `trapGenAtChunk`, `worker/protocol.ts`). A worker that wants to behave as if its instance had
 // trapped calls `injectTrap(inst, message)` in place of the export call it was about to make: the
 // throw goes through the loader's own call wrapper, so the instance is marked dead and the caller

@@ -45,7 +45,7 @@ can silently decode into a different, still-valid action once the shape changes,
 failing to decode at all (0024 §3a). Bump the constant in the same commit as the variant, even
 though nothing else here forces a compile error if you forget -- a live world with this schema
 already logged is otherwise a correctness bug waiting for its log tail to be replayed under the new
-build (docs/plan/24b-upgrade-and-migration.md, `Identity::compare`/`crate::migrate` own the tail-
+build (M24b, `Identity::compare`/`crate::migrate` own the tail-
 drop rule this protects, but only once the version actually changed).
 
 ## 2. Handle it (Rust)
@@ -75,7 +75,7 @@ with `w.entity_at(pos)?`, never the id `w.spawn(..)` returned locally -- a predi
 bit 31 set (0022 §5) and is client-local, so the *host* has no idea what it means, and the action
 would fail to even parse if that id somehow reached the wire (`EntityId`'s own `Deserialize` guard
 rejects one). `entity_at` resolves to the provisional id under prediction and to the real id on the
-host, so one handler (`fixtures/predict`'s own `Deposit`, `docs/plan/25-prediction-core.md`) serves
+host, so one handler (`fixtures/predict`'s own `Deposit`, `M25`) serves
 both without knowing which side it is running on. An action that only ever runs after its target is
 already fully confirmed (nothing the *same* player could have just predicted) may still carry a
 real `EntityId` -- this rule is about a target the action's own sender might have predicted, not
@@ -207,7 +207,7 @@ runtime inside a browser.
 
 If a page needs to *show* the effect of this action -- a counter, a message, a progress bar --
 rather than only react once to its own `onActionResult`, mirror the changed state into `G::Ui`
-(docs/plan/16b-ui-observation-and-clock.md; `fixtures/puts`'s own `PutsUi`/`PutsClient::ui` is the
+(M16b; `fixtures/puts`'s own `PutsUi`/`PutsClient::ui` is the
 worked example: `SetMotd`/`Puts::tick`'s `Global.day` bump both surface through `motd`/
 `global_ticks`, and `SetNote` surfaces through `note`/`note_until`). Skip this step for an action
 whose only observer is the player who dispatched it and who only needs a one-shot confirm/reject

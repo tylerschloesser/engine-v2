@@ -3,7 +3,7 @@
 //!
 //! Canonicalisation wraps the `serde::Serializer`, not the bytes: [`CanonSerializer`] intercepts
 //! `serialize_f32`/`serialize_f64` and re-wraps every nested value so a NaN at any depth becomes
-//! the canonical bit pattern (Planning decisions 2 of docs/plan/05-codec-and-state-hash.md).
+//! the canonical bit pattern (Planning decisions 2 of M05.
 //! Decoding is plain postcard; untrusted bytes go through [`decode_canonical`], which decodes,
 //! re-encodes canonically into a scratch buffer and rejects any difference (a NaN payload, an
 //! overlong varint, or trailing bytes all show up as a mismatch).
@@ -475,7 +475,7 @@ pub fn encoded_len<T: Codec>(value: &T) -> usize {
 }
 
 /// Decodes a `T` as a prefix of `bytes`, returning it and whatever follows. Plain postcard: not
-/// canonicalising (Planning decisions 2 of docs/plan/05-codec-and-state-hash.md says why).
+/// canonicalising (Planning decisions 2 of M05 says why).
 pub fn decode<T: Codec>(bytes: &[u8]) -> Result<(T, &[u8]), CodecError> {
     postcard::take_from_bytes(bytes).map_err(|_| CodecError::Malformed)
 }

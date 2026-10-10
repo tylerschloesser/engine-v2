@@ -1,4 +1,4 @@
-// `reference_roster_single_player` (docs/plan/34-reference-multiplayer.md Goal: "Single-player is
+// `reference_roster_single_player` (M34 Goal: "Single-player is
 // unchanged and shows a one-dot roster"): the local host's one player appears in `Ui.roster` and as
 // one online, own-marked `.roster-dot`.
 import { expect, test } from '@playwright/test'

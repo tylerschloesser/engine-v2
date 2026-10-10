@@ -1,4 +1,4 @@
-// `late-join` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Tests added): a client joins
+// `late-join` (M27, Tests added): a client joins
 // after the world already has real state (an early client's own dispatched action), catches up
 // through `Persistence.open`'s own "connection table is empty on load" rule (M22b Deviations) does
 // not apply here -- no restart, `SimHost.accept` mid-session, M15's implicit accept -- and its own

@@ -1,4 +1,4 @@
-// `pnpm device:serve [--tunnel] [--ws [<fixture>]] [--app reference [--bench]]` (docs/plan/03-browser-
+// `pnpm device:serve [--tunnel] [--ws [<fixture>]] [--app reference [--bench]]` (M03
 // harness.md, Planning decisions "Determinism on a physical phone"; docs/plan/
 // 29-net-worker-and-reference-server.md Scope). Builds an app and serves it statically with `vite
 // preview` on `127.0.0.1:4173` (no HMR socket; the engine plugin's COOP/COEP headers land on every

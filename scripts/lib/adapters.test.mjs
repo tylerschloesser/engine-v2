@@ -44,7 +44,7 @@ describe('playwright adapter', () => {
     )
   })
 
-  // docs/plan/09-renderer-terrain.md, Deviations "Steps 5-7": an *unanchored* `(?!.*@slow)` still
+  // M09, Deviations "Steps 5-7": an *unanchored* `(?!.*@slow)` still
   // matches a title containing "@slow" once Playwright's (or here, a plain `RegExp.test`) scan
   // position moves past the literal text -- `.test()` tries every start position, and at the
   // position right after "@slow" the lookahead trivially succeeds. `^` forces the lookahead to be
@@ -58,7 +58,7 @@ describe('playwright adapter', () => {
     expect(re.test('terrain: probe tile colours')).toBe(true)
   })
 
-  // Gate round 3 (docs/plan/09-renderer-terrain.md, Deviations): WebKit/Firefox repeats are a
+  // Gate round 3 (M09, Deviations): WebKit/Firefox repeats are a
   // separate leg, gated to the slow tier alone (`onlyTier`) and running with no `@slow` composition
   // (`noSlowTag`) since their own titles carry `@engines`/`@webkit-gpu`, never `@slow`.
   test('command: a leg with onlyTier only runs in that tier', () => {
@@ -98,7 +98,7 @@ describe('playwright adapter', () => {
     })
   })
 
-  // docs/plan/20-reference-game-v0.md gate round 1: a leg whose `webServer` failed to start writes the
+  // M20 gate round 1: a leg whose `webServer` failed to start writes the
   // same empty report with the same exit code; only `errors` tells it apart, and it must fail.
   test('parse: an empty report whose errors name a webServer crash is a failure', () => {
     const message = 'Error: Process from config.webServer was not able to start. Exit code: 1'
@@ -115,7 +115,7 @@ describe('playwright adapter', () => {
     expect(result.failures[0].name).toBe('runner exited 139 without a parseable report')
   })
 
-  // docs/plan/10-ci-workflow.md, Deviations: a real CI run's own `wasm` step exited 1 with a
+  // M10, Deviations: a real CI run's own `wasm` step exited 1 with a
   // report.json that parsed cleanly and showed every test passing -- the message named a missing
   // report, which was simply false and cost a session real time to notice from the artefact.
   test('parse: a non-zero exit with a parseable, all-passing report says so, not "no report"', () => {

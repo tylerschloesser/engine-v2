@@ -1,8 +1,8 @@
-// `connected-terrain.html`'s tests (docs/plan/15b-ring-connection-and-replica-rendering.md, step 6):
+// `connected-terrain.html`'s tests (M15b, step 6):
 // `hidden_tab_sends_no_camera_report` (0019 §2, this milestone's own extension: while `FrameLoop`
 // is paused, no camera report reaches the host). Chromium only.
 //
-// `overlay_tile_reaches_screen` (docs/plan/15c-terrain-visibility-and-cache-invalidation.md, steps
+// `overlay_tile_reaches_screen` (M15c, steps
 // 3-5): the GPU readback M15b could not build, now unblocked by M15c steps 1-2's fix
 // (`Cache::evict_if_present` reporting its eviction, `GenQueue::set_view` consulting `TerrainStore::
 // cache_invalidation_seq()`). `fx-puts`'s tick rule paints tile (0, 0) with `aux != 0` on its very

@@ -1,4 +1,4 @@
-// docs/plan/24-recovery-and-migration.md step 4: `recovery.ts`'s state machine (`SimHost.recover`/
+// M24 step 4: `recovery.ts`'s state machine (`SimHost.recover`/
 // `onRecovered`/`onFatal`, the loop guard) driven under Node with `memoryStorage`, against the real
 // `panicky` fixture -- never a hand-built container. Steps 1-3's own `panicky-trap.test.ts` proved
 // the loader/ABI-level guarantees this machinery depends on; this file proves the state machine on

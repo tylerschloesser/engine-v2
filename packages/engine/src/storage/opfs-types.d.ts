@@ -8,7 +8,7 @@
 // tsconfig.json`) lists this file directly in its own `include`, the same way it already does for
 // `virtual.d.ts`.
 //
-// Shapes: docs/plan/23-persistence-opfs-and-lifecycle.md step 1 probe (Deviations) -- `move()`'s
+// Shapes: M23 step 1 probe (Deviations) -- `move()`'s
 // 2-arg form (`move(directory, name)`) is the one every supported browser accepts; the 1-arg form
 // (`move(name)`) throws `TypeError: Not enough arguments` in WebKit. Sync access handle
 // `read`/`write`/`truncate`/`getSize`/`flush`/`close` are all synchronous per spec (File System

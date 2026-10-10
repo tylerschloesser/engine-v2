@@ -1,4 +1,4 @@
-//! Fixture game `fx-migrate-v2-hz30` (docs/plan/24b-upgrade-and-migration.md Scope): the same
+//! Fixture game `fx-migrate-v2-hz30` (M24b Scope): the same
 //! `SCHEMA_VERSION = 2` schema as `fx-migrate-v2`, at `TICK_RATE` 30Hz instead of 20 -- "three tiny
 //! crates sharing source by `#[path]`": this crate `#[path]`-includes `fx-migrate-v2`'s own
 //! `game.rs` verbatim and instantiates its const-generic `V2<HZ>` at `30` instead of `20`, so a

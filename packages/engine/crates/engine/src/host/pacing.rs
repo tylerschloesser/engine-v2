@@ -1,4 +1,4 @@
-//! Per-connection byte pacing (docs/plan/31-rates-and-integrity.md steps 3-4, docs/decisions/
+//! Per-connection byte pacing (M31 steps 3-4, docs/decisions/
 //! 0010-rates-and-subscriptions.md "Bandwidth budget"): the chunk-data token bucket, the visible-
 //! first enter queue, the soft cap with its degrade levels, and the counters that prove them.
 //!

@@ -1,4 +1,4 @@
-// A `test` fixture for any spec that touches OPFS (docs/plan/23-persistence-opfs-and-lifecycle.md
+// A `test` fixture for any spec that touches OPFS (M23
 // step 1, Deviations): WebKit's OPFS only works under a real, on-disk browser profile
 // (`browserType.launchPersistentContext`), not Playwright's default ephemeral `browser.newContext()`
 // -- under the default context, `navigator.storage.getDirectory()` itself throws `UnknownError` in

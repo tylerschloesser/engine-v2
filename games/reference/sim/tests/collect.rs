@@ -1,4 +1,4 @@
-//! Collect rules (docs/plan/20-reference-game-v0.md Tests added). Uses `common::RefScenario`
+//! Collect rules (M20 Tests added). Uses `common::RefScenario`
 //! throughout.
 
 mod common;

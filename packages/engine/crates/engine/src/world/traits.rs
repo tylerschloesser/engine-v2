@@ -38,7 +38,7 @@ pub struct PrototypeId(pub u16);
 
 /// A handle to one of [`Registry`]'s active-list systems (docs/decisions/0007-world-model.md §7:
 /// "per-system active lists in deterministic (insertion) order"), returned by
-/// [`Registry::system`]. At most 16 (docs/plan/21b-timers-wakeups-and-tickcx.md Scope): the same
+/// [`Registry::system`]. At most 16 (M21b Scope): the same
 /// small-bound convention as a chunk's footprint (0007 §5).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct SystemId(pub(crate) u8);
@@ -64,7 +64,7 @@ pub struct Footprint {
 
 /// Base and resource trait tables (256 entries each, one per `u8` tile layer id) plus the
 /// prototype table, registered once at init (`Game::register`, M12). `base_visuals`/
-/// `resource_visuals` (docs/decisions/0018-renderer.md §2; docs/plan/09-renderer-terrain.md
+/// `resource_visuals` (docs/decisions/0018-renderer.md §2; M09
 /// Planning decisions "TileTexel::from_tables registration") are the same shape, one visual id per
 /// tile layer id, identity by default so an unregistered game still renders something: visual ids
 /// share one namespace of 1,024 with `tiles.json`.
@@ -75,7 +75,7 @@ pub struct Registry {
     resource_visuals: [u16; 256],
     prototypes: Vec<(TraitSet, Footprint)>,
     /// The game's configured chunk edge (0007 §3: 16, 32 or 64), set once by `Store::new` (M21,
-    /// docs/plan/21-entities-and-timers.md) before `Game::register` runs, so [`Registry::
+    /// M21 before `Game::register` runs, so [`Registry::
     /// add_prototype`] can assert "footprint <= chunk size" (0007 §5) at the point a game declares
     /// an oversized one. Defaults to 64 (the largest legal edge, 0007 §3) so a `Registry` built
     /// without ever calling [`Registry::set_chunk_edge`] (every pre-M21 test fixture, and any
@@ -150,7 +150,7 @@ impl Registry {
 
     /// Registers a prototype's trait set and footprint (0007 §5-§6). Panics if `footprint` exceeds
     /// this game's configured chunk edge on either axis (`footprint_larger_than_chunk_panics_at_
-    /// register`, docs/plan/21-entities-and-timers.md): an entity that could not fit in at most 4
+    /// register`, M21: an entity that could not fit in at most 4
     /// chunks would break every footprint-scoped read/write this milestone builds.
     pub fn add_prototype(&mut self, traits: TraitSet, footprint: Footprint) -> PrototypeId {
         assert!(
@@ -168,7 +168,7 @@ impl Registry {
 
     /// `base_traits[t.base] | resource_traits[t.resource]` (0007 §6). The occupant term of the
     /// full `traits_at` is M12/M21's (entities are out of scope here). `Tile::VOID` is
-    /// special-cased to `TraitSet::ALL` (Planning decisions 7 of docs/plan/07-world-model-core.md).
+    /// special-cased to `TraitSet::ALL` (Planning decisions 7 of M07.
     #[inline]
     pub fn tile_traits(&self, tile: Tile) -> TraitSet {
         if tile == Tile::VOID {
@@ -189,7 +189,7 @@ impl Registry {
             .map_or(TraitSet::EMPTY, |(t, _)| *t)
     }
 
-    /// Registers a new active-list system (0007 §7, docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// Registers a new active-list system (0007 §7, M21b
     /// Scope), called from `Game::register` like [`Registry::add_prototype`]. `name` is for panic
     /// messages only -- there is no lookup-by-name, and no dedup: a game calls this once per system
     /// and keeps the returned [`SystemId`] as a const, exactly like `add_prototype`'s own

@@ -1,4 +1,4 @@
-// `measure()`: the Node-side driver of 0016 §3 steps 1-7 plus the M04 extras (docs/plan/04-zero-gc-
+// `measure()`: the Node-side driver of 0016 §3 steps 1-7 plus the M04 extras (M04
 // harness.md, Planning decisions "Sequence"). CDP plumbing (`sessions.ts`/`cdp-flat.ts`) and pure
 // analysis (`analyse.ts`) are both file-local concerns; this is where they meet the page's
 // `window.__gc`/`window.__harness` API (`src/test/gc-page.ts`, `src/test/harness.ts`).
@@ -39,13 +39,13 @@ const SAMPLING_INTERVAL = 1
 const FRAMES = MEASURED_FRAMES
 // `gc-loop`'s own tuned figure is 120; the production `yield`-protocol shell (`ControlBlock`,
 // `worker/shell.ts`, `asHarness`) is a deeper call chain that needs more to reach steady optimised
-// code (docs/plan/06b-workers-and-spawn.md, Deviations "fix round 2"). Applied globally (not a
+// code (M06b, Deviations "fix round 2"). Applied globally (not a
 // per-page option): with the two real allocation bugs on this path fixed (`parkWorkers`/
 // `resumeWorkers`'s per-tick closure, `ManualClock.fireDue`'s per-`advance()` empty-Map iterator),
 // `gc-loop` itself is unaffected by the higher figure (still well inside its own budget), so one
 // constant is simpler than threading a per-page override through `measure()`/`zeroGcSuite` again.
 //
-// **Re-measured and halved, M16c step 3** (docs/plan/16c-browser-suite-time.md, Deviations):
+// **Re-measured and halved, M16c step 3** (M16c, Deviations):
 // attribution (Node-side `performance.now()` marks around each phase of `measure()`, temporary,
 // not committed) found this loop -- not the two 600-frame measured windows 0028 protects -- is the
 // dominant per-test fixed cost: ~1.45-1.5 s of `echo clean`'s own ~1.75 s internal `measure()` time
@@ -58,7 +58,7 @@ const FRAMES = MEASURED_FRAMES
 // cost across both 0028 windows, not a one-off JIT burst -- insufficient warm-up, not noise). 4000
 // is therefore the floor with headroom preserved; every `budgets.json` number is unchanged. Full
 // `gc` project (77 tests, every page, `@slow` burst included) at 4000: 3/3 clean runs, 77/77 passing
-// each time, quiet and under `--load 10` (`docs/plan/16c-browser-suite-time.md`'s own verification);
+// each time, quiet and under `--load 10` (`M16c`'s own verification);
 // fast tier alone (48 tests) fell from 17.4 s to 12.3 s wall.
 // (The figures `WARMUP` and `WARMUP_PASSES` now live in `analyse.ts`, pinned by a unit test; ADR 0052.)
 
@@ -211,7 +211,7 @@ export async function measure(
   const attach =
     opts.attach ??
     (gcTransportFromEnv() === 'flat' ? flatAttachForThisWorker : attachTunnelSessions)
-  // M19b (docs/plan/19b-sim-park-while-armed.md): `gc: flat transport parity` calls `measure()`
+  // M19b ( `gc: flat transport parity` calls `measure()`
   // twice against the same page (tunnel, then flat) inside one test; a `park`/`send` timeout thrown
   // from inside one of the `page.evaluate` calls below used to carry no way to tell which of the two
   // it came from short of reading the stack trace by hand. `attach.name` names the function actually
@@ -230,7 +230,7 @@ export async function measure(
 
   // M19b: labels a `park`/`send` timeout thrown from inside `fn` with which `measure()` call
   // (`transportLabel`, above) and which phase of it was running -- the other half of "which of the
-  // two `measure`s it follows" (docs/plan/19b-sim-park-while-armed.md, exit criterion 1). Only
+  // two `measure`s it follows" (M19b, exit criterion 1). Only
   // wraps `page.evaluate` calls that reach `installGcPage`'s own `run()` (Seams), which is what can
   // throw a `harness.park()`/`resume()` timeout in the first place.
   async function runPhase<T>(label: string, fn: () => Promise<T>): Promise<T> {
@@ -242,7 +242,7 @@ export async function measure(
     }
   }
 
-  // Fixed warm-up (docs/plan/06b-workers-and-spawn.md, Deviations "fix round 2"): the tiering
+  // Fixed warm-up (M06b, Deviations "fix round 2"): the tiering
   // hypothesis explained the *symptom* (unoptimised code boxes more per call) but the actual
   // per-frame allocation, on inspection, came from two real bugs on this path -- `parkWorkers`/
   // `resumeWorkers`'s poll predicate allocated a fresh closure and ran `Array.prototype.every`
@@ -296,7 +296,7 @@ export async function measure(
   if (stall) warnings.push(stall)
 
   // Marks every isolate through CDP directly, not `window.__gc.markIsolates()` (orchestrator
-  // decision 3, docs/plan/06b-workers-and-spawn.md): a production worker cannot call
+  // decision 3, M06b: a production worker cannot call
   // `performance.mark` itself (`.claude/rules/hot-paths.md` restricts it to `src/clock.ts` and
   // `src/test/**`) and this milestone adds no new `postMessage` type to ask one to. Workers are
   // still parked here (the warmup `run()` above ends with `harness.park()`, and the measured

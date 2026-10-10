@@ -1,5 +1,5 @@
 //! `engine::noise` (docs/decisions/0008-chunk-generation.md §1; Planning decisions 1 of
-//! docs/plan/08-worldgen-and-gen-worker.md): optional, unprivileged f64 simplex noise and fBm a
+//! M08: optional, unprivileged f64 simplex noise and fBm a
 //! game's `Worldgen` impl may use. Ported from `spikes/determinism-hash/src/lib.rs`'s f64
 //! instance (`noise64`); the f32 instance is not carried over -- 0008 §1 requires f64 (or an
 //! integer lattice coordinate plus a float fraction) for worldgen noise coordinates, and the spike
@@ -71,7 +71,7 @@ pub fn simplex2(seed: u32, x: f64, y: f64) -> f64 {
 
 /// Fractal Brownian motion over [`simplex2`]: lacunarity 2, gain 0.5, `octaves` layers, normalised
 /// to roughly `[-1, 1]` by dividing by the sum of amplitudes (a caller passes no literal, unlike
-/// the spike's `fbm`: Seams of docs/plan/08-worldgen-and-gen-worker.md). `octaves == 0` returns
+/// the spike's `fbm`: Seams of M08. `octaves == 0` returns
 /// `0.0` without dividing by zero.
 #[inline]
 pub fn fbm2(seed: u32, x: f64, y: f64, octaves: u32) -> f64 {

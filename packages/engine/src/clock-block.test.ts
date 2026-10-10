@@ -36,13 +36,13 @@ test('clock_block: write then read round-trips every field', () => {
   expect(out[CLOCK_FIELD.SeqSeed]).toBe(3)
   expect(out[CLOCK_FIELD.AckSeq]).toBe(3)
   expect(out[CLOCK_FIELD.Revealed]).toBe(0)
-  // docs/plan/26-prediction-rendering-and-clocks.md steps 4-6: the one field with no `CLOCK_FIELD`
+  // M26 steps 4-6: the one field with no `CLOCK_FIELD`
   // entry (`clock-block.ts`'s own doc comment) -- read back through the reinterpreting view.
   expect(reader.scratchFieldsFloatView()[0]).toBeCloseTo(0.25)
 })
 
 test('clock_block: a read that never sees an even seq word exhausts its retries and reports it', () => {
-  // docs/plan/16-action-round-trip.md (gate check): `readClockBlockInto`'s own retry loop
+  // M16 (gate check): `readClockBlockInto`'s own retry loop
   // (`sab/seqlock.ts`'s `SeqlockReader`/`SeqlockWriter` are a *different* implementation --
   // `clock-block.ts`'s own module doc comment: "hand-rolled shape ... for the same reason" as
   // `camera/block.ts` -- so `seqlock.no_torn_read`'s real cross-worker race does not exercise this

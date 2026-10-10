@@ -1,4 +1,4 @@
-//! `slow_phases_large_save` (docs/plan/39y-wasm-tick-cost.md step 2-3): the per-phase split of
+//! `slow_phases_large_save` (M39y step 2-3): the per-phase split of
 //! `sim_tick` on the standard large save, natively, release profile. The same phase ids
 //! (`engine::bench_phase::Phase`) are read in a `.wasm` through the loader's bench-mark hook, so
 //! the two tables line up. Measurement only: recorded as a `BENCH_SAMPLE`, never gated.

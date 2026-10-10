@@ -1,4 +1,4 @@
-// `createBuildUi` (docs/plan/33-reference-furnace.md Scope): the Build button (shown while the
+// `createBuildUi` (M33 Scope): the Build button (shown while the
 // player holds a furnace item), construction mode, and the two placement flows.
 //
 // Construction mode is client-local: `client.input.emit(LOCAL.PLACE_MODE, on)` tells `RefClient`

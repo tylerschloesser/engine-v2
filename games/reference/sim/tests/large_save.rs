@@ -1,4 +1,4 @@
-//! The standard large save (docs/decisions/0020 section 9; docs/plan/36-slow-tier-and-benchmarks.md
+//! The standard large save (docs/decisions/0020 section 9; M36
 //! step 3): `reference_sim::bench::standard_large_save`, reached through `RefGame::genesis` when the
 //! worldgen params carry the bench marker (`RefParams::bench`). `large_save_builder_is_deterministic`
 //! is the fast 1/64-scale guard against rot; `slow_large_save_counts_and_determinism` asserts the

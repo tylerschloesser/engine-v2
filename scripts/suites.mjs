@@ -16,15 +16,15 @@ export const buildSteps = [
   { name: 'tsc', cmd: 'pnpm', args: ['--filter', 'engine', 'build'] },
   // `buildGame()` (from dist/, hence after tsc) on the dev profile for every fixture crate.
   { name: 'fixtures', cmd: 'node', args: ['packages/engine/scripts/build-fixtures.mjs'] },
-  // Same, for every in-repo game's `sim/` crate (docs/plan/20-reference-game-v0.md, orchestrator
+  // Same, for every in-repo game's `sim/` crate (M20, orchestrator
   // ruling): a dev-profile build the `wasm` suite's import-allowlist/target-features test can read,
   // independent of the `reference` step's own release-profile build below.
   { name: 'game-sims', cmd: 'node', args: ['scripts/build-game-sims-dev.mjs'] },
   { name: 'cargo-tests', cmd: 'cargo', args: ['nextest', 'run', '--workspace', '--no-run'] },
-  // nextest runs no doc tests (docs/plan/12b-world-access-and-sim-driver.md Tests added): the
+  // nextest runs no doc tests (M12b Tests added): the
   // `compile_fail`/passing doc tests on `TickRate::hz` (0006) only run through this step.
   { name: 'doctests', cmd: 'cargo', args: ['test', '--doc', '-p', 'engine'] },
-  // `vite build` of the fixture app on the dev profile (docs/plan/03-browser-harness.md, Planning
+  // `vite build` of the fixture app on the dev profile (M03, Planning
   // decisions "Served build, not dev server"); `browser`'s `webServer` only runs `vite preview`.
   {
     name: 'pages',
@@ -37,7 +37,7 @@ export const buildSteps = [
       'packages/engine/tests/browser/pages/vite.config.ts',
     ],
   },
-  // docs/plan/20-reference-game-v0.md: the `reference` Playwright project's own app (built, not
+  // M20: the `reference` Playwright project's own app (built, not
   // dev-served, same "Served build, not dev server" rule as `pages` above). `cwd` matters here (not
   // for `pages`, whose config sets `root` explicitly): `games/reference/vite.config.ts` has no
   // `root` override, so Vite defaults it to `process.cwd()` (Deviations).
@@ -49,7 +49,7 @@ export const buildSteps = [
     args: ['exec', 'vite', 'build', '--minify', 'false'],
     cwd: 'games/reference',
   },
-  // docs/plan/39f-device-auto-runner.md (orchestrator ruling after delegation 4): the reference game's
+  // M39f (orchestrator ruling after delegation 4): the reference game's
   // bench/check build (`dist-bench/` and the `release+bench` module), which only the slow tier's walk
   // browser specs serve. Without this step they built it on demand (`ensureBenchBuild`) beside running
   // tests, and the load made the first run flaky. Slow tier only: the fast tier never builds it.
@@ -109,7 +109,7 @@ export const suites = [
       },
     ],
   },
-  // docs/plan/27-server-entrypoint-and-netcode-harness.md: the real server entrypoint + real
+  // M27: the real server entrypoint + real
   // `.wasm` + K `HeadlessClient`s over in-memory `Connection`s behind a seeded conditioner (0020
   // §7). `budgetMs` 10,000, this table's own row.
   //
@@ -118,7 +118,7 @@ export const suites = [
   // *unrelated* `browser` slow-tier tests -- including a pre-existing page this milestone never
   // touched -- also newly timing out). The slow tier's own `ws/*` tests race a real loopback socket
   // handshake against a fixed real-wall-clock budget (`net-harness.ts`'s own `advanceTicks`, already
-  // tuned upward once for exactly this reason: docs/plan/29-net-worker-and-reference-server.md
+  // tuned upward once for exactly this reason: M29
   // Deviations, "flaked under `pnpm test`'s own real concurrent-suite load"), and
   // `device-serve/proxy-and-apps` spawns two real `vite build`+`preview` cycles -- both are real
   // wall-clock-sensitive work that a concurrently-running `browser` suite's own Chromium/WebKit/
@@ -167,7 +167,7 @@ export const suites = [
     budgetMs: 60_000,
     // `chromium` + `gc` in every tier (0020 §4, first rung: gate round 3, docs/plan/
     // 09-renderer-terrain.md Deviations). WebKit and Firefox move to the `engines` leg below.
-    // `reference` (docs/plan/20-reference-game-v0.md): `games/reference`'s own project, same leg
+    // `reference` (M20: `games/reference`'s own project, same leg
     // (its own `testDir` and `webServer` entry keep it from ever running the other projects' specs
     // or vice versa) -- a separate leg would need its own port for the *pages* server too, since a
     // leg's own `playwright test` process starts every configured `webServer` regardless of
@@ -179,7 +179,7 @@ export const suites = [
       'gc',
       '--project',
       'reference',
-      // docs/plan/20b-reference-player-and-collect-ui.md: the reference game's own zero-allocation
+      // M20b: the reference game's own zero-allocation
       // page, same leg (same shared webServer as `reference`, `playwright.config.ts`'s own
       // Deviations comment for that project).
       '--project',
@@ -212,7 +212,7 @@ export const suites = [
     ],
   },
   {
-    // docs/plan/17b-sprites-and-frame-budget.md, steps 4-6 + Fix round 2: `bench.frame_worstcase`,
+    // M17b, steps 4-6 + Fix round 2: `bench.frame_worstcase`,
     // the one real-rAF frame-time benchmark, in its own top-level suite rather than a `browser` leg
     // -- `runSuite`'s own `Promise.all` runs every leg of one suite concurrently, and a frame-time
     // gate cannot share the machine with the rest of the slow tier's Playwright worker pool

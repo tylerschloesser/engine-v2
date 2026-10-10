@@ -1,4 +1,4 @@
-//! `spring_settles_and_is_dt_independent` (docs/plan/20b-reference-player-and-collect-ui.md Tests
+//! `spring_settles_and_is_dt_independent` (M20b Tests
 //! added): the closed-form critically damped spring (`reference_sim::client::spring_step`) reaches
 //! (within tolerance) the same end state after the same elapsed time, regardless of how many
 //! substeps that time is split into -- the whole point of a closed-form integrator over Euler

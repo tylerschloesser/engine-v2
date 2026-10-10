@@ -1,4 +1,4 @@
-// `interpolation.*` (docs/plan/30-interpolation.md, Tests added, netcode suite): remote players
+// `interpolation.*` (M30, Tests added, netcode suite): remote players
 // through the real client-worker interpolation path (`InterpBuffer`/`InterpDelay`) under the seeded
 // conditioner on the virtual clock, plus the two conditioner-driven clock tests M26 owed
 // (`host_clock_under_jitter`, `lead_tracks_rtt_under_jitter`). Fixture: `fx-presence`, whose client
@@ -502,7 +502,7 @@ test('interpolation/lead_tracks_rtt_under_jitter', async () => {
   }
 })
 
-// docs/plan/39l-remote-motion-staircase.md: the observer joins a world whose host tick is already large
+// M39l: the observer joins a world whose host tick is already large
 // (a real world is never at tick 0 when someone joins), and the remote is sampled at every client frame
 // (16.7 ms, three per tick), not once per host tick. The producer moves at 12 tiles/s, the speed of the
 // walk-ref bot. The remote must move on (almost) every frame by about `speed x dt`, never in 100 ms steps.

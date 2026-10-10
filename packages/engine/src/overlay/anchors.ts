@@ -1,5 +1,5 @@
 // Overlay anchoring, static anchors only (docs/decisions/0019-camera-input-and-overlay.md §5;
-// docs/plan/18-picking-and-overlay.md Scope, Order of work step 3): one engine-owned anchor layer
+// M18 Scope, Order of work step 3): one engine-owned anchor layer
 // element, re-parenting each anchored `el` into it; each anchor stores its own offset from a
 // floating origin tile once, in custom properties `--wx`/`--wy`, under one injected, shared,
 // *static* CSS rule per `align` value -- never a per-anchor `style.transform` write
@@ -18,7 +18,7 @@
 // `camera/transform.ts` math `input/pick.ts` and `camera/camera.ts` already use), never read back
 // off the DOM.
 //
-// `mode: 'translate'` (docs/plan/18-picking-and-overlay.md step 8, 0019 "Alternatives rejected":
+// `mode: 'translate'` (M18 step 8, 0019 "Alternatives rejected":
 // "Per-anchor `translate()` writes (MapLibre): N strings and N style writes per frame; kept only as
 // the fallback below"): writes one `style.transform` directly per *visible* anchor whose own screen
 // position actually changed this frame (pan, zoom or its own world position moving), computed with
@@ -108,7 +108,7 @@ export interface Overlay {
    * (lazily built on the first call -- a page whose canvas is never attached to the DOM, or that
    * never touches overlay at all, pays nothing and needs no root) and returns a handle. */
   anchor(el: HTMLElement, worldX: number, worldY: number, opts?: AnchorOptions): AnchorHandle
-  /** docs/plan/18-picking-and-overlay.md steps 4-6 (0019 §5): re-parents `el` into the anchor layer
+  /** M18 steps 4-6 (0019 §5): re-parents `el` into the anchor layer
    * (same lazy build as `anchor`) and follows the DrawList header's own `slot` entry (`DrawList::
    * anchor(slot, pos)`, Rust) -- every `update()` call reads `anchor_mask`/`anchors[slot]` off the
    * *acquired* `DrawListSlot` (Deviations: "the same slot the `acquire` phase pulled", never a second
@@ -133,7 +133,7 @@ export type OverlayDeps = {
   cameraState: CameraState
   viewport: CameraViewport
   canvas: HTMLCanvasElement
-  /** docs/plan/18-picking-and-overlay.md steps 4-6: `anchorSlot`'s own source of truth -- the same
+  /** M18 steps 4-6: `anchorSlot`'s own source of truth -- the same
    * single `DrawListSlot` `Client.pick`/`render/drawables.ts` already read (never a second
    * `TripleReader`, steps 1-3 Deviations). */
   drawListSlot: DrawListSlot
@@ -143,7 +143,7 @@ export type OverlayDeps = {
 const LAYER_STYLE_ID = 'engine-overlay-anchor-style'
 const ANCHOR_CLASS = 'engine-anchor'
 
-// `client/drawlist.rs`'s own header layout (docs/plan/18-picking-and-overlay.md, steps 4-6
+// `client/drawlist.rs`'s own header layout (M18, steps 4-6
 // Deviations "Header, as landed"): duplicated here the same way `render/drawlist-slot.ts`'s own
 // `OFF_*` constants mirror the Rust layout.
 const OFF_ANCHOR_MASK = 76

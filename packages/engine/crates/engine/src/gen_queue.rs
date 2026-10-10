@@ -1,5 +1,5 @@
 //! `GenQueue`: the prioritised generation queue a client instance owns (docs/decisions/
-//! 0008-chunk-generation.md §4-5; `docs/plan/08b-gen-workers-and-queue.md` Seams). Lives in the
+//! 0008-chunk-generation.md §4-5; `M08b` Seams). Lives in the
 //! client instance, in preallocated storage (0008 §4 "a preallocated array of a few hundred
 //! entries sorted in place"); `TerrainFeed` (`client/terrain_feed.rs`) is the ABI-facing wrapper
 //! that drives it from `frame` and turns `take`/`complete` into `genRequest`/`genResult` records.
@@ -79,7 +79,7 @@ pub struct GenQueue {
     /// check of exactly the event that made it necessary.
     ///
     /// **Deliberately narrower than "any eviction" (fix round 1,
-    /// docs/plan/15c-terrain-visibility-and-cache-invalidation.md Deviations).**
+    /// M15c Deviations).**
     /// `cache_invalidation_seq` counts only `replace_overlay`/`clear_overlay`'s own content
     /// invalidation, never `materialize`'s LRU capacity eviction: counting the latter too closed a
     /// feedback loop under a cache smaller than the working set (rescan enqueues -> generation
@@ -173,7 +173,7 @@ impl GenQueue {
     /// Re-sorts the queue against `view` if the visible chunk rect changed since the last call, or
     /// if a chunk's cached contents were invalidated since the last call even though the view did
     /// not (`store.cache_invalidation_seq()`,
-    /// docs/plan/15c-terrain-visibility-and-cache-invalidation.md: `replace_overlay`/`clear_overlay`
+    /// M15c: `replace_overlay`/`clear_overlay`
     /// evict a resident chunk with the camera held still, and without this check the chunk would
     /// never be requested again -- Planning decisions "re-sort when the camera crosses a chunk
     /// boundary or a zoom change alters the chunk set" predates that finding). Deliberately does

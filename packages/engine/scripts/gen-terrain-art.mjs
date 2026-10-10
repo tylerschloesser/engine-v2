@@ -1,11 +1,11 @@
 // `node scripts/gen-terrain-art.mjs`: the terrain fixture's own asset script (0018 §4: "the game's
 // asset script (no engine tool, no npm dependency)"), run once by hand and its output checked in
-// like any other art asset (docs/plan/09-renderer-terrain.md Scope: "a generated flat-colour
+// like any other art asset (M09 Scope: "a generated flat-colour
 // tiles.png"). Writes `tiles.png`/`tiles.json` into `tests/browser/pages/public/terrain/`, Vite's
 // `publicDir` for the browser-suite fixture app, so `terrain.html` fetches them at `/terrain/*`
 // under both `vite dev` and the built `vite preview` the browser suite runs against.
 //
-// M09b (docs/plan/09b-terrain-art-and-lifecycle.md Planning decisions "Probe-friendly fixture
+// M09b (Planning decisions "Probe-friendly fixture
 // art"): extends M09's four cells rather than replacing them (`tile_px` shrunk from 16 to 4 --
 // M09's own probes only ever assert flat cell *colours*, never a size, and every cell stays
 // uniformly coloured under any mip/filter, so this is colour-preserving for every M09 test) and
@@ -25,7 +25,7 @@ const COLUMNS = 4
 
 // Cell index -> flat RGBA colour, or `{ quadrants: [TL, TR, BL, BR] }` for a 2x2-quadrant cell
 // (fix round 1, below). Visual ids (below) are independent of cell index: `tiles.json`'s `first` is
-// what maps one to the other (docs/plan/09-renderer-terrain.md Planning decisions "tiles.json
+// what maps one to the other (M09 Planning decisions "tiles.json
 // schema v1").
 const CELLS = [
   [0, 0, 0, 255], // cell 0: black -- visual 0, the "nothing drawn here" sentinel colour

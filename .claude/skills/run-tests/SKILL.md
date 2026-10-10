@@ -108,7 +108,7 @@ suite from two worktrees at once without a port clash.
 
 ## GPU/readback tests
 
-`terrain-readback.spec.ts` and any later `*-readback.spec.ts` (docs/plan/09-renderer-terrain.md) are
+`terrain-readback.spec.ts` and any later `*-readback.spec.ts` (M09 are
 semantic pixel probes (0020 §6), not golden images: they render to an offscreen `rgba8unorm` target
 and assert individual pixels with `expectPixel` (`engine/test`), never a page screenshot. There is no
 actual/expected PNG pair checked in for them yet; if you add one for a failing scene's debugging (an
@@ -116,7 +116,7 @@ actual/expected PNG pair checked in for them yet; if you add one for a failing s
 `test-results/browser/readback/<test-name>-{actual,expected}.png` (gitignored, next to every other
 suite's own artefacts under `test-results/`).
 
-A netcode desync (hash-all mode, `docs/plan/31b-desync-hashes.md`) leaves `test-results/desync/<tick>-<cx>_<cy>.{client,host}.bin`: the replica's encoding of the chunk when its hash mismatched, and the host's after the resync snapshot. The failure message of `assertNoDesync()` names both paths and the first differing offset.
+A netcode desync (hash-all mode, `M31b`) leaves `test-results/desync/<tick>-<cx>_<cy>.{client,host}.bin`: the replica's encoding of the chunk when its hash mismatched, and the host's after the resync snapshot. The failure message of `assertNoDesync()` names both paths and the first differing offset.
 
 ## Golden hashes
 
@@ -158,7 +158,7 @@ it on an existing fixture just because a test disagrees with the checkpoint.
 GitHub Actions (`.github/workflows/ci.yml`), `ubuntu-latest`, on every push to `main` and every
 `pull_request`: `pnpm lint`, then `pnpm test`, then `pnpm test:slow`, each with `CI=true
 ENGINE_GPU=swiftshader GC_MODE=software` and `--budget-scale 1000 --timings-json
-test-results/timings[-slow].json` (docs/plan/10-ci-workflow.md). `ENGINE_GPU=swiftshader` makes
+test-results/timings[-slow].json` (M10. `ENGINE_GPU=swiftshader` makes
 `playwright.config.ts` switch the `chromium`/`gc` projects to `channel: 'chromium-headless-shell'`
 and add the 0020 §6 SwiftShader launch flags (the full `chromium` channel, "new headless", returned
 a null adapter on this runner — the headless-shell channel is the one that works). `GC_MODE=software`
@@ -203,7 +203,7 @@ reach for a real spec when the check should run again later.
 
 ## Serving on a phone
 
-`pnpm device:serve [--tunnel]` (docs/plan/03-browser-harness.md, "Determinism on a physical phone"):
+`pnpm device:serve [--tunnel]` (M03, "Determinism on a physical phone"):
 builds the fixture app and serves it statically on `127.0.0.1:4173` — plain, that's a desktop-only
 check (`http://<LAN IP>` is not a secure context, so `crossOriginIsolated` stays `false`). On an
 iPhone, `--tunnel` also runs a Cloudflare quick tunnel and prints an `https://….trycloudflare.com`

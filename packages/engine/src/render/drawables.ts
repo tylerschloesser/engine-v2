@@ -1,5 +1,5 @@
 // DrawList renderer (docs/decisions/0018-renderer.md §2, §4 "Shapes need no art"; docs/plan/
-// 17-drawlist-and-sprites.md Scope, steps 4-6; docs/plan/17b-sprites-and-frame-budget.md Scope, steps
+// 17-drawlist-and-sprites.md Scope, steps 4-6; M17b Scope, steps
 // 1-3): `acquire()` the newest `drawList` triple-buffer slot, one `queue.writeBuffer(instanceBuf, 0,
 // slotView, 0, usedBytes)`, then one instanced `draw(6, n, 0, first)` per non-empty layer through the
 // uber-quad pipeline (`wgsl/uberquad.wgsl`) -- every kind including sprite (M17b: the atlas + two
@@ -119,7 +119,7 @@ export type DrawFrameUniformValues = {
   cursorValid: number
 }
 
-/** Exported (fix round 2, docs/plan/17b-sprites-and-frame-budget.md): `gc-drawables.spec.ts`'s own
+/** Exported (fix round 2, M17b: `gc-drawables.spec.ts`'s own
  * `counters.gpu_bytes_within_budget` recomputes the expected drawables-side `gpuBytes()` total from
  * this plus `CAPACITY`/`DRAW_BYTES` (the instance buffer) and `render/atlas.ts`'s own
  * `SPRITE_TABLE_BYTES`/the fixture atlas's known pixel dimensions, independent of `gpuBytes()`'s own
@@ -159,7 +159,7 @@ export interface DrawablesRenderer {
   ): void
   /** Production `acquire()`: reads whatever the caller-owned `DrawListSlot` (`opts.drawListSlot`,
    * `render/drawlist-slot.ts`) currently holds and does the one `writeBuffer` (Scope). This renderer
-   * never pulls a new slot itself -- docs/plan/18-picking-and-overlay.md's own `acquire` phase
+   * never pulls a new slot itself -- M18's own `acquire` phase
    * (`Client.pick.acquire()`) is the *one* place that ever calls `TripleReader.acquire()` over
    * `drawList`; a second independent reader here would tear the triple-buffer handoff (docs/plan/
    * 17-drawlist-and-sprites.md Deviations, "Two-reader torn read", now a real defect this milestone's
@@ -202,7 +202,7 @@ export interface DrawablesRenderer {
    * field (`client/drawlist.rs`'s `DrawList::dropped()`, published every frame) -- not cumulative,
    * a plain pass-through of whatever the most recent `acquire()`/`acquireFromBytes()` read. */
   drawListDropped(): number
-  /** Test-only (docs/plan/17-drawlist-and-sprites.md Tests added: `drawlist.triple_newest_wins`):
+  /** Test-only (M17 Tests added: `drawlist.triple_newest_wins`):
    * the last-acquired slot's own header `frame_seq` field, read straight off `opts.drawListSlot`
    * (which already carries it, `DrawListSlot.frameSeq`) -- never build a second, independent
    * `TripleReader` over the same `drawList` SAB to check this (`sab/triple.ts`'s own `acquire()`
@@ -211,7 +211,7 @@ export interface DrawablesRenderer {
   frameSeq(): number
   /** Test-only: the last-acquired slot's own header `record_count` field. */
   recordCount(): number
-  /** Test-only (docs/plan/17-drawlist-and-sprites.md Tests added: `counters.draws_equal_nonempty_
+  /** Test-only (M17 Tests added: `counters.draws_equal_nonempty_
    * layers`): how many of the last-acquired slot's 8 `layer_count` entries are non-zero -- a plain
    * count, not the array itself, so a caller never allocates to ask "how many draws should this
    * frame have issued". */
@@ -223,7 +223,7 @@ export interface DrawablesRenderer {
    * by a real `sprite_id` until a manifest is loaded) -- the same "placeholder, then install" shape
    * `TerrainRenderer.setTileArray` already uses. */
   setSpriteAtlas(atlas: LoadedSpriteAtlas): void
-  /** `engine/test`'s `gpuBytes` counter (docs/plan/17b-sprites-and-frame-budget.md Scope, Tests
+  /** `engine/test`'s `gpuBytes` counter (M17b Scope, Tests
    * added: `counters.gpu_bytes_within_budget`): the sum of every texture/buffer byte this renderer
    * has created -- the fixed instance buffer (2 MiB) and DrawFrame uniform (48 B), plus whatever the
    * currently-installed sprite atlas (`setSpriteAtlas`, or the tiny placeholder before the first
@@ -239,7 +239,7 @@ export async function createDrawablesRenderer(
   device: GPUDevice,
   opts: {
     colorFormat: GPUTextureFormat
-    /** docs/plan/18-picking-and-overlay.md: the *caller-owned* `DrawListSlot` (`render/
+    /** M18: the *caller-owned* `DrawListSlot` (`render/
      * drawlist-slot.ts`) whose `acquire()` some other code already calls this frame -- `Client.
      * pick.acquire()` in production, or directly for a page that owns one without a full `Client`
      * (none does today). Omit for a renderer only ever driven through `acquireFromBytes` (a probe
@@ -257,7 +257,7 @@ export async function createDrawablesRenderer(
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
   })
 
-  // Sprite atlas + tables (docs/plan/17b-sprites-and-frame-budget.md Planning decisions "Sprite table
+  // Sprite atlas + tables (M17b Planning decisions "Sprite table
   // in data textures, not uniforms"): one bind group, same as terrain's own explicit (not `'auto'`)
   // layout for the same reason (`render/terrain.ts`'s own comment) -- every binding is declared here
   // regardless of whether a real sprite atlas has been installed yet.
@@ -360,7 +360,7 @@ export async function createDrawablesRenderer(
     primitive: { topology: 'triangle-list' },
   })
 
-  // docs/plan/18-picking-and-overlay.md gate round 1: no `TripleReader` here at all -- `opts.
+  // M18 gate round 1: no `TripleReader` here at all -- `opts.
   // drawListSlot` (if given) is the *only* thing this renderer ever reads from, and it never calls
   // that slot's own `acquire()` (someone else already did, this frame, before this renderer's own
   // `acquire()` runs).

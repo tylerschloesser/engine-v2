@@ -1,4 +1,4 @@
-// Regression for docs/plan/17d-fast-tier-wall-time.md steps 2-3 (Fix round 1: the wall-clock
+// Regression for M17d steps 2-3 (Fix round 1: the wall-clock
 // version of this test, scripts/lib/build-timings.test.mjs, failed on legitimate work -- any real
 // source change makes `fixtures` compile for real, which is not the regression). Deterministic
 // instead: read the actual cargo argument lists `exportBindings` (`packages/engine/src/

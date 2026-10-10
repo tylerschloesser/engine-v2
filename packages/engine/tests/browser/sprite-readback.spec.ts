@@ -1,4 +1,4 @@
-// Sprite readback probes (docs/plan/17b-sprites-and-frame-budget.md Tests added), the sprite-kind
+// Sprite readback probes (M17b Tests added), the sprite-kind
 // twin of `draw-readback.spec.ts` (M17): `drawables.html`'s hand-filled scene, now with
 // `window.__drawables.loadSprites()` fetching the real fixture atlas (`scripts/gen-sprite-art.mjs`'s
 // own output, `/drawables/sprites.json`). Every probe sits off a texel centre and off a quadrant
@@ -103,7 +103,7 @@ test('sprite.pivot_and_size_probe', async ({ page }, testInfo) => {
 // probes at fractional-but-not-boundary-crossing positions). This test's own probe was found by a
 // small offline search (not committed) over camera/pixel combinations for the "quad" sprite, scoring
 // each by how far its seamed texel position sits off a texel centre (checked) and how close to the
-// real quadrant boundary (close, but not past it) -- `docs/plan/17b-sprites-and-frame-budget.md`
+// real quadrant boundary (close, but not past it) -- `M17b`
 // Deviations "Fix round 1" records the exact search and the algebraic finding that a plain anchor
 // swap alone (without also decoupling the offset from the anchor, as the real M09b bug did) cancels
 // out in the *centre* of a saturating region, so a probe close to the boundary is required to expose

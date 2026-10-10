@@ -1,4 +1,4 @@
-//! docs/plan/22-persistence-log-and-snapshots.md fix round 1, gap 1 (extended by fix round 2):
+//! M22 fix round 1, gap 1 (extended by fix round 2):
 //! `testing::replay`/`testing::heavy` had never run against a log the real `Host` produces. Every
 //! existing replay test built its log by hand through `FrameWriter` directly (`crates/engine/src/
 //! testing/replay.rs`'s own tests, and `fixtures/persist/tests/support/mod.rs`'s `record()`),

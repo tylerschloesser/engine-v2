@@ -1,4 +1,4 @@
-//! Context artifact (docs/plan/15-connection-and-subscriptions.md): crate `CLAUDE.md`'s own line,
+//! Context artifact (M15: crate `CLAUDE.md`'s own line,
 //! "`host/` and `client/` are outside the deterministic core: they may read subscriptions and
 //! cameras, `sim/` may not import them" -- enforced here with a source scan, since a `pub(crate)`
 //! visibility boundary alone cannot express "this direction only" between sibling modules.

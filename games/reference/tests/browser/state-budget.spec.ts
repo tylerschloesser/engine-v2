@@ -1,4 +1,4 @@
-// `reference_state_budget_full_shows_reason` (docs/plan/34b-reference-scripted-single-player.md Tests
+// `reference_state_budget_full_shows_reason` (M34b Tests
 // added): a world whose entity budget leaves no room (`/test.html?maxEntities=0`) refuses
 // `PlaceFurnace` with `Rejected(Engine(StateBudgetFull))`; the furnace stays in the inventory and the
 // build control shows why (`.build-reason`). The native half is the wasm suite's

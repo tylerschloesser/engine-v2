@@ -1,4 +1,4 @@
-//! `Replica<G>` (docs/plan/15-connection-and-subscriptions.md Scope): the client-side replicated
+//! `Replica<G>` (M15 Scope): the client-side replicated
 //! state a [`super::core::ClientCore`] applies frames into. A `Store<G>` whose `TerrainStore` is
 //! the client's own pristine cache (M08b: clients regenerate pristine terrain themselves, 0011)
 //! plus a held-chunk set with each held chunk's version (0011 "Versions instead of acks").
@@ -32,7 +32,7 @@ use crate::world_access::{WorldRead, chunk_of, touches_unheld};
 /// nothing about it can be asserted at construction).
 pub const CLIENT_CACHE_BUDGET_BYTES: usize = 4 * 1024 * 1024;
 
-/// One entry of [`Replica::dirty`] (docs/plan/15b-ring-connection-and-replica-rendering.md, Scope
+/// One entry of [`Replica::dirty`] (M15b, Scope
 /// "Replica -> renderer"): a whole-chunk change (pristine enter, snapshot enter, leave) or a
 /// single tile delta, carrying enough to drive `Uploader::enqueue_chunk`/`patch_tile` respectively
 /// -- the *same* queue `drain_dirty`'s existing `ChunkCoord`-only signature (M15's landed seam)
@@ -65,7 +65,7 @@ pub struct Replica<G: Game> {
     /// whichever one a caller uses keeps memory bounded, since nothing is ever double-buffered.
     dirty: Vec<DirtyEvent>,
     tick: Tick,
-    /// docs/plan/19-presence-channel.md steps 4-6: the newest presence sample per remote player,
+    /// M19 steps 4-6: the newest presence sample per remote player,
     /// applied from the wire's `Presence` section (`apply_presence_sample`/`apply_presence_gone`),
     /// read by `FrameView::presences()`.
     remote_presences: RemotePresences<G>,
@@ -92,7 +92,7 @@ impl<G: Game> Replica<G> {
     }
 
     /// [`Self::new`] with the pristine source optional: `None` is a remote client that has not seen
-    /// its `Welcome` yet (docs/plan/33f-client-world-config-from-welcome.md), whose terrain answers
+    /// its `Welcome` yet (M33f, whose terrain answers
     /// `Unknown` for every read until [`TerrainStore::set_source`] installs one.
     pub fn with_source(
         dims: ChunkDims,
@@ -118,7 +118,7 @@ impl<G: Game> Replica<G> {
         assert!(
             terrain.memory_bytes() <= CLIENT_CACHE_BUDGET_BYTES,
             "Replica's terrain cache is {} B, over the 0015 \u{a7}5 client arena's {} B \
-             dense-cache share (docs/plan/15-connection-and-subscriptions.md Budgets: \
+             dense-cache share (M15 Budgets: \
              'replica for the chunk cap fits the client arena share of 0015 \u{a7}5')",
             terrain.memory_bytes(),
             CLIENT_CACHE_BUDGET_BYTES
@@ -140,7 +140,7 @@ impl<G: Game> Replica<G> {
         self.own_player
     }
 
-    /// docs/plan/28-sessions-and-reconnect.md: `own_player` is learned for real from `Welcome`,
+    /// M28: `own_player` is learned for real from `Welcome`,
     /// not fixed at construction any more (`ClientInstance::init`'s own doc comment on why `Replica
     /// ::new` is still called with a placeholder `PlayerId` before any handshake has happened) --
     /// `ClientCore::apply_welcome` is the one production caller.
@@ -178,7 +178,7 @@ impl<G: Game> Replica<G> {
         self.held.keys().copied()
     }
 
-    /// docs/plan/28b-reconnect-and-lifecycle.md step 5: [`Self::held_chunks`] paired with each
+    /// M28b step 5: [`Self::held_chunks`] paired with each
     /// chunk's own version (0011 "Versions instead of acks") -- `client_hello`'s own source for
     /// `session::build_resume_hint`'s `held` parameter. A production counterpart of
     /// [`Self::debug_version`] (that one stays test-only): human-rate/one-off, not a per-frame
@@ -188,7 +188,7 @@ impl<G: Game> Replica<G> {
         self.held.iter().map(|(&c, &v)| (c, v))
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md: the one `TerrainStore` this
+    /// M15b: the one `TerrainStore` this
     /// replica's `Store<G>` owns, shared with `client::TerrainFeed`/`client::Uploader` (both take
     /// `&TerrainStore`/build off `TerrainStore::copy_chunk`) so a client-role instance needs only
     /// one store, not a `Replica`-owned one plus a second standalone one the way `game_instance.rs`
@@ -205,7 +205,7 @@ impl<G: Game> Replica<G> {
         self.store.terrain_mut()
     }
 
-    /// docs/plan/25-prediction-core.md testkit seam (`testing::testkit::Loopback::visible`): the
+    /// M25 testkit seam (`testing::testkit::Loopback::visible`): the
     /// one `Store<G>` this replica's own `WorldRead` impl already reads through, exposed so a
     /// read-only `world_access::View` can be built over it with a prediction overlay layered on
     /// top. `pub(crate)`, mirroring [`Self::terrain`]'s own visibility: not part of the
@@ -217,7 +217,7 @@ impl<G: Game> Replica<G> {
         &self.store
     }
 
-    /// docs/plan/17-drawlist-and-sprites.md Seams: the replica's own entity table, for
+    /// M17 Seams: the replica's own entity table, for
     /// `client::frame_view::EntityIter` (`FrameView::entities()`). `pub`, not `pub(crate)` like
     /// `terrain`/`terrain_mut` above: a fixture's own native test (`fixtures/drawables`, a
     /// different crate) builds a `FrameView` directly to prove `drawlist.fixture_hash_golden` is a
@@ -235,7 +235,7 @@ impl<G: Game> Replica<G> {
         self.store.registry()
     }
 
-    /// docs/plan/19-presence-channel.md steps 4-6: `FrameView::presences()`'s source, `pub` for
+    /// M19 steps 4-6: `FrameView::presences()`'s source, `pub` for
     /// the same reason `entities_map`/`registry` are (`game_instance.rs`'s own `FrameView::new`
     /// call sites, outside this module).
     pub fn remote_presences(&self) -> &RemotePresences<G> {
@@ -259,7 +259,7 @@ impl<G: Game> Replica<G> {
         }
     }
 
-    /// docs/plan/15b-ring-connection-and-replica-rendering.md, Scope "Replica -> renderer": the
+    /// M15b, Scope "Replica -> renderer": the
     /// same queue [`Self::drain_dirty`] drains, handed to `f` one [`DirtyEvent`] at a time instead
     /// of coalesced to a bare `ChunkCoord` -- one closure, not two (`DirtyEvent::Whole`/`Tile`
     /// need to become `Uploader::enqueue_chunk`/`patch_tile` calls on the *same* `Uploader`, which
@@ -273,7 +273,7 @@ impl<G: Game> Replica<G> {
         }
     }
 
-    /// M26 (docs/plan/26-prediction-rendering-and-clocks.md Provides): marks `chunk` dirty for the
+    /// M26 (Provides): marks `chunk` dirty for the
     /// upload path directly, with no replica delta behind it -- a predicted tile's own effective
     /// value changed (`OverlayDiff`). Shares the exact same queue [`Self::drain_dirty`]/
     /// [`Self::drain_dirty_for_upload`] already drain (`DirtyEvent`'s own doc comment: "one queue,
@@ -283,7 +283,7 @@ impl<G: Game> Replica<G> {
     }
 
     /// Whether `self.dirty` already carries an event implying `chunk`, pushed earlier in the same
-    /// call (docs/plan/26-prediction-rendering-and-clocks.md Planning decisions "One resolution
+    /// call (M26 Planning decisions "One resolution
     /// point": a chunk a wire delta already dirtied this frame needs no second, whole-chunk mark
     /// from `OverlayDiff` -- that delta's own re-stage already reads the reconciled overlay content
     /// fresh at stage time, so a second mark would only be "never two uploads of a chunk in one
@@ -313,7 +313,7 @@ impl<G: Game> Replica<G> {
         self.store.apply(&Delta::Player { who, state });
     }
 
-    /// docs/plan/19-presence-channel.md steps 4-6: a decoded `Presence` section `Sample` entry
+    /// M19 steps 4-6: a decoded `Presence` section `Sample` entry
     /// (`ClientCore::apply`'s own `SectionId::Presence` arm) -- never touches `self.store` (0001:
     /// "presence never enters `Store`, the log or a hash").
     pub(crate) fn apply_presence_sample(
@@ -325,7 +325,7 @@ impl<G: Game> Replica<G> {
         self.remote_presences.apply_sample(who, sample, sample_tick);
     }
 
-    /// docs/plan/30-interpolation.md: the frame at `frame_tick` carried `who`'s sample.
+    /// M30: the frame at `frame_tick` carried `who`'s sample.
     pub(crate) fn refresh_presence(&mut self, who: PlayerId, frame_tick: Tick) {
         self.remote_presences.refresh(who, frame_tick);
     }
@@ -334,7 +334,7 @@ impl<G: Game> Replica<G> {
         &mut self.remote_presences
     }
 
-    /// docs/plan/19-presence-channel.md steps 4-6: a decoded `Presence` section `Gone` entry.
+    /// M19 steps 4-6: a decoded `Presence` section `Gone` entry.
     pub(crate) fn apply_presence_gone(&mut self, who: PlayerId) {
         self.remote_presences.apply_gone(who);
     }
@@ -384,7 +384,7 @@ impl<G: Game> Replica<G> {
     }
 
     /// A chunk leave (0011): frees the overlay (pristine cache survives, M08b) and every entity no
-    /// longer overlapping *any* held chunk (docs/plan/21-entities-and-timers.md Scope: a footprint
+    /// longer overlapping *any* held chunk (M21 Scope: a footprint
     /// straddling this chunk and a still-held one must not disappear -- widened from M12b's
     /// anchor-chunk-only check, which could never see that case since occupancy tracked only an
     /// entity's single anchor tile).
@@ -421,7 +421,7 @@ impl<G: Game> Replica<G> {
     /// one, the host's own rule: it stamps every chunk in a write's scopes
     /// (`Authority::entity_scopes`: old and new footprint chunks), so a footprint straddling a
     /// chunk boundary bumps both halves. Anchor-only bumping left a held non-anchor chunk's version
-    /// stale, which `region_hash` and the resume diff both see (docs/plan/34d-straddling-entity-chunk-versions.md).
+    /// stale, which `region_hash` and the resume diff both see (M34d.
     pub(crate) fn apply_entity_put(&mut self, id: EntityId, entity: G::Entity) {
         let new_rect = self.footprint_of(&entity);
         let old_rect = self.store.entity(id).map(|e| self.footprint_of(e));
@@ -500,7 +500,7 @@ impl<G: Game> Replica<G> {
 
     /// M05 state hash over `encode_chunk_snapshot` of each held chunk (ordered by coord, the
     /// ordering key only -- not part of the hashed bytes, M14 Deviations), plus `Global` and
-    /// `OwnPlayer` (docs/plan/15-connection-and-subscriptions.md Scope "region_hash"). Matches
+    /// `OwnPlayer` (M15 Scope "region_hash"). Matches
     /// `host::Host::region_hash` byte for byte when the two sides agree.
     pub fn region_hash(&self) -> u64 {
         let mut h = Fnv64::new();
@@ -584,7 +584,7 @@ impl<G: Game> WorldRead<G> for Replica<G> {
     }
 
     /// `Err(Unknown)` before calling `f` at all if `rect` touches a chunk this replica does not
-    /// hold (docs/plan/21-entities-and-timers.md Scope).
+    /// hold (M21 Scope).
     fn entities_in(
         &self,
         rect: TileRect,

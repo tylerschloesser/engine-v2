@@ -1,5 +1,5 @@
 // Key bitmask (docs/decisions/0019-camera-input-and-overlay.md §3: "WASD uses `event.code`");
-// docs/plan/11-camera-and-input.md Scope: "a key bitmask ... nothing else happens in a listener".
+// M11 Scope: "a key bitmask ... nothing else happens in a listener".
 // Focus rules (ignore `input`/`textarea`/`select`/`[contenteditable]`, `isComposing`, Ctrl/Meta/Alt
 // held; clear on `blur`) are 0019 §4's own paragraph but this milestone's step 6 (Non-scope: "focus
 // rules"): `installKeyListeners` here is the plain `window` keydown/keyup recorder step 6 will wrap.

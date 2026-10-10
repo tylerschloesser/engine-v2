@@ -1,4 +1,4 @@
-// `handshake-view-clamp.html`'s script (docs/plan/28-sessions-and-reconnect.md step 5, Tests added:
+// `handshake-view-clamp.html`'s script (M28 step 5, Tests added:
 // "welcome-view-clamp-limits-zoom"): a real single-player `createClient()` topology (`host.connect:
 // true`, `fx-puts`, `WorldConfig.view.maxTilesPerAxis: 128`) whose host clamp is *not* 0010's
 // default 256 -- proving the `Welcome` -> `client-welcome` postMessage -> `cameraIntegrator.

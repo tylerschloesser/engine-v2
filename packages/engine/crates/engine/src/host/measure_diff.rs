@@ -1,4 +1,4 @@
-//! Cargo feature `measure-diff` (docs/plan/36b-suite-audit-and-measurements.md, 0011 "byte
+//! Cargo feature `measure-diff` (M36b, 0011 "byte
 //! diffing" deferral): what a field-mask diff of an entity put would have saved, counted beside the
 //! real encoding and never acted on. Compiled out of every normal build: the module, the per-
 //! connection cache and the counters exist only with the feature, which no `buildGame` call and no

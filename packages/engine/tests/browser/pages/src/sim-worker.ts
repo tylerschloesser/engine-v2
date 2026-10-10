@@ -1,4 +1,4 @@
-// `sim-worker.html`'s script (docs/plan/13-sim-host-tick-loop.md, step 5, Tests added:
+// `sim-worker.html`'s script (M13, step 5, Tests added:
 // `sim_worker_steps_and_hashes`, `sim_worker_yields_for_cdp`): a real `createClient()` local
 // topology over `fx-puts` (`host: { kind: 'local', world }`, no `test.game` override -- this page
 // is the one thing in the browser suite that exercises `createClient`'s own real-`WorldConfig`

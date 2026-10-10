@@ -179,7 +179,7 @@ test('gc/net-negative-control', async ({ page, browser }) => {
   }
 })
 
-// `rebase-on-visible` (docs/plan/30-interpolation.md Tests added, browser suite): the real
+// `rebase-on-visible` (M30 Tests added, browser suite): the real
 // multiplayer topology with the moving remote above. Tab return is `frame-loop.ts`'s `resume()`
 // setting `CB_FLAGS.FLAG_REBASE` (proved by `viewport.spec.ts`'s `lifecycle: hidden stops visible
 // rebases`, which cannot run a client worker); this test sets that same bit, jumps the injected

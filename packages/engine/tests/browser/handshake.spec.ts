@@ -1,4 +1,4 @@
-// `handshake/welcome-view-clamp-limits-zoom` (docs/plan/28-sessions-and-reconnect.md, Tests added):
+// `handshake/welcome-view-clamp-limits-zoom` (M28, Tests added):
 // a real single-player page whose host view clamp (0010) is 128 tiles per axis, not the 256
 // default -- proving `Welcome`'s own `view_max_tiles_per_axis` field actually reaches
 // `client.camera.setViewClamp` (0019 §1), through the `client-welcome` postMessage this milestone's

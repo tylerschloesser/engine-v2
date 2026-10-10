@@ -1,4 +1,4 @@
-// The two waits that tell a reload from a second tab (docs/plan/37-robustness-events.md, the M34b seam
+// The two waits that tell a reload from a second tab (M37, the M34b seam
 // "F5 during startup gets `world-busy`"). Plain constants: `client.ts` (main thread) imports them, and
 // it must not import anything under `worker/` (`main.no_wasm_instantiate`).
 

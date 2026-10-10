@@ -1,4 +1,4 @@
-// `buildGame({ features })` (docs/plan/34b-reference-scripted-single-player.md step 5): the reference
+// `buildGame({ features })` (M34b step 5): the reference
 // game built with and without its `test-hooks` feature lands in two directories with two build
 // hashes, and the hooks never reach a shipped build: the production (release) `.wasm` of the
 // `reference` build step has no poison path, and no config of the game asks for the feature.

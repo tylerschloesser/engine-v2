@@ -2,7 +2,7 @@
 //! native test, mirroring `tests/support/budgets.ts`'s `budget`/`expectWithinBudget` on the TS
 //! side: a dotted path into the JSON resolves to a number, or the lookup panics naming exactly
 //! what is missing, never a silent pass. This crate had no Rust-side reader before M15
-//! (docs/plan/15-connection-and-subscriptions.md Deviations): every existing budget consumer was
+//! (M15 Deviations): every existing budget consumer was
 //! TypeScript, but this milestone's own exit criterion ("`budgets.json` holds ceilings for the
 //! counters on `join_wilderness` and `join_modified`") is asserted by a native Rust test.
 

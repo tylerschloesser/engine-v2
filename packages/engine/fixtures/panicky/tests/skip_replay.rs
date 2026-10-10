@@ -1,4 +1,4 @@
-//! docs/plan/24-recovery-and-migration.md step 3: `Skip` semantics in the scan/apply passes,
+//! M24 step 3: `Skip` semantics in the scan/apply passes,
 //! proven natively against `Host<Panicky>` (`sim_replay_scan_begin/push/end`, `sim_replay_begin/
 //! push/end`, `sim_log_skip`) -- no ABI/`.wasm` involved. `Global::apply_count` (`fx_panicky`'s own
 //! doc comment) is the "additive action" a double-apply would show.

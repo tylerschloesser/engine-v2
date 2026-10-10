@@ -1,4 +1,4 @@
-//! `spawn_is_nearest_land_tile` (docs/plan/20b-reference-player-and-collect-ui.md Tests added, step
+//! `spawn_is_nearest_land_tile` (M20b Tests added, step
 //! 5): `RefClient`'s own spawn rule (`client::nearest_land_tile`, a pure spiral search over
 //! `RefWorldgen`'s per-tile terrain function, no engine read) against `../tests/fixtures/
 //! landmarks.json`'s own `land` field -- the same fixture `landmarks_fixture.rs` keeps current by an

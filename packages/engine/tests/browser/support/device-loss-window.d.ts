@@ -1,4 +1,4 @@
-// Ambient `window.__deviceLoss` type (docs/plan/37b-device-loss.md), shared by `device-loss.html`'s
+// Ambient `window.__deviceLoss` type (M37b, shared by `device-loss.html`'s
 // page script and `device-loss.spec.ts` (same split as `terrain-client-window.d.ts`).
 export {}
 

@@ -1,4 +1,4 @@
-// The page-CSS helper's viewport meta (docs/plan/39h-mobile-viewport.md) and the static tag on every
+// The page-CSS helper's viewport meta (M39h and the static tag on every
 // fixture page served to a phone: without `width=device-width` a phone lays out at 980 CSS px.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

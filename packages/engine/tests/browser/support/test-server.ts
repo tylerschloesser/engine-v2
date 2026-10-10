@@ -1,4 +1,4 @@
-// `startTestServer` (docs/plan/29-net-worker-and-reference-server.md Scope, Seams: "test helper
+// `startTestServer` (M29 Scope, Seams: "test helper
 // `startTestServer({ fixture, manualTimer }): { url, stepTick(), stop() }` for Playwright"): a real
 // `createWorldServer` + real `ws.WebSocketServer` (`attachWebSocketServer`) on a real loopback
 // port, so a real browser page's real `WebSocket` (`mp.html`) can dial it -- the same production
@@ -32,7 +32,7 @@ export interface TestServer {
    * player's own `Bye{Leave}` (no close frame, so the browser's real `WebSocket` sees an ordinary
    * network close, `net/link.ts`'s own `'close'` `DownReason`). */
   killClients(): void
-  /** docs/plan/30d-hello-resent-silence.md: the host's own account of every server-side socket
+  /** M30d: the host's own account of every server-side socket
    * (accepted, each message's length, closed with what code) and every handshake step
    * (`SimHost.handshakeTrace`), one timestamped line each. Read only when a spec fails. */
   diagnostics(): string[]
@@ -64,7 +64,7 @@ export interface StartTestServerOptions {
    * async-discovered OS-assigned port into a `path` string chosen before any hook runs). Every
    * `mp/*` spec keeps the default (`undefined` -> `port: 0`), unaffected. */
   port?: number
-  /** docs/plan/30c-ci-reds-after-m30.md (red C): kill the very first socket the instant its first
+  /** M30c (red C): kill the very first socket the instant its first
    * message (the client's `Hello`) arrives, before any reply can leave -- a link that dies after
    * its `Hello` went out but before a `Welcome` or a rejection came back. The client must say
    * `Hello` again on its redial. */

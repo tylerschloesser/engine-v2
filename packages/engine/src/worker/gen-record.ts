@@ -1,4 +1,4 @@
-// The 16-byte genRequest/genResult record header (docs/plan/08b-gen-workers-and-queue.md, Seams:
+// The 16-byte genRequest/genResult record header (M08b, Seams:
 // "Records (little-endian): request, 16 bytes [cx i32][cy i32][0 u32][0 u32]; result, 16 +
 // slab_bytes: the same header followed by the tile bytes of GenOut."). Shared by `worker/gen.ts`
 // (decodes a request, encodes a result header) so the layout is proven once, directly, by a unit

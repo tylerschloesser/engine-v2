@@ -1,4 +1,4 @@
-//! The tick-rule half of the state budget (docs/plan/21b-timers-wakeups-and-tickcx.md Tests
+//! The tick-rule half of the state budget (M21b Tests
 //! added): `tick_rule_put_past_limit_is_applied`, `tick_spawn_without_ids_is_engine_fault`. A
 //! test-local `Game` whose tick rule spawns exactly one entity every tick -- deliberately not
 //! `fixtures/machines`, so its own goldens (`place-border`, `full-world`, `smelt-cycle`,

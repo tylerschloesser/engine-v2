@@ -15,7 +15,7 @@
 //! convention `Store::write_canonical` already uses for every game-typed value, so untrusted bytes
 //! always go through `decode_canonical` over an exact, pre-sliced span (`.claude/rules/
 //! determinism.md`) rather than a decode that reads "as much as it needs" from a longer, unverified
-//! tail (docs/plan/22-persistence-log-and-snapshots.md Deviations has the reasoning).
+//! tail (M22 Deviations has the reasoning).
 //!
 //! [`FrameReader`] is a resumable cursor: `push` accepts bytes in any split (one byte at a time or
 //! the whole log at once) and returns [`FrameProgress::NeedMore`] until one whole, CRC-verified
@@ -64,7 +64,7 @@ pub enum FrameRecord<G: Game> {
         segment: u32,
         offset: u32,
     },
-    /// docs/plan/24b-upgrade-and-migration.md decision 6 (amending 0024 §3b): an `Action` record
+    /// M24b decision 6 (amending 0024 §3b): an `Action` record
     /// whose own bytes failed `decode_canonical` under the *current* build (a `SCHEMA_VERSION`-
     /// unbumped rules change that still altered `G::Action`'s own postcard layout). Dropped, never
     /// applied -- `who`/`seq` are still decoded (they are engine-owned, never part of the undecodable
@@ -170,7 +170,7 @@ impl<G: Game> FrameRecord<G> {
     }
 }
 
-/// Builds one frame (Order of work step 1 of docs/plan/22-persistence-log-and-snapshots.md):
+/// Builds one frame (Order of work step 1 of M22:
 /// accumulate records with `push_*`, then [`FrameWriter::finish`] to encode the whole
 /// `len | tick_delta | count | records | crc32` container.
 #[derive(Default)]
@@ -235,7 +235,7 @@ pub struct DecodedFrame<G: Game> {
     pub tick_delta: u32,
     pub records: Vec<FrameRecord<G>>,
     /// Byte offset of this frame's own leading `len` varint, relative to the first byte ever fed
-    /// to this [`FrameReader`] (docs/plan/24-recovery-and-migration.md: `sim_replay_begin`'s own
+    /// to this [`FrameReader`] (M24: `sim_replay_begin`'s own
     /// `offset` argument is what a caller adds to get an absolute segment offset -- the same basis
     /// [`FrameReader::buffered_len`]'s own callers already use, e.g. `sim_replay_valid_end`).
     pub frame_offset: u64,

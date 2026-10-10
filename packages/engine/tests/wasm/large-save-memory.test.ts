@@ -1,4 +1,4 @@
-// `highwater-large-save @slow` (docs/plan/36-slow-tier-and-benchmarks.md step 4, M07's hand-over):
+// `highwater-large-save @slow` (M36 step 4, M07's hand-over):
 // the sim instance's memory on the standard large save, asserted against `budgets.json`
 // `mem.simHighWaterLargeSave` with `engine_mem_grows() == 0`. See the test body for what the number
 // measures. Release profile (the shipped allocator behaviour: growth past the reservation is

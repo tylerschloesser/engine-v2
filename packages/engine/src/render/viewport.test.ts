@@ -1,4 +1,4 @@
-// `render/viewport.ts`'s pure render-scale computation (docs/plan/09b-terrain-art-and-lifecycle.md,
+// `render/viewport.ts`'s pure render-scale computation (M09b,
 // Tests added: "`viewport.render_scale_caps_at_2`"). The `ResizeObserver`/`matchMedia`/canvas-context
 // machinery needs a real DOM and a real `GPUDevice`, so it is proven only by the browser suite
 // (`tests/browser/viewport.spec.ts`); this file covers what needs neither.

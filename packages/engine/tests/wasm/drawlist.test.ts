@@ -1,4 +1,4 @@
-// docs/plan/17-drawlist-and-sprites.md: proves the publish end to end (the client worker's real
+// M17: proves the publish end to end (the client worker's real
 // `createDrawlistPump`, `worker/client-drawlist.ts`) *and*, per the M17 cut-1 gate ("native-vs-
 // `.wasm` equality, not self-consistency"), that the real `.wasm` build's DrawList agrees with the
 // native one for the same replica + camera -- the same shape `tests/wasm/puts.test.ts`'s own

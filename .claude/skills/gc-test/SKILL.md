@@ -76,7 +76,7 @@ outside `test-results/`.
 - Interpreter-tier boxing in code that lives blocked in `Atomics.wait` and may never tier up: a
   property read of `Number.POSITIVE_INFINITY`, a `Float64Array` element read, or a
   `TypedArray.prototype.byteLength` getter each box a fresh `HeapNumber` on a normal pass
-  (`docs/plan/06b-workers-and-spawn.md`, Deviations "fix round 2, second pass"). Fingerprint by the
+  (`M06b`, Deviations "fix round 2, second pass"). Fingerprint by the
   method, not just the shape: `bytesPerFrame × frames ÷ wakes ≈ 12-16 B` means one
   `HeapNumber` per pass (fix the boxing site); a fixed delta once per window (e.g. 136 B) means a
   one-off such as lazy-feedback allocation (see "Warm-up is 8 passes" below), not a per-pass box.
@@ -174,7 +174,7 @@ of the M03/M04 harness. Two differences from a harness page:
   artificially extreme ~40-way Chromium process oversubscription (`--workers 14 --repeat-each 3` on
   a 14-core machine), and left it unaddressed (different subsystem, not this milestone's files).
 - **Finding a stalled worker's real position: `Debugger.pause` over CDP, not code reading (M17c,
-  docs/plan/17c-client-park-stall.md).** `W_WAKE`/`W_ACK` alone cannot always tell (a) a worker stuck
+  M17c.** `W_WAKE`/`W_ACK` alone cannot always tell (a) a worker stuck
   inside its own `body()` from (b) a lost wake: for `client`, `W_ACK` stores `CB_FRAME_REQ`'s own
   *value* (idempotent, re-stored every wake whether or not the frame request changed), not a wake
   tally, so "W_ACK frozen below W_WAKE" can be entirely normal (`sim`/`gen0` genuinely do get more
@@ -207,7 +207,7 @@ of the M03/M04 harness. Two differences from a harness page:
   wake is silently folded into that baseline, and nothing checks the flag until a *further* wake
   arrives -- which, for a worker nobody touches again, never happens. Fixed by checking `W_YIELD` at
   the top of every pass through the loop, before waiting, not only after
-  (`docs/plan/17c-client-park-stall.md`, Step 3 fix round 2); proved with a single-thread,
+  (`M17c`, Step 3 fix round 2); proved with a single-thread,
   deterministic construction (`shell.checks_yield_before_its_own_first_wait`,
   `src/worker/shell.test.ts`, beside `shell.resume_does_not_lose_a_wake`) rather than a live
   reproduction, since the failure this depends on is a code-shape gap, not a timing rarity. A
@@ -235,7 +235,7 @@ of the M03/M04 harness. Two differences from a harness page:
   timeout-less `Atomics.wait` can only be bounded from *outside* the thread it blocks.
 
   **A narrower gap in the same file survived fix round 3, found and fixed by M19b
-  (docs/plan/19b-sim-park-while-armed.md).** Checking `Yield` before every wait (not just the first)
+  (M19b.** Checking `Yield` before every wait (not just the first)
   still leaves a gap between *that check* and the moment `Atomics.wait` itself registers this thread
   as a waiter -- two separate statements, not one atomic operation. `parkOne`'s notify used to target
   `Req` without ever changing it, so it had no self-healing property against this narrower gap the
@@ -292,7 +292,7 @@ of the M03/M04 harness. Two differences from a harness page:
   raise a *different* isolate's own `bytesPerFrame` (reproduces at `--workers 1`, one test, no
   external contention) -- the workers are separate OS threads sharing one renderer process, so this
   is not a per-frame allocation site in this milestone's own code; as of M06b it is an open,
-  unresolved finding (docs/plan/06b-workers-and-spawn.md, Deviations "fix round 2"), not something to
+  unresolved finding (M06b, Deviations "fix round 2"), not something to
   paper over with a wider budget without saying so.
 
 ### A real-time-timer-driven isolate (`net`, M29 step 5)
@@ -349,7 +349,7 @@ through real socket events and its own `setTimer`-based drain loop, never throug
 
 ## Forcing a one-shot event inside the measured window
 
-docs/plan/23-persistence-opfs-and-lifecycle.md step 6 (Planning decision 1): a page sometimes needs
+M23 step 6 (Planning decision 1): a page sometimes needs
 to prove what happens when a *rare* event -- a periodic snapshot write, a segment roll, anything that
 fires far less than once per frame -- lands inside a real 600-frame zero-GC window, deterministically,
 rather than waiting on its own real cadence (1,200 ticks, say) or hoping it happens to land during the

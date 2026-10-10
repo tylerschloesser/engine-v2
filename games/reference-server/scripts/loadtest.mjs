@@ -1,5 +1,5 @@
 // `node games/reference-server/scripts/loadtest.mjs --url wss://host/ws --clients 8 --seconds 120`
-// (docs/plan/38-hosting-checks.md, Scope C): N headless clients (`engine`'s `HeadlessClient` over the
+// (M38, Scope C): N headless clients (`engine`'s `HeadlessClient` over the
 // shipped `wsConnection`, real sockets, real clock) join one reference server, spread out over the
 // world and each panning at walking speed so every one holds a moving subscription, for a fixed time,
 // then leave with `Bye{Leave}` (so the world goes idle and `--exit-on-idle` can fire).

@@ -156,7 +156,7 @@ test('ring.wrap_and_span', () => {
 })
 
 test('ring.consumer_record_drop_shares_the_producers_counter', () => {
-  // docs/plan/16-action-round-trip.md (gate item 3): `RingConsumer.recordDrop()` is the consumer
+  // M16 (gate item 3): `RingConsumer.recordDrop()` is the consumer
   // side of the same policy `RingProducer.recordDrop()` already has -- a message this ring
   // delivered, but whose consumer rejected on its own terms after popping it, is still counted as
   // a drop. Both sides share one `RING_DROPS` counter (the same physical control block), so a

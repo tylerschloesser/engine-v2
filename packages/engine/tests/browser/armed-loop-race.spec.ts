@@ -1,4 +1,4 @@
-// M17c step 3, fix round 3 (docs/plan/17c-client-park-stall.md): `armedLoop`'s own doc comment
+// M17c step 3, fix round 3 (M17c: `armedLoop`'s own doc comment
 // (`src/test/harness-worker.ts`) checks `Yield` before every wait, including its first, so a park
 // request whose own `Yield = 1` store (and, in the real protocol, `Atomics.notify(Req)` without
 // changing `Req`, `harness.ts`'s `parkOne`) lands before that loop's own first wait is caught

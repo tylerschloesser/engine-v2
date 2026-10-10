@@ -1,4 +1,4 @@
-// `pnpm device:walk --auto`'s pointer checks (docs/plan/39f-device-auto-runner.md step 9 and M11-gestures)
+// `pnpm device:walk --auto`'s pointer checks (M39f step 9 and M11-gestures)
 // end to end in headless Chromium and WebKit: the fake phone's fingers are mouse drags, clicks and the wheel
 // (`fake-phone-touch.mjs`), the rest is the real round (`support/walk-rig.ts`). Not touch events: what a real
 // finger does is the device check. All `@slow @webkit-gpu`.

@@ -1,4 +1,4 @@
-// The capability screen (M35, docs/plan/35-packaging-and-adapters.md): what a player sees instead of a
+// The capability screen (M35, M35: what a player sees instead of a
 // blank canvas when `checkSupport()` says this browser cannot run the game. The game branches on the
 // failure `code` (the engine's `message` is developer English and is never shown); the wording here
 // is the game's own. Framework-free, like the rest of `src/ui/`.

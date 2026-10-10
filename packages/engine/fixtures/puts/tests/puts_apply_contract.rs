@@ -17,7 +17,7 @@ fn new_sim(seed: u64) -> Sim<Puts> {
     })
 }
 
-/// `joined_must_put_player` (Planning decisions of docs/plan/12-store-and-game-trait.md, carried
+/// `joined_must_put_player` (Planning decisions of M12, carried
 /// into `fx_puts::Puts::on_player`): after a `Joined` event, the player table must already hold a
 /// slot -- `Store::apply(&Delta::Roster, ..)`'s own no-op-without-a-slot fallback (M12 Deviations)
 /// exists only because this must always hold.

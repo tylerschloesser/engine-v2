@@ -1,4 +1,4 @@
-// `render/upload.ts` unit coverage (docs/plan/09-renderer-terrain.md, Tests added:
+// `render/upload.ts` unit coverage (M09, Tests added:
 // `upload.budget_stops_and_takes_one`; Open gate failures item 5, gate round 1 -- this test did not
 // exist before this round). Drives `createUploadDrain` against a real ring (`sab/ring.ts`, the same
 // `createRing(4120, 4)` shape every other terrain page uses) loaded with hand-built records, and a

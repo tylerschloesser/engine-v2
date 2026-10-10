@@ -1,4 +1,4 @@
-//! M31b (docs/plan/31b-desync-hashes.md "Tests added", Rust half): the hash schedule, the
+//! M31b ("Tests added", Rust half): the hash schedule, the
 //! `Hashes` section and `ResyncChunk` bytes, the client check, and the resync heal, end to end
 //! through `testkit::Loopback` (real wire bytes both ways). The scenarios use M15's `LGame`.
 

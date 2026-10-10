@@ -1,4 +1,4 @@
-// The client worker's action/UI-result pump (docs/plan/16-action-round-trip.md, step 3): built
+// The client worker's action/UI-result pump (M16, step 3): built
 // once at setup, run every wake, the same "costs nothing, answers nothing" shape as `client-gen.
 // ts`/`client-upload.ts`/`client-input.ts`. Drains `actionRing` (main's `dispatch()` writes) into
 // `on_action(len)` over `RegionId.Rx` (shared with `on_input`'s own, differently-shaped records --
@@ -22,7 +22,7 @@ import { RingConsumer, RingProducer } from '../sab/ring.js'
 export type ActionPump = {
   pump(): void
   /** The highest `seq` this pump has handed to `on_action` (`-1` before the first): read off a dead
-   * pump by the client worker's trap reaction (docs/plan/37-robustness-events.md step 1) to learn
+   * pump by the client worker's trap reaction (M37 step 1) to learn
    * how far dispatched seqs reach. Updated before the call, so an action the instance trapped on
    * counts. */
   lastSeq(): number

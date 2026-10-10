@@ -1,4 +1,4 @@
-// `gc-connected-terrain.html`'s script (docs/plan/15c-terrain-visibility-and-cache-invalidation.md,
+// `gc-connected-terrain.html`'s script (M15c,
 // step 4, Tests added: "the zero-GC panning window (600 frames, sim + client isolates within
 // budget, ring drops === 0)" -- M15b's own step 6, left unbuilt until this milestone's cache-
 // invalidation fix (steps 1-2) made a real connected+rendered pan mean what it claims). A real
@@ -82,7 +82,7 @@ const client = createClient({
   genWorkers: 1,
   test: { clock, flags: { gcHook: true } },
 })
-// `pumpUntilLive` (docs/plan/16-action-round-trip.md, `engine/test`'s own doc comment has the
+// `pumpUntilLive` (M16, `engine/test`'s own doc comment has the
 // full reasoning): this page's own ticks are test-driven (`drive()`, wired below, well after this
 // point), and `client.ready` now needs a real first frame before it resolves, so a bare `await
 // client.ready` here would deadlock against the very hook that would otherwise drive one.

@@ -1,4 +1,4 @@
-// The client worker's upload-staging pump (docs/plan/09-renderer-terrain.md, Order of work 5;
+// The client worker's upload-staging pump (M09, Order of work 5;
 // Planning decisions "Byte budget accounting", "`writeTexture` from a SAB view is unverified"):
 // called from `worker/client.ts`'s `body()` after `frame()`, on every wake (same "costs nothing and
 // answers 0 on a page with no `client::Uploader`" shape `client-gen.ts`'s pump already uses).

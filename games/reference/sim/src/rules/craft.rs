@@ -1,4 +1,4 @@
-//! `StartCraft`, crafting completion and the recipe unlock (docs/plan/32-reference-crafting.md).
+//! `StartCraft`, crafting completion and the recipe unlock (M32.
 //!
 //! Cost is paid at `StartCraft`, the output is granted at completion (Planning decisions), so a
 //! craft in flight cannot be starved by a later action. `crafting` and `collecting` are independent

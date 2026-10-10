@@ -1,4 +1,4 @@
-// `headless-ui-and-camera` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Tests added):
+// `headless-ui-and-camera` (M27, Tests added):
 // `ui()` returns the fixture's last `Ui` JSON (M16b's kind-1 record, decoded directly off
 // `client_poll_ui()` -- `headless-client.ts`'s own `pollUi()`); `setCamera` moves the subscription
 // (a real chunk-enter burst reaches the client once its view moves somewhere new).

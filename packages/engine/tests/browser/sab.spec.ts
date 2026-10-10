@@ -1,4 +1,4 @@
-// SPSC ring, proven cross-thread in a real browser, both directions (docs/plan/06-sab-primitives-
+// SPSC ring, proven cross-thread in a real browser, both directions (M06
 // and-workers.md, Tests added; the spike measured worker -> main only, docs/decisions/0015 §2).
 // `@engines` also runs this in WebKit and Firefox.
 import { expect, test } from '@playwright/test'

@@ -1,4 +1,4 @@
-// `opfs-latency.html`'s script (docs/plan/23-persistence-opfs-and-lifecycle.md step 7): spawns
+// `opfs-latency.html`'s script (M23 step 7): spawns
 // `opfs-latency-worker.ts` (all OPFS access happens there, matching where the real adapter runs) and
 // renders its result table for Tyler to read and copy (`M23-opfs-latency`,
 // `docs/plan/device-checks.md`). `window.__opfsLatencyResult` mirrors the same object for an

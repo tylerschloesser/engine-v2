@@ -1,4 +1,4 @@
-// `GpuResources` (docs/plan/37b-device-loss.md Scope; docs/decisions/0018-renderer.md §8): every
+// `GpuResources` (M37b Scope; docs/decisions/0018-renderer.md §8): every
 // object created from a `GPUDevice` -- the device and its probes, the terrain pipeline, page/
 // indirection textures and visual table, the tile-art array and its mips, and (when a client is
 // given) the drawables pass with its sprite atlas, instance buffer and bind groups -- hangs off one

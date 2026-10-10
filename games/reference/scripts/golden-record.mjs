@@ -1,4 +1,4 @@
-// `pnpm --filter reference golden:record` (docs/plan/34b-reference-scripted-single-player.md): runs
+// `pnpm --filter reference golden:record` (M34b: runs
 // `fullGame()` (tests/helpers/script.ts) on the headless driver against `createWorldServer` with
 // memory storage and a virtual clock, then writes `tests/golden/full-game.log` (segment 0's frames)
 // and `full-game.json` (checkpoint hashes from the `.wasm` replay under Node, 0002 section 1). The only

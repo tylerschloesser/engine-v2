@@ -1,4 +1,4 @@
-// `reference: capability screen on failure` (docs/plan/35-packaging-and-adapters.md): when
+// `reference: capability screen on failure` (M35: when
 // `checkSupport()` fails the page shows the capability screen instead of a blank canvas. The failure is
 // forced with `addInitScript`, before any page script runs, so no WebGPU device and no worker is ever
 // created: `navigator.gpu` is made absent, which is the `no-webgpu` code.

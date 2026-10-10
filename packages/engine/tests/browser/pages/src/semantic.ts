@@ -1,4 +1,4 @@
-// `semantic.html`'s script (docs/plan/11-camera-and-input.md, Order of work step 5): the whole
+// `semantic.html`'s script (M11, Order of work step 5): the whole
 // `client.input.recognize` -> `inputRing` -> client worker drain -> `on_input` -> `InputQueue` path
 // against a real `fx-terrain` client, the same imperative debug-API pattern `topology.ts`/`gen.ts`
 // use (a `Client`'s own shape is not itself serialisable across the CDP boundary `page.evaluate`'s

@@ -1,4 +1,4 @@
-// M34c step 4 (docs/plan/34c-reference-scripted-multiplayer.md Scope, "Admission"): the reference
+// M34c step 4 (M34c Scope, "Admission"): the reference
 // game refuses a third player with `Full` and a wrong join key with `BadKey`, and neither shows up
 // in the log. Lives here, not under `games/reference/tests/netcode/`, because it needs the raw
 // handshake (`connectRaw`, `buildHelloBytes`) from engine `src`, which the reference package's own

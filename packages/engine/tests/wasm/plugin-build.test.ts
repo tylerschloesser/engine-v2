@@ -1,4 +1,4 @@
-// The build/preview path of `engine()` and its profile default (docs/plan/02b-vite-plugin.md):
+// The build/preview path of `engine()` and its profile default (M02b:
 // `vite build` into a temp outDir, then `vite preview` of that output. Vite's JS API, ephemeral
 // ports.
 

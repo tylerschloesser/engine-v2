@@ -5,7 +5,7 @@
 // names, into the next level's own single-layer attachment.
 //
 // `mip_src`'s bound view spans every array layer (compatibility mode requires a `2d-array` texture
-// binding to reference all of a texture's layers, docs/plan/09b-terrain-art-and-lifecycle.md
+// binding to reference all of a texture's layers, M09b
 // Deviations -- found by `uncapturederror` on an earlier draft that narrowed the view to one layer,
 // the same way `render/terrain.ts`'s own bind group already has to bind the *whole* array), narrowed
 // only by mip level (`baseMipLevel: level - 1, mipLevelCount: 1`); `mip_layer` (one per-pass uniform

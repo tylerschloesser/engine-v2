@@ -1,4 +1,4 @@
-// `wsConnection(url)` (docs/plan/29-net-worker-and-reference-server.md Scope/Seams; docs/decisions/
+// `wsConnection(url)` (M29 Scope/Seams; docs/decisions/
 // 0009-transport-and-hosting.md §"WebSocket (`wss`, binary) now": "`binaryType = 'arraybuffer'`, no
 // `permessage-deflate`, one socket per client, owned by the net worker"): the browser `WebSocket`
 // wrapped as a client-side `Connection` (0009). The exact same function also runs under Node 22's

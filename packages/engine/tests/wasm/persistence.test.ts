@@ -1,4 +1,4 @@
-// docs/plan/22-persistence-log-and-snapshots.md step 6, Tests added (Vitest, WASM under Node): the
+// M22 step 6, Tests added (Vitest, WASM under Node): the
 // `Persistence` write side wired into a real `SimHost` over `fx-persist`'s built `.wasm`, driving
 // the real ABI (`sim_seal_frame`/`sim_dirty`/`sim_segment_header`/`sim_snapshot_begin`/
 // `sim_snapshot_next`). `storage_conformance_memory` (step 5, no fixture needed) lives beside its
@@ -282,7 +282,7 @@ describe('Persistence wired into a real SimHost (fx-persist)', () => {
     expect(persistence.counters.snapshots).toBe(0) // nowhere near the 1,200-tick cadence
 
     await host.pause()
-    expect(persistence.counters.snapshots).toBe(1) // docs/plan/22b...: a clean boundary snapshots
+    expect(persistence.counters.snapshots).toBe(1) // M22b...: a clean boundary snapshots
     expect(flushCalls).toBe(1) // ... and awaits flush()
 
     // A second pause with nothing dirtied since must not snapshot again.

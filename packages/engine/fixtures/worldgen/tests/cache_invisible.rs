@@ -1,5 +1,5 @@
-//! `cache_invisible_real_worldgen` (Non-scope of docs/plan/07-world-model-core.md; this brief's
-//! own scope, docs/plan/08-worldgen-and-gen-worker.md): the generate-on-miss path M07 proved
+//! `cache_invisible_real_worldgen` (Non-scope of M07; this brief's
+//! own scope, M08: the generate-on-miss path M07 proved
 //! invisible for a seeded `PristineSource` stays invisible once `Pristine<FixtureGen>` drives it
 //! with real worldgen ("Host-side generate-on-miss is not new code" -- Non-scope).
 

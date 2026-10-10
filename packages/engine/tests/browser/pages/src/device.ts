@@ -1,4 +1,4 @@
-// `device.html`: the manual fill-rate/HUD page (docs/plan/09b-terrain-art-and-lifecycle.md, step 7)
+// `device.html`: the manual fill-rate/HUD page (M09b, step 7)
 // Tyler opens on a phone through M03's `pnpm device:serve --tunnel` (`docs/plan/device-checks.md`,
 // "M09b: Terrain fill rate"), and the host `canvas.spec.ts`'s two automated tests drive against
 // (`canvas: presents`, `frame-loop: production runs phases in order`) -- the exit criterion "`device
@@ -13,14 +13,14 @@
 // here worries about per-frame allocation the way `.claude/rules/hot-paths.md` requires of
 // production code.
 //
-// M39f (docs/plan/39f-device-auto-runner.md steps 5-6): `window.__check` (`check.ts`) reports the HUD's own
+// M39f (steps 5-6): `window.__check` (`check.ts`) reports the HUD's own
 // numbers as numbers, so `pnpm device:walk --auto` reads them instead of Tyler copying them down:
 // `readings()` per mode below, `ready` set with `__pageReady`. `?probeS=<seconds>` shortens the memory
 // probe's two sessions for the automated run of that check (unset: the 2 minutes of the checklist).
 //
-// M11 step 8 (docs/plan/11-camera-and-input.md, Scope: "device.html additions: gestures enabled,
+// M11 step 8 (M11, Scope: "device.html additions: gestures enabled,
 // `?module=url`, and `?probe=memory`"): `onCamera` below is no longer a hand-written stand-in for
-// the camera -> frame-uniform maths (docs/plan/09b-terrain-art-and-lifecycle.md Deviations,
+// the camera -> frame-uniform maths (M09b Deviations,
 // "Interpretation calls") -- `client.camera.tick()` is the real `CameraIntegrator`/
 // `SemanticRecognizer`, driven by the real gesture listeners `createClient` now installs on this
 // page's own canvas/window (`src/client.ts`); this page only still computes the GPU frame uniform's
@@ -67,7 +67,7 @@ import { fixtureWasm } from './fixture-wasm.ts'
 declare global {
   interface Window {
     __pageReady?: true
-    /** `?harness=1` (docs/plan/17b-sprites-and-frame-budget.md, Planning decisions "Manual harness
+    /** `?harness=1` (M17b, Planning decisions "Manual harness
      * shape"): Tyler's own troubleshooting via the Playwright CLI skill; the HUD text is the primary
      * output (`docs/plan/device-checks.md`, M17b: read from the browser's own DevTools UI, not this
      * hook). */
@@ -77,7 +77,7 @@ declare global {
       sabWriteTextureOk: boolean
       memoryBytes(): Record<string, number>
     }
-    /** docs/plan/18-picking-and-overlay.md step 8 (`device.html?anchors=50`): the `anchors` browser
+    /** M18 step 8 (`device.html?anchors=50`): the `anchors` browser
      * test's own hook, reading the exact world tile a device-check ring/button sits at -- the same
      * grid `fixtures/overlay/src/lib.rs`'s own `extract()` uses, computed once here so a spec never
      * duplicates the formula. `i` is `1..=50` (the pick id `extract()` assigns, `pick_id - 1` is the
@@ -124,7 +124,7 @@ const wasm = await fixtureWasm('terrain')
 
 /** M09b step 7's own page, unchanged: the fill-rate/lifecycle HUD, gestures now real (M11). */
 // --- Rolling stats (10 s window; HUD-only, allocation not a concern here) -----------------
-// Module scope (docs/plan/18-picking-and-overlay.md step 8): `runAnchorsCheck`'s own rAF-interval
+// Module scope (M18 step 8): `runAnchorsCheck`'s own rAF-interval
 // tracking, for M18-anchors' own device check ("HUD rAF p95 <= 17.5 ms during the pinch"), reuses
 // exactly what `runFillRateHud` already built rather than a second copy.
 const WINDOW_MS = 10_000
@@ -347,7 +347,7 @@ async function runFillRateHud(): Promise<void> {
   setInterval(renderHud, 200)
   renderHud()
 
-  // --- `window.__check` (docs/plan/39f-device-auto-runner.md): the HUD's own numbers as numbers ------
+  // --- `window.__check` (M39f: the HUD's own numbers as numbers ------
   check.errors = () => device.errors()
   check.readings = () => {
     const v = renderer.viewport
@@ -549,7 +549,7 @@ async function runMemoryProbe(): Promise<void> {
   say('probe=memory: complete')
 }
 
-// --- `?harness=1` (docs/plan/17b-sprites-and-frame-budget.md, Planning decisions "Manual harness
+// --- `?harness=1` (M17b, Planning decisions "Manual harness
 // shape"; docs/plan/device-checks.md, M17b: desktop Safari and Firefox, closing 0018 Consequences'
 // deferral -- "the CDP instrument of 0016 is Chromium-only"). A real, connected `fx-drawables`
 // client (`gc-drawables.ts`'s own topology, TerrainRenderer + DrawablesRenderer + sprite atlas)
@@ -610,7 +610,7 @@ async function runHarness(): Promise<void> {
   await pumpUntilLive(client)
   const harness = asHarness(client)
 
-  // docs/plan/18-picking-and-overlay.md gate round 1: no `drawListSab`/own `TripleReader` --
+  // M18 gate round 1: no `drawListSab`/own `TripleReader` --
   // `driveOne` below calls `client.pick.acquire()` once, before `drawablesRenderer.acquire()`.
   const drawablesRenderer: DrawablesRenderer = await createDrawablesRenderer(device.device, {
     colorFormat,
@@ -745,7 +745,7 @@ async function runHarness(): Promise<void> {
   }
 }
 
-// --- `?anchors=50[&anchorMode=translate]` (docs/plan/18-picking-and-overlay.md step 8;
+// --- `?anchors=50[&anchorMode=translate]` (M18 step 8;
 // docs/plan/device-checks.md, "M18: Picking and overlay anchoring") -- Tyler's own fill/pinch check
 // for overlay anchoring on a real phone (0019 Consequences: "Deferred to Phase 2/3 manual device
 // checks: anchoring on iOS Safari"), and the one exit criterion needing a real running page:
@@ -962,7 +962,7 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
 
   window.__anchorsRingWorld = ringWorld
 
-  // --- `window.__check` (docs/plan/39f-device-auto-runner.md, step 9) ---------------------------------
+  // --- `window.__check` (M39f, step 9) ---------------------------------
   // The anchor probe: every animation frame, while on, each button's box (`getBoundingClientRect`) against
   // where `worldToScreen` puts its ring (the button's bottom centre is the anchor point, `align: 'bottom'`):
   // the largest error in CSS px over every frame, and the largest frame-to-frame change of a frame's

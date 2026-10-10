@@ -1,4 +1,4 @@
-// `gc-slice.html`'s script (docs/plan/16-action-round-trip.md, step 6, "the zero-GC window with
+// `gc-slice.html`'s script (M16, step 6, "the zero-GC window with
 // actions"): `gc-connected-terrain.ts`'s own real connected+rendered+panning topology, plus one
 // `dispatchRaw` call every `DISPATCH_EVERY_FRAMES` frames inside the *measured* window -- `engine/
 // test.dispatchRaw` (0016 §2) takes pre-encoded `Uint8Array` bytes precisely so JSON encoding
@@ -44,7 +44,7 @@ declare global {
   interface Window {
     __pageReady?: true
     __netCounters?: (conn?: number) => Promise<NetCounters>
-    /** docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures item 3, gate round 1:
+    /** M26, Open gate failures item 3, gate round 1:
      * `ClientCore::predict_applied_ever`, read outside the measured zero-GC window (parks the
      * client worker itself -- `predictStats`'s own precondition -- so this is never called from
      * inside `drive()`). */
@@ -109,7 +109,7 @@ const target = device.device.createTexture({
 })
 
 // Built once (`.claude/rules/hot-paths.md`): one `Paint` action's JSON, at the camera's own
-// starting centre tile (docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures item
+// starting centre tile (M26, Open gate failures item
 // 3, gate round 1) -- a tile the replica actually holds (subscribed, since it is inside the panned
 // view from frame 0) rather than the original `(500, 500)`, "far from the panned view": a blind
 // write to an unheld chunk always predicts `NotPredictable` (`.claude/rules/prediction.md`,

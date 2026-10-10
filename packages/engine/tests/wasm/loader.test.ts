@@ -88,13 +88,13 @@ describe('loader', () => {
     // A status, not a trap, on every profile (0024 §16): the instance goes on working.
     expect(inst.dead).toBe(false)
     expect(inst.region(RegionId.Result)?.len).toBe(64)
-    // The engine reserves `Camera` for every Client-role instance (docs/plan/06b-workers-and-
+    // The engine reserves `Camera` for every Client-role instance (M06b
     // spawn.md, Scope: "RegionId::Camera sized here"), whatever the game; 80 bytes = the block
     // `packages/engine/src/camera/block.ts` defines.
     expect(inst.region(RegionId.Camera)?.len).toBe(80)
   })
 
-  // Decision B of fix round 3 (docs/plan/06b-workers-and-spawn.md, Deviations): the detach check is
+  // Decision B of fix round 3 (M06b, Deviations): the detach check is
   // picked once at module load from `'detached' in ArrayBuffer.prototype`. Without the detection a
   // runtime that lacks the getter reads `undefined` -- falsy -- and silently never rebuilds its
   // views after `memory.grow`. Here the getter is hidden and the loader re-imported, so the

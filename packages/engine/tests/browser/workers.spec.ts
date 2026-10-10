@@ -1,5 +1,5 @@
 // `createClient`'s spawn path, the production worker shell's `yield`/park/resume, the camera block
-// reaching a WASM instance, and `destroy()` (docs/plan/06b-workers-and-spawn.md, Tests added).
+// reaching a WASM instance, and `destroy()` (M06b, Tests added).
 // Chromium only except `spawn_local` (tagged `@engines`).
 import { expect, type Worker as PageWorker, test } from '@playwright/test'
 import { openPage } from './support/page.js'
@@ -29,7 +29,7 @@ const MIB = 1024 * 1024
 // Measured (`node --experimental-strip-types`, this session): every role's fixed footprint before
 // its configured arena is reserved -- the boot region, static data, stack -- is 1,310,720 bytes
 // (20 pages), identical for `sim`/`client`/`gen` on the dev-profile `fx-hash` module. A toolchain
-// bump that changes this is expected to move it (docs/plan/06b-workers-and-spawn.md, Deviations).
+// bump that changes this is expected to move it (M06b, Deviations).
 const FIXED_FOOTPRINT_BYTES = 1_310_720
 
 function expectedPages(arenaBytes: number): number {
@@ -183,7 +183,7 @@ test('workers.camera_block_reaches_wasm', async ({ page }) => {
   expect(view.getFloat64(0, true)).toBe(centreX)
   expect(view.getFloat64(8, true)).toBe(centreY)
   // The fixture writes its `t_ms` *argument* at offset 16 (fixtures/hash/src/lib.rs), so this is
-  // the contract of decision A (fix round 3, docs/plan/06b-workers-and-spawn.md, Deviations):
+  // the contract of decision A (fix round 3, M06b, Deviations):
   // `Instance::frame` receives the frame's own `frame_time_ms`, bit for bit, even though the JS
   // side passes the raw export a constant.
   expect(view.getFloat64(16, true)).toBe(frameTimeMs)

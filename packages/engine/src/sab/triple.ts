@@ -1,6 +1,6 @@
 // Triple buffer: a large latest-wins frame (the DrawList; docs/decisions/0015 §2). Three
 // `(header, body)` slots plus one `Int32` state word: bits 0-1 the "middle" (free) slot index, bit 2
-// dirty (docs/plan/06-sab-primitives-and-workers.md, Planning decisions "Triple-buffer state
+// dirty (M06, Planning decisions "Triple-buffer state
 // word"). Writer and reader each own one slot outright and race only over the third, handed off by
 // one `Atomics.exchange` each side: `publish()` swaps the writer's back slot into the state
 // (dirty), taking back whatever was there; `acquire()` swaps the reader's front slot in only when
@@ -10,7 +10,7 @@ import { at } from './bytes.js'
 const STATE_BYTES = 4
 const SLOT_INDEX_MASK = 0b011
 const DIRTY = 0b100
-/** M17's proportional-copy block size (docs/plan/17-drawlist-and-sprites.md Planning decisions
+/** M17's proportional-copy block size (M17 Planning decisions
  * "Proportional publish"): exported so `worker/client-drawlist.ts` can compute how many blocks a
  * frame's own `usedBytes` spans without duplicating this constant. */
 export const BLOCK_BYTES = 65536

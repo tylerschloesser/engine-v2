@@ -1,4 +1,4 @@
-//! Own test binary (docs/plan/05-codec-and-state-hash.md Tests added: `no_alloc_codec`), so the
+//! Own test binary (M05 Tests added: `no_alloc_codec`), so the
 //! counting `#[global_allocator]` sees only this file's work: `codec::encode`, `codec::decode` and
 //! `hash::hash_value` of a plain-data value leave `abi::arena::live_bytes()` unchanged and
 //! allocate nothing in between, the native guard the browser zero-GC tests (M04) rely on.
@@ -52,7 +52,7 @@ fn no_alloc_codec() {
     assert_ne!(h, 0);
 }
 
-/// The instrument itself (docs/plan/30c-ci-reds-after-m30.md, red A): every `no_alloc_*` binary
+/// The instrument itself (M30c, red A): every `no_alloc_*` binary
 /// measures `thread_live_bytes()`, which counts the calling thread only. Another thread's
 /// allocation landing inside the window (on CI: libtest's main thread, which keeps allocating
 /// right after it spawns the test thread and, starved, lands in the first window) moves the

@@ -1,5 +1,5 @@
 // Sprite atlas (docs/decisions/0018-renderer.md §3 "Art sampling" for sprites, §4 `sprites.png`;
-// docs/plan/17b-sprites-and-frame-budget.md Scope, steps 1-3): fetches and validates `sprites.json`,
+// M17b Scope, steps 1-3): fetches and validates `sprites.json`,
 // uploads `sprites.png` (`premultipliedAlpha: true`) into a 2-mip-level atlas (mip 1 via a one-pass
 // reuse of `render/mips.ts`'s own blit technique -- not `generateMips` itself, which chases a full
 // pyramid to 1x1 and requires a power-of-two size; a sprite atlas is neither, 0018 §4 fixing it at
@@ -286,7 +286,7 @@ export async function loadSpriteAtlas(
     mipLevelCount: SPRITE_MIP_LEVEL_COUNT,
     // `COPY_SRC` is not a production need (nothing reads this texture back); it is here so
     // `src/test/render.ts`'s `readTextureMip` can `copyTextureToBuffer` it for `sprite.
-    // no_bleed_at_mip1` (docs/plan/17b-sprites-and-frame-budget.md Deviations) -- found by
+    // no_bleed_at_mip1` (M17b Deviations) -- found by
     // `uncapturederror` on this cut's own first run of that test.
     usage:
       GPUTextureUsage.TEXTURE_BINDING |

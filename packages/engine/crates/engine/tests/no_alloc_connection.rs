@@ -22,7 +22,7 @@
 //! keeps state for it. Its ceiling is per **newly reached chunk** (88 B; 83.32 B measured), never
 //! per tick -- a per-tick ceiling would pass silently if the cost per chunk doubled while the pan
 //! rate halved. The three terms, attributed with `live_bytes()` brackets in M15 fix round 3 (full
-//! table in docs/plan/15-connection-and-subscriptions.md): `TerrainStore`'s overlay `BTreeMap` node
+//! table in M15: `TerrainStore`'s overlay `BTreeMap` node
 //! and the chunk's first `Vec<Entry>` (~112 B per chunk first written to -- `.claude/rules/
 //! hot-paths.md`'s own named exception, "overlay growth (writes, world state) is the one allowed
 //! exception"), and `Host::chunk_versions`' per-chunk version entry (~26 B per chunk ever touched
@@ -39,7 +39,7 @@
 //! evict for a consumer that does not exist in the sim role. Recording is opt-in now
 //! (`TerrainStore::enable_cache_events`), so that queue stays empty here forever.
 //!
-//! `host_admit_path_allocates_zero_bytes_per_action` (docs/plan/16-action-round-trip.md,
+//! `host_admit_path_allocates_zero_bytes_per_action` (M16,
 //! orchestrator gate item 3): the real admit path (`UplinkWriter` -> `Host::on_uplink` ->
 //! `codec::decode_canonical` -> `G::admit` -> `pending_records`, then the real per-tick
 //! `tick()`/`build_frame`/`seal()` order) allocates zero bytes per action, measured rather than
@@ -605,7 +605,7 @@ fn host_terrain_queues_no_cache_events() {
     );
 }
 
-/// One tick of the *admit-only* workload (docs/plan/16-action-round-trip.md, orchestrator gate
+/// One tick of the *admit-only* workload (M16, orchestrator gate
 /// item 3): the real wire path an action actually takes to get admitted -- `UplinkWriter::write`
 /// one action into a batch, `Host::on_uplink` (`codec::decode_canonical` -> `G::admit` ->
 /// `pending_records`), then `Host::tick()` every call so `pending_records` never holds more than
@@ -648,7 +648,7 @@ fn run_admit_tick(
 }
 
 /// Builds and warms up (40 unmeasured ticks) one admit-only `Host`, shared by `admit_run` and
-/// `admit_run_traced` so a diagnostic re-run (docs/plan/19c-ci-reds-frame-bench-and-admit-path.md
+/// `admit_run_traced` so a diagnostic re-run (M19c
 /// step B.4) drives the exact same setup as the measured one, not a hand-copied approximation of
 /// it.
 fn warmed_admit_host() -> (Host<NGame>, u32, [u8; 256], [u8; 4096]) {
@@ -682,7 +682,7 @@ fn admit_run(window: u32) -> i64 {
     live() as i64 - before as i64
 }
 
-/// docs/plan/19c-ci-reds-frame-bench-and-admit-path.md step B.4: never collected on the passing
+/// M19c step B.4: never collected on the passing
 /// path (would itself allocate a `Vec<i64>`, defeating the measurement it would be diagnosing) --
 /// called only after `admit_run` has already shown a non-zero net, to name where the bytes went
 /// for whichever run reproduces this next. Re-runs the identical admit-only workload once more
@@ -726,7 +726,7 @@ fn admit_diagnostic_tail(window: u32) -> String {
     )
 }
 
-/// docs/plan/16-action-round-trip.md (orchestrator gate item 3): bytes the *real* admit path
+/// M16 (orchestrator gate item 3): bytes the *real* admit path
 /// allocates per action -- `Host::queue_action_for_test` exists specifically to bypass measuring
 /// this (host/mod Deviations, `testing::testkit::Loopback::action`'s own doc comment), so nothing
 /// upstream had actually measured it before this test.
@@ -759,7 +759,7 @@ fn admit_diagnostic_tail(window: u32) -> String {
 /// above): a one-off warm-up artifact would shrink as the window grows; this stays at exactly
 /// zero at both, which is why the checks below are equality to zero, not a ceiling.
 ///
-/// **CI red, docs/plan/19c-ci-reds-frame-bench-and-admit-path.md step B**: run 36087861610 (a
+/// **CI red, M19c step B**: run 36087861610 (a
 /// doc-only commit) failed with `short = 900` -- the first failure of this test in the last 40
 /// failed CI runs, passing locally every time since. 500 bounded local reproduction attempts this
 /// session (300 quiet + 200 under a 12-way `yes` CPU load, both `cargo nextest run --workspace

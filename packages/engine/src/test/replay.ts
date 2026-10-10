@@ -1,11 +1,11 @@
-// `engine/test` (docs/decisions/0020 §8; docs/plan/22b-persistence-load-and-fs.md Order of work
+// `engine/test` (docs/decisions/0020 §8; M22b Order of work
 // step 5): `replayWorld`/`runHeavy`, the JS-driven equivalents of `engine::testing::replay`/`heavy`
 // (Rust, `crates/engine/src/testing/replay.rs`) -- but over a *stored* world (a real `Storage` plus
 // `worldId`), walking every segment the manifest names through the same `sim_restore_*`/
 // `sim_replay_*`/`sim_segment_header` ABI drivers `Persistence.loadLatest` already uses, never a
 // hand-built container. Test-only: `src/test/**` is exempt from `.claude/rules/hot-paths.md`.
 //
-// Planning decisions 5 (docs/plan/22-persistence-log-and-snapshots.md): "full-history verification
+// Planning decisions 5 (M22: "full-history verification
 // comes free from segment bases" -- crossing a segment boundary here always asserts the continuous
 // replay's own hash at that tick equals the next segment's base snapshot's hash, throwing if not.
 // This holds for any `ManifestV1` this milestone's own `Persistence` produces because a roll's base
@@ -13,7 +13,7 @@
 // it): `manifest.segments[i].base` (a tick number) is therefore always that segment's own
 // `log_ref_tick` too, letting this module derive the tick-delta reference straight from the
 // manifest without a wire-level `log_ref_tick` (`sim_restore_end`'s own `Result` output has no room
-// for it -- only `logSegment`/`logOffset`, docs/plan/22b-persistence-load-and-fs.md Seams).
+// for it -- only `logSegment`/`logOffset`, M22b Seams).
 import { RegionId, Role, Status } from '../abi.js'
 import type { ManifestSegment, ManifestV1 } from '../host/persistence.js'
 import type { EngineInstance } from '../loader.js'
@@ -138,7 +138,7 @@ async function openSegmentStart(
   return { sim, offset }
 }
 
-/** docs/plan/24-recovery-and-migration.md: the scan pass, run once per instance over the whole
+/** M24: the scan pass, run once per instance over the whole
  * segment tail (`log.subarray(from)`) *before* `driveCell` ever calls `sim_replay_begin`/`push` on
  * it -- a `Skip` record's own target can live in an earlier frame than the `Skip` record itself,
  * so every frame must be seen once before any of them is safely applied. */
@@ -182,7 +182,7 @@ function driveCell(
   refTick: number,
   untilTick: number,
   onTick: (tick: number, cell: Cell) => void,
-  /** docs/plan/24-recovery-and-migration.md: the real segment index, threaded into
+  /** M24: the real segment index, threaded into
    * `sim_replay_begin(segment, offset)` -- see `rearm`'s own doc comment for why this (and a real
    * `offset`, not `0, 0`) is load-bearing once `Skip` targeting exists. */
   segmentIndex: number,
@@ -190,7 +190,7 @@ function driveCell(
   let curTick = cell.sim.call0(cell.sim.x.sim_tick_now)
   let reference = refTick
   let replayReady = false
-  /** docs/plan/24-recovery-and-migration.md: `sim_replay_begin`'s own `offset` becomes
+  /** M24: `sim_replay_begin`'s own `offset` becomes
    * `self.replay_base_offset`, and a `Skip` target is matched against `replay_base_offset +
    * DecodedFrame::record_offsets[i]` -- the record's *absolute* byte position within the segment
    * (Seams). Before this milestone, `(0, 0)` was harmless (nothing ever computed an absolute
@@ -261,7 +261,7 @@ export interface ReplayWorldOptions {
 }
 
 /**
- * Seams (docs/plan/22b-persistence-load-and-fs.md): replays a *stored* world from genesis through
+ * Seams (M22b: replays a *stored* world from genesis through
  * every segment the manifest names, returning one `{ tick, hash }` per requested checkpoint tick
  * (ascending or not, duplicates collapsed). Crossing a segment boundary asserts the continuous
  * replay's own hash matches that segment's base snapshot's hash (Planning decisions 5); a mismatch
@@ -293,7 +293,7 @@ export async function replayWorld(
         throw new Error(
           `replayWorld: segment ${seg.index}'s own base snapshot hash (${boundaryHash}) does not ` +
             `match the continuous replay's hash at the same tick (${prevHash}) -- Planning ` +
-            'decisions 5 of docs/plan/22-persistence-log-and-snapshots.md',
+            'decisions 5 of M22',
         )
       }
     }
@@ -520,7 +520,7 @@ export async function runHeavy(
         if (sinceRestore >= everyN) {
           const bytes = takeSnapshotBytes(cell.sim)
           cell.sim = restoreFresh(bytes)
-          // docs/plan/24-recovery-and-migration.md: a genuinely fresh instance built by
+          // M24: a genuinely fresh instance built by
           // `restoreFresh` has an empty `replay_skip_targets` (only `sim_replay_scan_begin`/`push`/
           // `end` populate it) -- without re-running the scan pass here, a `Skip` record whose
           // target frame is still ahead of this restore point would silently be *applied* on the

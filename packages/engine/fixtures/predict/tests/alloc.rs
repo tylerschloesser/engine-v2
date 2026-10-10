@@ -1,4 +1,4 @@
-//! `predict_alloc` (docs/plan/25-prediction-core.md Tests added; 0012 Decision, "Measured: 0
+//! `predict_alloc` (M25 Tests added; 0012 Decision, "Measured: 0
 //! allocations over 190 frames x 4 pending actions"): ported from `spikes/prediction-api/game/
 //! tests/alloc.rs`, driven against the real `Host<Predict>`/`ClientCore<Predict>` instead of the
 //! spike's own harness. No `#[global_allocator]` here (unlike the spike, and unlike this crate's

@@ -183,7 +183,7 @@ fn machines_full_world_golden() {
     );
 }
 
-/// Mirrors `golden/scenario-smelt-cycle.json` exactly (docs/plan/21b-timers-wakeups-and-tickcx.md
+/// Mirrors `golden/scenario-smelt-cycle.json` exactly (M21b
 /// Seams): a `Place`d machine, `Feed`d twice (one smelt cycle each -- `SMELT` is 100 ticks at the
 /// default 20 Hz), and a `PlaceSpinner`d entity ticking on the active list the whole time.
 fn script_smelt_cycle() -> Vec<(Tick, Record<Machines>)> {
@@ -257,7 +257,7 @@ fn machines_smelt_cycle_golden() {
 
 /// Mirrors `golden/scenario-idle-world-costs-zero.json`: three placed, never-fed machines --
 /// nothing schedules a timer or an active-list entry for any of them, so `Store::encode`'s new
-/// sections (docs/plan/21b-timers-wakeups-and-tickcx.md) are present but empty at every checkpoint.
+/// sections (M21b are present but empty at every checkpoint.
 fn script_idle_world_costs_zero() -> Vec<(Tick, Record<Machines>)> {
     vec![
         (

@@ -1,4 +1,4 @@
-// `puts-ui.html`'s script (docs/plan/16b-ui-observation-and-clock.md step 4/5, "a DOM counter
+// `puts-ui.html`'s script (M16b step 4/5, "a DOM counter
 // driven by onUi and a progress value derived from a done_at tick and clock()"): a real, connected
 // `createClient()` topology over `fx-puts`'s own `PutsUi { motd, note, note_until, global_ticks }`.
 // The game-owned DOM overlay (0003: "Game UI is a game-owned DOM overlay; the engine renders no UI
@@ -37,7 +37,7 @@ declare global {
      * tick count. */
     __confirmed?: number
     /** `engine/test.lastUi`'s own reading, exposed here as the "ground truth" channel
-     * (docs/plan/16b-ui-observation-and-clock.md Tests added, `dom_counter_follows_global`):
+     * (M16b Tests added, `dom_counter_follows_global`):
      * independent of the DOM (a second `client.onUi` subscription, not a read of `#global`'s own
      * text), so comparing the two proves the DOM overlay actually reflects what `onUi` delivered,
      * not merely that the page can read its own state back. */

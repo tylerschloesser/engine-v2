@@ -1,4 +1,4 @@
-// `RingConnection` (docs/plan/15b-ring-connection-and-replica-rendering.md, Scope): the 0009
+// `RingConnection` (M15b, Scope): the 0009
 // `Connection` shape over one SAB ring pair (`SabSet.uplink`/`SabSet.downlink`), `datagrams:
 // false`. This is the sim role's own end of the pair -- `send`/`close` write the *downlink*
 // (`RingProducer`), `onMessage` fires from draining the *uplink* (`RingConsumer`). The client
@@ -8,7 +8,7 @@
 // `RingProducer`/`RingConsumer` directly.
 //
 // Zero-allocation discipline on both the per-message (uplink) and per-frame (downlink `send`)
-// paths (docs/plan/15b-ring-connection-and-replica-rendering.md, Constraints): every buffer here
+// paths (M15b, Constraints): every buffer here
 // is preallocated at construction and reused; `send`'s only per-call work past the initial
 // `tryPush` attempt is `Uint8Array.prototype.set` into an already-allocated retry slot (allowed:
 // `.claude/rules/hot-paths.md` bans `subarray()`/`slice()`/`new Uint8Array(...)`, not `.set()`).
@@ -66,7 +66,7 @@ export class RingConnection implements Connection {
   private readonly producer: RingProducer
   private readonly recvBuf: Uint8Array
   private recvLen = 0
-  /** docs/plan/37-robustness-events.md step 2: while `>= 0`, `drainUplink` drops every message whose
+  /** M37 step 2: while `>= 0`, `drainUplink` drops every message whose
    * first byte is not this one (then clears it). */
   private skipUntilByte = -1
 
@@ -164,7 +164,7 @@ export class RingConnection implements Connection {
     // Intentionally empty; see the doc comment above.
   }
 
-  /** A sim worker respawned after the first died (docs/plan/37-robustness-events.md step 2): the
+  /** A sim worker respawned after the first died (M37 step 2): the
    * client kept pushing camera reports and actions into the uplink ring while nobody drained it, and
    * they belong to a session this connection never had. Drops everything up to the first message that
    * opens with `byte` (a `Hello`'s lead byte), which is delivered like any other. */

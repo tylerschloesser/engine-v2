@@ -1,4 +1,4 @@
-//! `FrameBundle` (docs/plan/31-rates-and-integrity.md step 4, 0010 Rates "Degrade": "frames
+//! `FrameBundle` (M31 step 4, 0010 Rates "Degrade": "frames
 //! concatenate"): several whole [`super::MsgType::Frame`] messages in one message.
 //!
 //! A frame is not self-delimiting (its last section runs to the end of the message), and an

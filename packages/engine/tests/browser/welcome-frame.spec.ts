@@ -1,4 +1,4 @@
-// `mp/welcome_frame_same_wake` (docs/plan/39c-acceptance-gap-tests.md step 5; ADR 0042 §3): a remote
+// `mp/welcome_frame_same_wake` (M39c step 5; ADR 0042 §3): a remote
 // client configured by its first `Welcome` runs `frame()` again in that same wake, so its first gen
 // requests (and presence sample) leave then, not one wake later. The page holds the `Welcome` in
 // the downlink ring while the client worker is parked, bumps exactly one frame request and resumes:

@@ -1,4 +1,4 @@
-// `src/ui/dom.ts` (docs/plan/20b-reference-player-and-collect-ui.md Seams, Provides): the two
+// `src/ui/dom.ts` (M20b Seams, Provides): the two
 // framework-free DOM helpers every UI module in this package builds on -- `el()` and a keyed-list
 // diff helper -- reused as-is by M32-M34's own crafting/roster UI (Provides).
 //

@@ -1,4 +1,4 @@
-// `park-notify-race.html`'s script (M19b, docs/plan/19b-sim-park-while-armed.md): races the real
+// `park-notify-race.html`'s script (M19b, M19b: races the real
 // `parkOne` signal against a worker deliberately paused inside the gap `park-notify-race-worker.ts`'s
 // own hook widens. Gate round 1: calls `signalPark` (`src/test/step-block.ts`), the exact exported
 // function `src/test/harness.ts`'s `parkOne` itself calls -- not a hand-written copy of its two

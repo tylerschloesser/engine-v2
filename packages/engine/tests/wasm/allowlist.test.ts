@@ -69,7 +69,7 @@ describe.each(fixtureNames())('fixture %s', (name) => {
   checkAllowlist(`fx-${name}`, fixtureBytes(name))
 })
 
-// Widened per docs/plan/20-reference-game-v0.md (orchestrator ruling): "the M02 import-allowlist
+// Widened per M20 (orchestrator ruling): "the M02 import-allowlist
 // test and clippy bans run against reference-sim". `gameCrateNames()` returns `[]` (no `describe`
 // bodies at all) in a checkout with no `games/` yet, same as `fixtureNames()` would for an empty
 // `fixtures/`.

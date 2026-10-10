@@ -1,4 +1,4 @@
-// `upload-quiescence.html`'s script (docs/plan/20c-client-ack-freeze-under-untilquiescent.md): the
+// `upload-quiescence.html`'s script (M20c: the
 // minimal deterministic reproduction of `untilQuiescent` hanging on an undrained `uploadRing`. A
 // real `createClient()` local, **connected** topology over `fx-puts` (the same fixture `connected.
 // ts`/`connected-terrain.ts` use -- its client role does reserve `ChunkTexels`/`Uploader`, so real

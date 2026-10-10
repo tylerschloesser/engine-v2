@@ -3,7 +3,7 @@
 // production code.
 import { StepControl } from './step-block.js'
 
-/** `docs/plan/04-zero-gc-harness.md`, Seams. `null` is the clean run (no control armed). */
+/** `M04`, Seams. `null` is the clean run (no control armed). */
 export type NegativeControl = { isolate: string; kind: 'object' | 'burst' | 'post-message' } | null
 
 /** The spike's coarse control: enough to trip both `MinorGC` events and the byte budget (0016 §3

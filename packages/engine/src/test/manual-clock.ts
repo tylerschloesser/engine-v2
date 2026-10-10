@@ -21,7 +21,7 @@ export function createManualClock(startMs = 0): ManualClock {
 
   function fireDue(): void {
     // Same optimisation as `frame()`'s own `frames.length === 0` check below, missed here until
-    // fix round 2 (docs/plan/06b-workers-and-spawn.md, Deviations): `test/client.ts`'s `stepFrame`
+    // fix round 2 (M06b, Deviations): `test/client.ts`'s `stepFrame`
     // calls `advance()` every frame, and no test page here ever registers a real timer, so the
     // common case is an empty `timers` Map. Without this check, `for (const timer of
     // timers.values())` still creates a `MapIterator` and calls `.next()` on it once per `advance()`
@@ -75,7 +75,7 @@ export function createManualClock(startMs = 0): ManualClock {
       now += dtMs
       // Callbacks registered while running are next frame's, not this one's. No client-role worker
       // exists before M06b, so `frames` is normally empty here; skip the array churn in that case
-      // (measured: M04's gc-loop `main` budget, docs/plan/04-zero-gc-harness.md).
+      // (measured: M04's gc-loop `main` budget, M04.
       if (frames.length === 0) return
       const due = frames
       frames = []

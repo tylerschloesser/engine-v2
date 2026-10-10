@@ -14,7 +14,7 @@ first two adapters. Full context: `../CLAUDE.md`'s own `storage/` bullet.
 - `conformance.ts`: `runStorageConformance(make)` -- the 0005 contract's own behavioural checks
   (write-then-read, append order, delete, `list` prefix/sort, `sync`/`flush` never throwing).
   Deliberately import-free of any test runner, so a browser page (M23) can call it directly.
-- `fs.ts` (docs/plan/22b-persistence-load-and-fs.md step 4): `fsStorage(dir)`, exported only from
+- `fs.ts` (M22b step 4): `fsStorage(dir)`, exported only from
   `engine/server/node` (the name M27/M35b use) -- zero npm dependencies, `node:fs/promises` only.
   Per open log key: two preallocated 1 MiB buffers, `append` copies into the "front" one; a full
   buffer or `sync()` rotates it into an async `fs.write` + `fdatasync` chain and checks a fresh
@@ -28,7 +28,7 @@ first two adapters. Full context: `../CLAUDE.md`'s own `storage/` bullet.
 Every adapter here copies `bytes` before returning (0005: "an engine-owned view valid only during
 the call"), never retains the argument itself.
 
-- `opfs.ts` (docs/plan/23-persistence-opfs-and-lifecycle.md): `opfsStorage(worldId)` -- the OPFS row
+- `opfs.ts` (M23: `opfsStorage(worldId)` -- the OPFS row
   of the 0005 Storage table, browser-only, sim worker only (0015). Rejects with `OpfsUnavailable`
   when `getDirectory()`/the first `createSyncAccessHandle()` fails. Keys map onto nested OPFS
   directories one-for-one on `/`. **Rules**: `append`/`sync`'s fast path is a plain (non-`async`)
@@ -45,7 +45,7 @@ the call"), never retains the argument itself.
   `launchPersistentContext` for OPFS at all, and does not isolate it per profile, so a spec using
   non-namespaced keys wipes the whole root once at the start (`tests/browser/support/opfs-
   context.ts`), never inside `opfsStorage` itself.
-- `archive.ts` (docs/plan/23-persistence-opfs-and-lifecycle.md step 5): `exportWorld`/`importWorld`/
+- `archive.ts` (M23 step 5): `exportWorld`/`importWorld`/
   `deleteWorld`, plain functions over any `Storage` (re-exported unchanged from `server.ts`). Archive
   = gzip of `magic | version u16 | worldIdLen u16 | worldId | count u32 | (keyLen u16 | key relative
   | dataLen u32 | data)*`, keys relative to `worlds/<id>/` so import can re-root under a different

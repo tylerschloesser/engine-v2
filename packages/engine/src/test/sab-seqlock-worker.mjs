@@ -1,4 +1,4 @@
-// Test-only worker for `seqlock.test.ts`'s `seqlock.no_torn_read` (docs/plan/06-sab-primitives-and-
+// Test-only worker for `seqlock.test.ts`'s `seqlock.no_torn_read` (M06
 // workers.md, Planning decisions "Seqlock reader rule"): a writer on a real Node `worker_threads`
 // thread, stamping every byte of the record with one rotating value per write ("the writer stamps
 // all bytes with one value", Tests added). A jittered busy-spin between writes keeps the writer's

@@ -26,28 +26,28 @@ export const Status = {
   Unsupported: 8,
   NotCached: 9,
   BudgetExceedsArena: 10,
-  // docs/plan/22b-persistence-load-and-fs.md: `sim_restore_end` -- the decoded snapshot's own
+  // M22b: `sim_restore_end` -- the decoded snapshot's own
   // `Identity.buildHash` differs from this running build's. Reported, not handled (M24b's own
   // migrate path); `Persistence.open` throws `WorldLoadError { kind: 'identity' }`.
   IdentityMismatch: 11,
-  // docs/plan/22b-persistence-load-and-fs.md: `sim_restore_begin`/`sim_restore_push`/
+  // M22b: `sim_restore_begin`/`sim_restore_push`/
   // `sim_restore_end` -- the pushed bytes did not decode as a valid snapshot (a bad CRC, or still
   // `NeedMore` at `sim_restore_end`, i.e. a torn snapshot). `Persistence.open` falls back to the
   // next older snapshot.
   Corrupt: 12,
-  // docs/plan/22b-persistence-load-and-fs.md: `sim_restore_begin`/`sim_restore_push` -- the pushed
+  // M22b: `sim_restore_begin`/`sim_restore_push` -- the pushed
   // bytes' `container_version` does not match this build's own.
   ContainerVersion: 13,
-  // docs/plan/22b-persistence-load-and-fs.md: `sim_replay_push`/`sim_replay_end` -- a pushed block
+  // M22b: `sim_replay_push`/`sim_replay_end` -- a pushed block
   // failed to decode as a whole, CRC-valid frame. Not an error for the last (currently open)
   // segment: that is how recovery finds the torn tail to truncate (`sim_replay_valid_end`).
   TornTail: 14,
-  // docs/plan/24b-upgrade-and-migration.md: `sim_upgrade_end` -- the load takes the `Game::migrate`
+  // M24b: `sim_upgrade_end` -- the load takes the `Game::migrate`
   // path (identity/schema/tick-rate/worldgen mismatch) and either `Game::migrate` itself declined
   // or the old-schema bytes failed to decode. A reason byte (`IncompatReason` in host/upgrade.ts)
   // is written to `Result[0]`; every stored byte stays untouched on this path (0005 Upgrades).
   SaveIncompatible: 15,
-  // docs/plan/33f-client-world-config-from-welcome.md: `client_on_welcome` for another world than
+  // M33f: `client_on_welcome` for another world than
   // the one an earlier `Welcome` configured (one world per server, 0013); nothing was applied.
   WorldMismatch: 16,
 } as const
@@ -64,12 +64,12 @@ export const RegionId = {
   Camera: 7,
   GenOut: 8,
   GenIn: 9,
-  // docs/plan/15b-ring-connection-and-replica-rendering.md: the client role's own inbound buffer
+  // M15b: the client role's own inbound buffer
   // for one whole host frame (`on_frame`'s `len` bytes), distinct from `Rx` (already the client
   // role's input-record buffer, M11). The client's own outbound uplink batch reuses `Tx`,
   // unclaimed by the client role until now.
   Downlink: 10,
-  // docs/plan/24-recovery-and-migration.md: `ProgressCursor` (`phase u32 | tick u32 | record u32`,
+  // M24: `ProgressCursor` (`phase u32 | tick u32 | record u32`,
   // 12 B, sim role) -- written by Rust before each phase, readable from a *dead* instance with no
   // export call at all (0014 §6: `inst.region(id).u8` / `inst.mem`). Not sim state (never hashed,
   // snapshotted or logged).
@@ -97,51 +97,51 @@ export const ABI_EXPORTS = {
   engine_region_len: { role: 'all', params: 1, result: 'u32' },
   engine_mem_grows: { role: 'all', params: 0, result: 'u32' },
   sim_admit: { role: 'sim', params: 2, result: 'status' },
-  // docs/plan/15b-ring-connection-and-replica-rendering.md: admits `conn` into the sim role's
+  // M15b: admits `conn` into the sim role's
   // connection table (`host::Host::connect`). The caller (`SimHost.accept`) picks `conn`.
   sim_connect: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/24-recovery-and-migration.md, Traps ("Connections stay open across recovery"):
+  // M24, Traps ("Connections stay open across recovery"):
   // re-attaches `conn` with the same deterministic `PlayerId` a live `sim_connect` would assign,
   // but queues no `Record::Player` event and touches no game state (`host::Host::reattach`'s own
   // doc comment). Recovery's own re-attach call site, distinct from `sim_connect`.
   sim_reattach: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/24-recovery-and-migration.md fix round 1 (Planning decisions 2): queues
+  // M24 fix round 1 (Planning decisions 2): queues
   // `Rejected(Engine(EngineFault))` for `seq` directly onto `conn`'s own (already-reattached)
   // connection, and raises its dedup floor so a resend of that exact `seq` is dropped rather than
   // re-admitted (and, for a deterministically-panicking action, re-trapped). `host::Host::
   // fault_ack`'s own doc comment has the full reasoning.
   sim_fault_ack: { role: 'sim', params: 2, result: 'status' },
-  // docs/plan/15b-ring-connection-and-replica-rendering.md: frees `conn`'s slot (`host::Host::
+  // M15b: frees `conn`'s slot (`host::Host::
   // disconnect`). An unknown/already-disconnected `conn` is a tolerated no-op, not an error.
   sim_disconnect: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/28b-reconnect-and-lifecycle.md step 4 (`ABI_VERSION` 30 -> 31): `host::Host::
+  // M28b step 4 (`ABI_VERSION` 30 -> 31): `host::Host::
   // log_disconnected` -- queues `Record::Player { Disconnected }` for `player`, delivered at the
   // next `tick()`, independent of any live connection. The host-side grace timer's own signal.
   sim_log_disconnected: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 25 -> 26): the real handshake join/
+  // M28 (`ABI_VERSION` 25 -> 26): the real handshake join/
   // reconnect path, replacing `sim_connect`'s implicit accept for every connection the host's own
   // TS handshake (`host/handshake.ts`) drives. `len` bytes of `Rx` are the whole handshake input
   // (`player_id varint · epoch u32 · joined u8 · presence (has u8 + len varint + bytes)? ·
   // hello_tail`); on success `Welcome` bytes land in `Tx` and their length is returned (same
   // `len`/`-(status)` shape as `sim_build_frame`).
-  // docs/plan/28-sessions-and-reconnect.md steps 3-5 (`ABI_VERSION` 27 -> 28): on success
+  // M28 steps 3-5 (`ABI_VERSION` 27 -> 28): on success
   // also writes one LE `u32` into `Result` offset 0 -- the `ConnId` this call silently
   // superseded (0013 "the old connection gets `Bye{Superseded}`"), `0xFFFFFFFF` for "none"
   // -- the same in-place widening `client_clock_stats` used.
   sim_attach: { role: 'sim', params: 2, result: 'len' },
-  // docs/plan/28b-reconnect-and-lifecycle.md step 2 (`ABI_VERSION` 29 -> 30): sends a fresh
+  // M28b step 2 (`ABI_VERSION` 29 -> 30): sends a fresh
   // `Welcome` (new `epoch`) on an already-open connection -- the resync signal after panic
   // recovery or an upgrade bump, or a host restart (`SimHost.resyncAll()`). Same `len`/`-(status)`
   // shape as `sim_attach`, minus the `Rx` input (nothing to parse).
   sim_resync: { role: 'sim', params: 2, result: 'len' },
-  // docs/plan/28-sessions-and-reconnect.md: frees `conn`'s slot, same as `sim_disconnect` -- a
+  // M28: frees `conn`'s slot, same as `sim_disconnect` -- a
   // distinct export name so the handshake path (`sim_attach`) and its own teardown pair cleanly,
   // without retiring `sim_disconnect` (still real: native tests, `testkit::Loopback`, recovery).
-  // docs/plan/34-reference-multiplayer.md (`ABI_VERSION` 37 -> 38): on success also writes the
+  // M34 (`ABI_VERSION` 37 -> 38): on success also writes the
   // presence sample the detach removed into `Result` (LE `u32` length at 0, `0` = none, then the
   // bytes), for the session table's `lastPresenceHex` (0013). Params and result unchanged.
   sim_detach: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/28-sessions-and-reconnect.md: `1`/`0`, whether this world's own `Store` already has
+  // M28: `1`/`0`, whether this world's own `Store` already has
   // a player slot for `player` (not a `Status`: costs nothing, always answers, same shape as
   // `sim_warm_one`). The TS handshake asks this before `sim_attach`, both to fill that call's own
   // `joined` byte and to find the next free `PlayerId` for an unknown secret.
@@ -149,36 +149,36 @@ export const ABI_EXPORTS = {
   sim_tick: { role: 'sim', params: 0, result: 'status' },
   sim_build_frame: { role: 'sim', params: 1, result: 'len' },
   sim_hash: { role: 'sim', params: 0, result: 'status' },
-  // docs/plan/13-sim-host-tick-loop.md: creates the world from the init config (`Sim::genesis`
+  // M13: creates the world from the init config (`Sim::genesis`
   // for a real `Game`). M22b adds the load-from-storage path.
   sim_genesis: { role: 'sim', params: 0, result: 'status' },
-  // docs/plan/13-sim-host-tick-loop.md: write-ahead log bytes for the frame about to be applied
+  // M13: write-ahead log bytes for the frame about to be applied
   // (0024 §1), written into `RegionId.Persist`. Real since docs/plan/
   // 22-persistence-log-and-snapshots.md steps 4-6 (0 = nothing to log this tick).
   sim_seal_frame: { role: 'sim', params: 0, result: 'len' },
-  // docs/plan/13-sim-host-tick-loop.md: generates at most one uncached chunk from the warm list
+  // M13: generates at most one uncached chunk from the warm list
   // (`host::warm`), nearest-to-view-centre first. `1`/`0` (not a `Status`: costs nothing, always
   // answers), the same shape as `gen_take`/`upload_stage`.
   sim_warm_one: { role: 'sim', params: 0, result: 'u32' },
-  // docs/plan/13-sim-host-tick-loop.md ("20 Hz is hardcoded" gap): the game's own tick rate
+  // M13 ("20 Hz is hardcoded" gap): the game's own tick rate
   // (`u32`, e.g. `20`), read once by `SimHost` at construction. `20` (the `Instance` trait
   // default) on any instance that never overrides it; not a `Status`, same shape as
-  // `sim_warm_one`. `role: 'all'` (docs/plan/16-action-round-trip.md, broadened from `'sim'`): the
+  // `sim_warm_one`. `role: 'all'` (M16, broadened from `'sim'`): the
   // answer is role-independent (a game-level constant), and the client worker now also reads its
   // own instance's rate once, at setup, for the clock block's `ticks_per_second`.
   tick_hz: { role: 'all', params: 0, result: 'u32' },
-  // docs/plan/24b-upgrade-and-migration.md Scope: `G::CHUNK_BITS`, read once by `Persistence.
+  // M24b Scope: `G::CHUNK_BITS`, read once by `Persistence.
   // create`/`Persistence.open` to stamp/compare `ManifestV1.params.chunkBits`. Same "any
   // initialised role, cost nothing" shape as `tick_hz`.
   chunk_bits: { role: 'all', params: 0, result: 'u32' },
-  // `t_ms: f64` (0014 §4's client hot-export table; docs/plan/06b-workers-and-spawn.md): called
+  // `t_ms: f64` (0014 §4's client hot-export table; M06b: called
   // only when `CB_FRAME_REQ` has advanced since the last call (Planning decisions "Worker frame
   // clock"). `params: 1` here means "one number", whatever its wasm type (0014 §2).
   frame: { role: 'client', params: 1, result: 'status' },
   // `gen_chunk(cx, cy)` (docs/decisions/0008-chunk-generation.md §1, §2 table): writes
   // `region(RegionId.GenOut).len` bytes, little-endian tiles, row-major.
   gen_chunk: { role: 'gen', params: 2, result: 'status' },
-  // docs/plan/08b-gen-workers-and-queue.md: `1` when a 16-byte genRequest record now sits at
+  // M08b: `1` when a 16-byte genRequest record now sits at
   // offset 0 of `Result`, `0` otherwise (not a `Status`: costs nothing, always answers, even with
   // no `client::TerrainFeed`).
   gen_take: { role: 'client', params: 1, result: 'u32' },
@@ -188,31 +188,31 @@ export const ABI_EXPORTS = {
   client_gen_stats: { role: 'client', params: 0, result: 'status' },
   // `client_chunk_hash(cx, cy)`: lo, hi `u32` of an FNV hash into `Result`, or `Status.NotCached`.
   client_chunk_hash: { role: 'client', params: 2, result: 'status' },
-  // docs/plan/09-renderer-terrain.md: stages up to `max_records` upload-ring records into
+  // M09: stages up to `max_records` upload-ring records into
   // `RegionId.ChunkTexels`; returns the count actually staged (not a `Status`: costs nothing and
   // always answers, even with no `client::Uploader`, the same shape as `gen_take`).
   upload_stage: { role: 'client', params: 1, result: 'u32' },
-  // docs/plan/11-camera-and-input.md: decodes `len` bytes of `Rx` as whole `inputRing` records
+  // M11: decodes `len` bytes of `Rx` as whole `inputRing` records
   // (32 bytes each) into whatever `InputQueue` the instance owns.
   on_input: { role: 'client', params: 1, result: 'status' },
-  // docs/plan/15b-ring-connection-and-replica-rendering.md: `len` bytes of `RegionId.Downlink`
+  // M15b: `len` bytes of `RegionId.Downlink`
   // are one whole host frame (0011), applied atomically into the client role's own replica.
   on_frame: { role: 'client', params: 1, result: 'status' },
-  // docs/plan/15b-ring-connection-and-replica-rendering.md: writes at most one uplink batch into
+  // M15b: writes at most one uplink batch into
   // `RegionId.Tx`, returning its length (`0` = nothing due yet, 0010 "Rates"). `t_ms: f64` is
   // ignored (same shape as `frame`'s own raw argument): the real value is read from the
   // just-copied `CameraBlock.frame_time_ms`.
   client_poll_uplink: { role: 'client', params: 1, result: 'len' },
-  // docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 25 -> 26): builds `Hello` from the
+  // M28 (`ABI_VERSION` 25 -> 26): builds `Hello` from the
   // client role's own config (`secret`/`joinKey`/`buildHash`) into `Tx`, returning its length --
   // same shape as `client_poll_uplink`/`sim_build_frame`. Takes no other input; idempotent.
   client_hello: { role: 'client', params: 0, result: 'len' },
-  // docs/plan/33f-client-world-config-from-welcome.md (`ABI_VERSION` 36 -> 37): the client's world
+  // M33f (`ABI_VERSION` 36 -> 37): the client's world
   // as JSON `{"seed":"0x<16 hex>","params":...}` (the shape of the `game` config's `seed`/`params`)
   // into `Tx`, returning its length; `0` = not configured yet (no seed and params at `engine_init`
   // and no `Welcome` seen).
   client_world_config: { role: 'client', params: 0, result: 'len' },
-  // docs/plan/28-sessions-and-reconnect.md: applies one `Welcome` message (`len` bytes of
+  // M28: applies one `Welcome` message (`len` bytes of
   // `RegionId.Downlink`, same region `on_frame` reads) into the client role's own state
   // (`own_player`, `seed_presence`, `seed_lead_rtt_ms` from `rttMs`). On success, `player_id`/
   // `last_processed_action_seq`/`view_max_tiles_per_axis`/`view_max_chunks` (`ABI_VERSION` 28 ->
@@ -220,31 +220,31 @@ export const ABI_EXPORTS = {
   // `session_state`/`seq_seed` bookkeeping and `setViewClamp` forwarding. `Status.Decode` on a
   // malformed message.
   client_on_welcome: { role: 'client', params: 2, result: 'status' },
-  // docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test` only: `host::Host::
+  // M15b, `engine/test` only: `host::Host::
   // region_hash(conn)`, two LE `u32` into `Result` (`sim_hash`'s own crossing shape).
   sim_region_hash: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test` only:
+  // M15b, `engine/test` only:
   // `client::Replica::region_hash()`, same crossing shape as `sim_region_hash`.
   client_region_hash: { role: 'client', params: 0, result: 'status' },
-  // docs/plan/15b-ring-connection-and-replica-rendering.md, `engine/test` only: `host::
+  // M15b, `engine/test` only: `host::
   // ConnCounters` for `conn`, little-endian into `Result` (56 bytes: seven `u64` fields,
   // `bytes_down, frames, chunk_enters_pristine, chunk_snapshots, chunk_leaves, bytes_up,
-  // presence_bytes_up` -- docs/plan/19-presence-channel.md steps 4-6 appended the 7th field).
+  // presence_bytes_up` -- M19 steps 4-6 appended the 7th field).
   sim_conn_counters: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/31-rates-and-integrity.md (`ABI_VERSION` 33 -> 34), `engine/test` only: `host::
+  // M31 (`ABI_VERSION` 33 -> 34), `engine/test` only: `host::
   // PacingCounters` for `conn`, sixteen LE `u32`s (64 bytes) into `Result`: `reenters_within_5s,
   // reenter_bytes, cap_evictions, late_visible_max, late_visible_p95, degrade_level, dropped_visible,
   // queued_enters, bucket_tokens (i32), held_chunks, collapses, bundles, max_emit_gap,
   // order_violations, rate_limited, camera_reports_dropped`.
   sim_pacing_counters: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/31b-desync-hashes.md (`ABI_VERSION` 34 -> 35), `engine/test` only: the sim role's
+  // M31b (`ABI_VERSION` 34 -> 35), `engine/test` only: the sim role's
   // desync report ring, one report per call: 40 LE bytes into `Result`, `count u32` (total ever),
   // `retained u32`, then the `index`th retained report (oldest first): `tick u32`, `scope u32`
   // (0 Chunk, 1 Global, 2 OwnPlayer), `cx i32`, `cy i32`, `host_hash u64`, `client_hash u64`.
   sim_desync: { role: 'sim', params: 1, result: 'status' },
   // Same layout for the client role's own ring.
   client_desync: { role: 'client', params: 1, result: 'status' },
-  // docs/plan/31b-desync-hashes.md (`ABI_VERSION` 35 -> 36), `engine/test` only: the dump files of
+  // M31b (`ABI_VERSION` 35 -> 36), `engine/test` only: the dump files of
   // hash-all mode, written into `Tx`, returning the byte count (`0` = no completed dump). `part`
   // 0: the oldest dump's header `tick u32, cx i32, cy i32, client_len u32` (LE); 1: the client's
   // encoding of the chunk when its hash mismatched; 2: the host's encoding (the replica's after
@@ -258,69 +258,69 @@ export const ABI_EXPORTS = {
   // Fault injection, `engine/test` only: flips one replica byte of the held chunk (cx, cy);
   // `Status.NotCached` when it is not held.
   client_corrupt_chunk: { role: 'client', params: 2, result: 'status' },
-  // docs/plan/16-action-round-trip.md: parses one action-ring record (`[seq u32 LE][len u32
+  // M16: parses one action-ring record (`[seq u32 LE][len u32
   // LE][UTF-8 JSON]`) out of `len` bytes of `RegionId.Rx` (shared with `on_input`'s own,
   // differently-shaped records) into the game's `Action`, queues it for the next uplink batch.
   // `Status.Decode` on a malformed record, `Status.OutOfMemory` when the outbox is already full.
   on_action: { role: 'client', params: 1, result: 'status' },
-  // docs/plan/16-action-round-trip.md: copies at most one batch of UI-ring records (kind 2,
+  // M16: copies at most one batch of UI-ring records (kind 2,
   // `ActionResults` turned into JSON) into `RegionId.Ui`, returning the byte count (`0` = nothing
   // new; not a `Status`, same shape as `client_poll_uplink`/`upload_stage`).
   client_poll_ui: { role: 'client', params: 0, result: 'u32' },
-  // docs/plan/16-action-round-trip.md (`ABI_VERSION` 11 -> 12): `authoritative_tick`, `ack_seq`
+  // M16 (`ABI_VERSION` 11 -> 12): `authoritative_tick`, `ack_seq`
   // (`ClientCore::last_summary()`) as two LE `u32` into `Result` -- the client worker's own source
   // for the clock block's `authoritative_tick`/`ack_seq` fields, same crossing shape as
   // `sim_region_hash`/`client_region_hash`.
-  // docs/plan/28-sessions-and-reconnect.md (`ABI_VERSION` 26 -> 27): widened from 16 to 20 bytes,
+  // M28 (`ABI_VERSION` 26 -> 27): widened from 16 to 20 bytes,
   // same call signature -- a fifth LE `u32`, `ClientCore::revealed(camera_view.visible)` (`0`/`1`;
   // steps 3-5 are the first consumer, this milestone only lands the field).
   client_clock_stats: { role: 'client', params: 0, result: 'status' },
-  // docs/plan/16b-ui-observation-and-clock.md (`ABI_VERSION` 12 -> 13), `engine/test` only: forces
+  // M16b (`ABI_VERSION` 12 -> 13), `engine/test` only: forces
   // `UiObserver::mark_dirty()` (0024 §7d's dirty flag). No production caller exists yet (M18's
   // `FrameCx.uiDirty()` is the real one); reached only through `engine/test.markUiDirty`, the same
   // "test-only export, reached by name through `callParked`" shape as `sim_region_hash`/
   // `client_region_hash`/`sim_conn_counters`. No region crosses either way.
   client_ui_mark_dirty: { role: 'client', params: 0, result: 'status' },
-  // docs/plan/16b-ui-observation-and-clock.md (`ABI_VERSION` 13 -> 14), `engine/test` only:
+  // M16b (`ABI_VERSION` 13 -> 14), `engine/test` only:
   // `UiObserver::{calls, records}` as two LE `u32` into `Result` -- proves "ui ran" and "zero
   // records written" as an assertion (coordinator gate, M16b cut 2), same crossing shape as
   // `sim_region_hash`/`client_region_hash`/`client_clock_stats`.
   client_ui_stats: { role: 'client', params: 0, result: 'status' },
-  // docs/plan/17-drawlist-and-sprites.md (`ABI_VERSION` 14 -> 15): how many `Draw` records the
+  // M17 (`ABI_VERSION` 14 -> 15): how many `Draw` records the
   // last `frame()` call's own counting sort wrote into `RegionId.DrawList` (`0` on a wrong role or
   // before the first `frame()` call; not a `Status`, same "always answer, cost nothing" shape as
   // `sim_warm_one`/`upload_stage`). The client worker reads this every wake it calls `frame()`, to
   // know how many `RegionId.DrawList` body blocks to copy into the `drawList` triple buffer
   // (`worker/client-drawlist.ts`).
   drawlist_len: { role: 'client', params: 0, result: 'u32' },
-  // docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: encodes a
+  // M22 (`ABI_VERSION` 15 -> 16), sim role: encodes a
   // `SegmentHeader` (identity + base) into `RegionId.Persist`. `baseTick = 0xFFFF_FFFF` means
   // genesis; any other value is `Snapshot(Tick(baseTick))`.
   sim_segment_header: { role: 'sim', params: 2, result: 'len' },
-  // docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: starts a
+  // M22 (`ABI_VERSION` 15 -> 16), sim role: starts a
   // streaming snapshot of the current state at `(logSegment, logOffset)` -- the host owns the log
   // position (Planning decisions 4). `sim_snapshot_next` drains it afterward.
   sim_snapshot_begin: { role: 'sim', params: 2, result: 'status' },
-  // docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: copies the
+  // M22 (`ABI_VERSION` 15 -> 16), sim role: copies the
   // next block of the snapshot `sim_snapshot_begin` started into `RegionId.Persist`, `0` meaning
   // fully drained.
   sim_snapshot_next: { role: 'sim', params: 0, result: 'len' },
-  // docs/plan/22-persistence-log-and-snapshots.md (`ABI_VERSION` 15 -> 16), sim role: `1` if any
+  // M22 (`ABI_VERSION` 15 -> 16), sim role: `1` if any
   // put or logged record has happened since the last snapshot began draining, `0` otherwise (not a
   // `Status`: costs nothing, always answers, same shape as `sim_warm_one`/`drawlist_len`).
   sim_dirty: { role: 'sim', params: 0, result: 'u32' },
-  // docs/plan/22b-persistence-load-and-fs.md (`ABI_VERSION` 16 -> 17), sim role: begins decoding a
+  // M22b (`ABI_VERSION` 16 -> 17), sim role: begins decoding a
   // snapshot of `totalLen` bytes fed in blocks by `sim_restore_push`. Does not require
   // `sim_genesis` to have run (the whole point: this replaces it for a loaded world).
   sim_restore_begin: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/22b-persistence-load-and-fs.md: feeds the next `len` bytes of `RegionId.Persist`
+  // M22b: feeds the next `len` bytes of `RegionId.Persist`
   // (reused as a receive region) into the snapshot decode `sim_restore_begin` started.
   sim_restore_push: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/22b-persistence-load-and-fs.md: finishes a restore. `Status.Ok` writes `logSegment`/
+  // M22b: finishes a restore. `Status.Ok` writes `logSegment`/
   // `logOffset` (two LE `u32`) into `RegionId.Result`; `Status.Corrupt` if the snapshot never
   // finished decoding or its CRC failed; `Status.IdentityMismatch` if its identity differs.
   sim_restore_end: { role: 'sim', params: 0, result: 'status' },
-  // docs/plan/24b-upgrade-and-migration.md, sim role: begins the 0005 Upgrades sequence -- same
+  // M24b, sim role: begins the 0005 Upgrades sequence -- same
   // block protocol as `sim_restore_begin`, but never requires the decoded identity to match this
   // build's own.
   sim_upgrade_begin: { role: 'sim', params: 1, result: 'status' },
@@ -332,7 +332,7 @@ export const ABI_EXPORTS = {
   // regardless of outcome; `Status.SaveIncompatible` writes an `IncompatReason` byte at `Result[0]`
   // and leaves every stored byte untouched (Planning decisions 7).
   sim_upgrade_end: { role: 'sim', params: 0, result: 'status' },
-  // docs/plan/24b-upgrade-and-migration.md gate fix round 2 (`ABI_VERSION` 22 -> 23), sim role:
+  // M24b gate fix round 2 (`ABI_VERSION` 22 -> 23), sim role:
   // `persist::Identity::compare` for the genesis-replay fallback, which has no snapshot container
   // to feed `sim_upgrade_begin`/`push`/`end` at all (no snapshot has ever been written yet).
   // Reads `len` bytes of `RegionId.Persist` (reused as a receive region, same shape as
@@ -341,56 +341,56 @@ export const ABI_EXPORTS = {
   // then `MismatchReason as u8`: Schema=0/TickRate=1/Worldgen=2). `Status.Decode` if `stored`
   // fails to parse as an `Identity` at all.
   sim_identity_compare: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/22b-persistence-load-and-fs.md: begins replaying a segment's log tail from byte
+  // M22b: begins replaying a segment's log tail from byte
   // `offset` (a `Sim` must already exist, from `sim_restore_end` or `sim_genesis`).
   sim_replay_begin: { role: 'sim', params: 2, result: 'status' },
-  // docs/plan/22b-persistence-load-and-fs.md: feeds the next `len` bytes of `RegionId.Persist`
+  // M22b: feeds the next `len` bytes of `RegionId.Persist`
   // (reused as a receive region), applying every whole, CRC-valid frame it completes.
   // `Status.TornTail` once a block fails to decode -- not fatal for the currently open segment.
   sim_replay_push: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/22b-persistence-load-and-fs.md: finishes a replay (`Status.Ok`, or `Status.TornTail`
+  // M22b: finishes a replay (`Status.Ok`, or `Status.TornTail`
   // if any push hit a bad block).
   sim_replay_end: { role: 'sim', params: 0, result: 'status' },
-  // docs/plan/22b-persistence-load-and-fs.md: the byte offset, within the segment `sim_replay_begin`
+  // M22b: the byte offset, within the segment `sim_replay_begin`
   // named, just after the last frame whose CRC verified (not a `Status`: costs nothing, always
   // answers, same shape as `sim_dirty`).
   sim_replay_valid_end: { role: 'sim', params: 0, result: 'u32' },
-  // docs/plan/22b-persistence-load-and-fs.md: the sim's current tick, read after a restore/replay
+  // M22b: the sim's current tick, read after a restore/replay
   // (or a live `sim_genesis`) to learn the resume tick (0005 Loss windows). Same shape as
   // `sim_dirty`.
   sim_tick_now: { role: 'sim', params: 0, result: 'u32' },
-  // docs/plan/24-recovery-and-migration.md (`ABI_VERSION` 17 -> 18), sim role: begins the scan
+  // M24 (`ABI_VERSION` 17 -> 18), sim role: begins the scan
   // pass -- decodes a segment tail purely to collect `Skip { segment, offset }` targets, over the
   // same bytes a caller then feeds again to `sim_replay_begin`/`push`/`end` (the real apply pass).
   sim_replay_scan_begin: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/24-recovery-and-migration.md: feeds the next `len` bytes of `RegionId.Persist`
+  // M24: feeds the next `len` bytes of `RegionId.Persist`
   // (reused as a receive region, same shape as `sim_replay_push`) into the scan pass.
   sim_replay_scan_push: { role: 'sim', params: 1, result: 'status' },
-  // docs/plan/24-recovery-and-migration.md: finishes the scan pass; its own targets stay collected
+  // M24: finishes the scan pass; its own targets stay collected
   // for the `sim_replay_*` calls that follow.
   sim_replay_scan_end: { role: 'sim', params: 0, result: 'status' },
-  // docs/plan/24-recovery-and-migration.md (`ABI_VERSION` 17 -> 18), sim role: encodes one frame
+  // M24 (`ABI_VERSION` 17 -> 18), sim role: encodes one frame
   // holding a single `Skip { segment, offset }` record (`tick_delta = 0`, never a real elapsed
   // tick) into `RegionId.Persist`, the same "bytes written, or `-(status)`" shape as
   // `sim_seal_frame`/`sim_segment_header`. Needs no live `Sim`.
   sim_log_skip: { role: 'sim', params: 2, result: 'len' },
-  // docs/plan/24-recovery-and-migration.md, `engine/test` only: panics in whatever `Phase` the
+  // M24, `engine/test` only: panics in whatever `Phase` the
   // previous, successfully-completed export left the `Progress` region in (`Phase.Idle` after any
   // ordinary call, since this writes nothing of its own before panicking). Test-only by
   // convention: reached only through `engine/test`'s `trapSim`.
   sim_test_trap: { role: 'sim', params: 0, result: 'status' },
-  // docs/plan/26-prediction-rendering-and-clocks.md, Open gate failures item 3, gate round 1
+  // M26, Open gate failures item 3, gate round 1
   // (`ABI_VERSION` 24 -> 25), `engine/test` only: `ClientCore::predict_applied_ever` as one LE
   // `u32` into `Result` -- proves "a dispatched action was actually predicted `Applied`" as a
   // real assertion, the same shape `client_ui_stats` already set for "ui ran".
   client_predict_stats: { role: 'client', params: 0, result: 'status' },
-  // docs/plan/30-interpolation.md (`ABI_VERSION` 31 -> 32), `engine/test` only: the interpolation view
+  // M30 (`ABI_VERSION` 31 -> 32), `engine/test` only: the interpolation view
   // of remote players (52 LE bytes into `Result`; `Instance::client_presence_sample_at`'s doc).
   client_presence_sample_at: { role: 'client', params: 1, result: 'status' },
-  // docs/plan/30-interpolation.md (`ABI_VERSION` 32 -> 33): tab return, the client worker's answer to
+  // M30 (`ABI_VERSION` 32 -> 33): tab return, the client worker's answer to
   // `FLAG_REBASE` (`Instance::client_rebase`'s doc).
   client_rebase: { role: 'client', params: 0, result: 'status' },
-  // docs/plan/37b-device-loss.md (`ABI_VERSION` 38 -> 39): WebGPU device loss, the client worker's
+  // M37b (`ABI_VERSION` 38 -> 39): WebGPU device loss, the client worker's
   // answer to `FLAG_RENDERER_RESET` (`Instance::upload_requeue_all`'s doc).
   upload_requeue_all: { role: 'client', params: 0, result: 'status' },
 } as const satisfies Record<string, ExportSpec>

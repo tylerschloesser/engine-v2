@@ -1,4 +1,4 @@
-// `storage-opfs.html`'s own worker (docs/plan/23-persistence-opfs-and-lifecycle.md step 2, Tests
+// `storage-opfs.html`'s own worker (M23 step 2, Tests
 // added: `storage_conformance_opfs`): the OPFS adapter (0015 "sim worker: OPFS handles") only runs
 // inside a dedicated Worker in every browser this repo probed (step 1, Deviations), so the
 // conformance run and the pending-async hook test both happen here, posted back as one result.
@@ -13,7 +13,7 @@ type Result = {
 }
 
 /** Playwright WebKit's OPFS is not isolated per `launchPersistentContext` profile directory --
- * measured (docs/plan/23-persistence-opfs-and-lifecycle.md step 2, Deviations): a bare-key write
+ * measured (M23 step 2, Deviations): a bare-key write
  * from one test run was still readable from a brand-new temp profile in a wholly separate process.
  * Chromium and Firefox do not have this problem, but wiping unconditionally keeps this page's own
  * result independent of run history on every browser, not just the one that needs it. Real
@@ -33,7 +33,7 @@ async function runConformance(): Promise<string[]> {
   // stays open until that instance's `flush()` runs, which this helper never calls). Prebuilding one
   // instance per prefix, each its own worldId, sidesteps both problems. `conformance.ts` calls
   // `make()` exactly 8 times today; 10 is a small buffer.
-  // docs/plan/27-server-entrypoint-and-netcode-harness.md, Deviations: `conformance.ts`'s own new
+  // M27, Deviations: `conformance.ts`'s own new
   // `flush_then_reopen_sees_the_write` check (M27) is the 9th and 10th `make()` call and needs a
   // *shared* backing store across them (`fsStorage(dir)`'s own "same real filesystem" semantics) --
   // which a genuinely fresh, isolated 10th `opfsStorage()` instance cannot give without reopening
@@ -112,7 +112,7 @@ async function runPendingAsyncHook(): Promise<Record<string, boolean>> {
 }
 
 /**
- * Gate fix (docs/plan/23-persistence-opfs-and-lifecycle.md, "Open gate failures" 1, the real defect):
+ * Gate fix (M23, "Open gate failures" 1, the real defect):
  * `OpfsStorageAdapter.pendingAsync()` is a *take* -- `worker/sim.ts`'s body() hands the taken closure
  * to `shell.runAsync` and moves on, without itself awaiting it. The old `flush()` called
  * `pendingAsync()` a second time here, saw `null` (already taken), and resolved immediately while the

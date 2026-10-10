@@ -6,7 +6,7 @@
 // the median. Tracked files end byte-identical: restored in a `finally` and on SIGINT/SIGTERM, and
 // the script exits non-zero if `git status` is not clean for them afterward. Each target gets one
 // unmeasured warm-up run first. The 1-minute load average is printed beside every run: a number taken
-// at foreign load is an upper bound (docs/plan/30b-rust-rebuild-quick-wins.md, timing discipline).
+// at foreign load is an upper bound (M30b, timing discipline).
 import { execFileSync, spawn } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { cpus, loadavg } from 'node:os'

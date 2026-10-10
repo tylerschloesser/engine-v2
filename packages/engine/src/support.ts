@@ -1,5 +1,5 @@
-// `checkSupport()` (docs/plan/06b-workers-and-spawn.md, Planning decisions "`checkSupport` minimum"):
-// synchronous facts plus a module-worker probe, plus (docs/plan/09-renderer-terrain.md) an async
+// `checkSupport()` (M06b, Planning decisions "`checkSupport` minimum"):
+// synchronous facts plus a module-worker probe, plus (M09 an async
 // `requestAdapter()` probe for `no-adapter`. M35 made the list final: `limits-too-low` (a limit the
 // renderer needs, named in `message`) and a `warnings` array (`no-opfs`, `no-web-locks`).
 //
@@ -81,7 +81,7 @@ export async function checkSupport(): Promise<SupportReport> {
   if (!gpu?.gpu) {
     failures.push({ code: 'no-webgpu', message: 'navigator.gpu is not present' })
   } else {
-    // `no-adapter` (docs/plan/09-renderer-terrain.md, Scope: "fills in `checkSupport`'s
+    // `no-adapter` (M09, Scope: "fills in `checkSupport`'s
     // `no-adapter`"): the same `ADAPTER_REQUEST` `initDevice()` uses, so this reports exactly what a
     // real `initDevice()` call would hit.
     const adapter = await gpu.gpu.requestAdapter(ADAPTER_REQUEST)

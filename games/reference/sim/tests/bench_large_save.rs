@@ -1,5 +1,5 @@
 //! `slow_tick_large_save` and `slow_snapshot_large_save` (docs/decisions/0020 section 9, 0010 "Tick
-//! CPU budget"; docs/plan/36-slow-tier-and-benchmarks.md step 4): wall-clock benchmarks of the
+//! CPU budget"; M36 step 4): wall-clock benchmarks of the
 //! standard large save at full scale, **release profile**. The slow nextest profile builds the dev
 //! profile, so under it each test re-runs itself as `cargo test --release -p reference-sim --test
 //! bench_large_save -- --exact <name>` (the inner run measures, prints one `BENCH_SAMPLE <json>`

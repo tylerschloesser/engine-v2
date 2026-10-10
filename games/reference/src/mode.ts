@@ -1,4 +1,4 @@
-// Mode selection (docs/plan/34-reference-multiplayer.md Scope): an invite in the URL fragment
+// Mode selection (M34 Scope): an invite in the URL fragment
 // (`#k=<joinKey>`, `readInvite`) means "play on the server this page was served with"; without one
 // the page runs a world of its own in this browser. Kept apart from `main.ts` so a test entry and a
 // DOM-free unit test can call it.

@@ -1,5 +1,5 @@
 // `terrain.html`: the readback probe scene host for `tests/browser/terrain-readback.spec.ts`
-// (docs/plan/09-renderer-terrain.md Tests added). Steps 2-4 of this milestone: device init, the
+// (M09 Tests added). Steps 2-4 of this milestone: device init, the
 // shader and bind groups, a hand-filled page/indirection texture -- no worker, no ABI instance
 // (Deviations: the real ring-driven data path is step 5's).
 
@@ -28,7 +28,7 @@ let renderer: TerrainRenderer | undefined
 /** `patch_one_texel`'s own scratch ring (`terrain.patch_one_texel`, Tests added): a real
  * `uploadRing`-shaped SAB, driven by hand-built records instead of a worker, so `render/upload.ts`'s
  * CHUNK/PATCH handling is proven directly without needing a full `createClient()` topology for a
- * single-record test (docs/plan/09-renderer-terrain.md Deviations "Steps 5-7"). */
+ * single-record test (M09 Deviations "Steps 5-7"). */
 let ringSab: SharedArrayBuffer | undefined
 let ringProducer: RingProducer | undefined
 

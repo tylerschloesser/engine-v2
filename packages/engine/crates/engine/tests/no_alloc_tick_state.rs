@@ -1,4 +1,4 @@
-//! `tick_state_steady_no_alloc` (docs/plan/21b-timers-wakeups-and-tickcx.md Tests added, Budgets
+//! `tick_state_steady_no_alloc` (M21b Tests added, Budgets
 //! "Allocation: `tick_state_steady_no_alloc`"). Own test binary (mirrors `no_alloc_terrain.rs`/
 //! `no_alloc_authority.rs`): a `#[global_allocator]` only counts allocations made inside the binary
 //! that installs it. A steady population of entities continuously re-schedules its own timer
@@ -176,7 +176,7 @@ fn tick_state_steady_no_alloc() {
     sim.authority_mut().clear_changes();
 
     // `Authority::changes()` (the `ChangeLog`) is a real host driver's own responsibility to clear
-    // every tick (`Host::seal`, docs/plan/15-connection-and-subscriptions.md) -- this test drives
+    // every tick (`Host::seal`, M15 -- this test drives
     // `Sim` directly with no `Host`, so it must do the same, or an unrelated, ever-growing `Vec` of
     // undrained deltas would swamp the one thing this test measures: the timer wheel's own
     // steady-state churn.

@@ -1,4 +1,4 @@
-// `pnpm gc [software|flat|reliability] [-t pattern]` (docs/plan/04-zero-gc-harness.md, Seams): local
+// `pnpm gc [software|flat|reliability] [-t pattern]` (M04, Seams): local
 // invocations of the `gc` Playwright project that `pnpm test` never runs itself. With no mode: the
 // `gc` project once, hardware/tunnel (the default `measure()` uses), for local iteration. `software`
 // sets `GC_MODE=software` (the software-adapter arithmetic of 0016 caveat b). `flat` sets

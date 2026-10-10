@@ -3,7 +3,7 @@
 // as a `u64` on the wire, indistinguishable from one that was always `u64`), so it stays a review
 // rule, backed by this source scan: a regex scan, not a parser, over every `.rs` file under
 // `packages/engine/crates/*/src`, `packages/engine/fixtures/*/src` and `games/*/sim/src`
-// (docs/plan/05-codec-and-state-hash.md, Tests added).
+// (M05, Tests added).
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'

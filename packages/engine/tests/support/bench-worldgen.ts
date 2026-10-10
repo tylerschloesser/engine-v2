@@ -1,5 +1,5 @@
 // The worldgen-bench loop (docs/decisions/0008-chunk-generation.md §6; Planning decisions 6 of
-// docs/plan/08-worldgen-and-gen-worker.md): shared by the Node slow test
+// M08: shared by the Node slow test
 // (`tests/wasm/worldgen-bench.test.ts`) and the phone-openable `worldgen-bench.html`, so both
 // measure the identical chunk sequence against `fixtures/worldgen/golden/bench.json`'s pinned
 // hash. Its only runtime import is `src/test/fnv.ts` (BigInt only), so a plain runtime can load it

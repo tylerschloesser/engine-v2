@@ -1,4 +1,4 @@
-//! `landmarks_fixture_current` (docs/plan/20-reference-game-v0.md Provides, Planning decisions
+//! `landmarks_fixture_current` (M20 Provides, Planning decisions
 //! "Landmarks fixture"): recomputes the nearest land tile and the nearest tile of each resource to
 //! the origin from `RefWorldgen` at `TEST_SEED`, and fails -- naming the fixture to update -- if
 //! `../tests/fixtures/landmarks.json` (this crate's `CARGO_MANIFEST_DIR` is `games/reference/sim`,

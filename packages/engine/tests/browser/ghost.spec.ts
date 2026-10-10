@@ -1,4 +1,4 @@
-// docs/plan/18-picking-and-overlay.md Tests added (steps 7-8): `ghost.mouse_tracks_cursor_tile`,
+// M18 Tests added (steps 7-8): `ghost.mouse_tracks_cursor_tile`,
 // `ghost.touch_tap_then_confirm`. Drives `ghost.html` (a real, connected `fx-overlay` client: real
 // camera/picking/overlay plus a real WASM `extract()` drawing the cursor-anchored ghost, 0019
 // "Cursor tile and ghost").

@@ -1,4 +1,4 @@
-//! [`LeadEstimator`] (docs/plan/26-prediction-rendering-and-clocks.md Planning decisions "Lead
+//! [`LeadEstimator`] (M26 Planning decisions "Lead
 //! estimation"): "Sample per ack = `ack.tick − auth_tick_at_dispatch`: pure tick arithmetic, no
 //! wall clock. Lead = median of the last 8 samples, clamped to 1..=40 ticks. Before the first
 //! sample: 1, or `ceil(rtt / tick) + 1` once seeded." Drives `ClientCore::set_lead` (Seams).

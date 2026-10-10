@@ -1,4 +1,4 @@
-// `topology.html`'s script (docs/plan/06b-workers-and-spawn.md, Tests added): builds a real
+// `topology.html`'s script (M06b, Tests added): builds a real
 // `createClient()` and exposes a small debug API `workers.spec.ts`/`start.spec.ts` drive through
 // `page.evaluate`, since a `Client`'s own shape (`ready`, `destroy`) is not itself serialisable
 // across the CDP boundary Playwright's `page.evaluate` return value crosses.
@@ -32,7 +32,7 @@ type CreateOptions = {
   genWorkers?: number
   test?: ClientOptions['test']
   /** Pattern B (0017 §3): `start.worker_blocked_error` points this at a worker script served
-   * without COEP (docs/plan/06b-workers-and-spawn.md, Tests added). */
+   * without COEP (M06b, Tests added). */
   createWorker?: () => Worker
 }
 
@@ -50,7 +50,7 @@ declare global {
      * spec that reaches into a worker with `worker.evaluate()` parks first. */
     __park?: () => Promise<void>
     __resume?: () => Promise<void>
-    /** docs/plan/11-camera-and-input.md (M11, this range's own extension of this page): builds the
+    /** M11 ( this range's own extension of this page): builds the
      * fixed input-state objects (`PointerSlots`/`KeyState`/`WheelState`) and a `CameraIntegrator`,
      * and attaches them to `__client` (`engine/test.attachCameraInputTestHooks`) so
      * `__injectPointer`/`__injectWheel`/`__injectKey` and `__tickCamera` below can drive it. */
@@ -82,7 +82,7 @@ declare global {
 window.__createClient = (opts = {}) => {
   const canvas = document.createElement('canvas')
   // `world` is structurally valid but otherwise inert: `test.game` (below) overrides every
-  // worker's real config (docs/plan/13-sim-host-tick-loop.md, Scope "createClient local host"),
+  // worker's real config (M13, Scope "createClient local host"),
   // same as before this milestone's real `WorldConfig` type replaced the old `{ game }` stub.
   const host: ClientOptions['host'] = opts.host ?? {
     kind: 'local',

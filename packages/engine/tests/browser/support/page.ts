@@ -1,4 +1,4 @@
-// The page contract every browser spec uses (docs/plan/03-browser-harness.md, Seams): navigate,
+// The page contract every browser spec uses (M03, Seams): navigate,
 // assert cross-origin isolation, and fail the test on any page error or console error. A worker's
 // own JS errors reach here through the page's `pageerror`/`console` events too (an unhandled
 // rejection or exception inside a module worker surfaces the same way as on the page); the harness
@@ -35,7 +35,7 @@ export function allowDeviceLoss(page: Page): void {
 }
 
 export interface OpenPageOptions {
-  /** docs/plan/24-recovery-and-migration.md: a page that deliberately traps a WASM instance (a real
+  /** M24: a page that deliberately traps a WASM instance (a real
    * panic recovery test) triggers the loader's own default `onPanic` (`console.error`, `loader.ts`)
    * on purpose -- this predicate, matched against `msg.text()`, is the one, narrow way to keep that
    * expected line from failing the test while every *unexpected* console error still does. Omitted

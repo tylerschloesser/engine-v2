@@ -1,4 +1,4 @@
-// `handshake.ts` unit tests (docs/plan/28-sessions-and-reconnect.md steps 1-2). Reject bytes are
+// `handshake.ts` unit tests (M28 steps 1-2). Reject bytes are
 // checked byte-identical against the same native golden file `session::tests::golden_reject`
 // blesses (`crates/engine/tests/golden/session_reject.hex`) -- the milestone's own "Reject golden
 // bytes are identical from the TS builder and the Rust parser" exit criterion, both halves against

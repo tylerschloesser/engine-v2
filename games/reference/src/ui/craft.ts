@@ -1,4 +1,4 @@
-// `createCraftUi` (docs/plan/32-reference-crafting.md Scope): the crafting menu. Hidden until
+// `createCraftUi` (M32 Scope): the crafting menu. Hidden until
 // `Ui.recipes` is non-empty (the unlock is sim state, `rules::craft::update_unlocks`); one button
 // per listed recipe; a button is disabled while a craft runs or the recipe is unaffordable; while
 // `Ui.crafting` names a button's recipe it fills over the remaining time -- one CSS animation,

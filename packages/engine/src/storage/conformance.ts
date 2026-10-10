@@ -49,7 +49,7 @@ export async function runStorageConformance(make: () => Storage): Promise<string
   }
 
   {
-    // docs/plan/22b-persistence-load-and-fs.md Planning decision 1: "adapters must accept `append`
+    // M22b Planning decision 1: "adapters must accept `append`
     // after `write` on one key" -- and the reverse, `append` then `write` then `append` again, is
     // exactly the torn-tail-truncation shape (`Persistence.loadLatest`: `storage.write(keys.log(seg),
     // logBytes.subarray(0, validEnd))` truncates a segment's log, and the tick path keeps appending
@@ -124,7 +124,7 @@ export async function runStorageConformance(make: () => Storage): Promise<string
   }
 
   {
-    // docs/plan/27-server-entrypoint-and-netcode-harness.md, Deviations: the fsStorage durability
+    // M27, Deviations: the fsStorage durability
     // defect (`a471a41`) this check is written to catch -- `flush()` resolving before a `write()`/
     // `delete()` it should have waited on has actually landed, so a fresh instance opened over the
     // same backing store right after `flush()` reads stale (missing) data. `make()` must return a

@@ -1,10 +1,10 @@
 // The control block: one `SharedArrayBuffer` shared by every thread (docs/decisions/0015-threads-
-// memory-and-topology.md §2 "Wake-ups"; docs/plan/06-sab-primitives-and-workers.md, Planning
+// memory-and-topology.md §2 "Wake-ups"; M06, Planning
 // decisions "Control-block layout"). `Int32Array[64]`: four global words, then seven 8-word
 // per-worker blocks (four used). The wake word is per *consumer thread*, not per ring (0024 §10):
 // a worker with several input rings still blocks on one address.
 
-// docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Deviations): `CB_LINK_STATE`/
+// M29 steps 1-2 (Deviations): `CB_LINK_STATE`/
 // `CB_LINK_GEN` below were planned as "global words 4-5" (M06's own original layout: "4-7
 // reserved"), but every one of those four words was claimed by an intervening milestone
 // (`CB_TEST_CONTROL` 4, `CB_SIM_STEP_REQ` 5, `CB_SIM_TICKS_RUN` 6, `CB_FORCE_SNAPSHOT_REQ` 7) long
@@ -23,13 +23,13 @@ export const CB_LIFECYCLE = 1
 export const CB_FRAME_REQ = 2
 export const CB_FLAGS = 3
 /** Test-only negative-control target, read only by a worker whose setup carried `test.gcHook`
- * (docs/plan/06b-workers-and-spawn.md, orchestrator decision 2: no new `postMessage` type for the
+ * (M06b, orchestrator decision 2: no new `postMessage` type for the
  * zero-GC hook). `0` = no control armed; else `((workerIndex + 1) << 8) | kind`, `kind` a
  * `StepControl`-shaped value (1 = object, 2 = burst) applied by `src/worker/gc-hook.ts`. One global
  * word, not per-worker: `zeroGcSuite` arms at most one isolate's control at a time. */
 export const CB_TEST_CONTROL = 4
 /**
- * The sim worker's own step-tick request word (docs/plan/13-sim-host-tick-loop.md, Scope: "A
+ * The sim worker's own step-tick request word (M13, Scope: "A
  * `CB_*` step-tick request word serves `stepTick`"), the same monotonic-counter shape as
  * `CB_FRAME_REQ` (`worker/client.ts`'s own `frameReq !== lastFrameReq` idiom): a caller
  * `Atomics.add`s the number of ticks wanted, then wakes `WORKER_HOST`; `worker/sim.ts`'s `body()`
@@ -42,12 +42,12 @@ export const CB_SIM_STEP_REQ = 5
 /**
  * The sim worker's own `SimHostCounters.ticksRun`, mirrored by `worker/sim.ts`'s `body()` after
  * every pass (one `Atomics.store` of a Smi, allocation-free) so a test can watch real-time pacing
- * advance from main without parking the worker (docs/plan/16d-sim-pacing-under-external-wakes.md,
+ * advance from main without parking the worker (M16d,
  * step 1: a park/resume per sample would itself perturb the pacing under test). Read-only for
  * everyone but the sim worker. One global word, same reasoning as `CB_SIM_STEP_REQ`. */
 export const CB_SIM_TICKS_RUN = 6
 /**
- * docs/plan/23-persistence-opfs-and-lifecycle.md step 6: the sim worker's own force-a-snapshot-now
+ * M23 step 6: the sim worker's own force-a-snapshot-now
  * request word, the same monotonic-counter shape as `CB_SIM_STEP_REQ` (a caller `Atomics.add`s 1,
  * then wakes `WORKER_HOST`; `worker/sim.ts`'s `body()` diffs it against what it last saw and calls
  * `persistence.snapshotNow()` once, unconditionally -- bypassing `sim_dirty()`'s own cadence guard,
@@ -83,14 +83,14 @@ export const Ready = { No: 0, Yes: 1, Dead: 2 } as const
 export type Ready = (typeof Ready)[keyof typeof Ready]
 
 /**
- * docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Seams): appended after the per-worker
+ * M29 steps 1-2 (Seams): appended after the per-worker
  * region (this file's own header comment above `CONTROL_BLOCK_INT32S`), indices 64-65. Written only
  * by the `net`-kind worker (`worker/net.ts`), mirroring its own `createLink`'s `LinkState`/`gen`
  * exactly (`net/link.ts`): `CB_LINK_STATE` holds the same numeric values as that module's own
  * `LinkState` (`Down = 0, Up = 1, Stopped = 2`) -- not imported here (`sab/` stays below `net/` in
  * the dependency order), just numerically identical by construction, so `worker/net.ts` can write
  * `link.state` straight into this word with no translation. `CB_LINK_GEN` counts every dial of
- * every `Link` the net worker builds (docs/plan/30c-ci-reds-after-m30.md: not `createLink`'s own
+ * every `Link` the net worker builds (M30c: not `createLink`'s own
  * per-`Link` generation, which restarts at 1 on a version-mismatch `retry`). Read by the
  * `client`-kind worker (`worker/client-net.ts`, only when `SetupMessage.remoteLinked` is set) to
  * decide when it is safe to send `client_hello()` for the first time over a multiplayer topology --
@@ -103,7 +103,7 @@ export const CB_LINK_STATE = 64
 export const CB_LINK_GEN = 65
 
 /**
- * docs/plan/36-slow-tier-and-benchmarks.md step 6: the bench HUD's worker timings (appended after
+ * M36 step 6: the bench HUD's worker timings (appended after
  * `CB_LINK_GEN`, indices 66-68; same reasoning as that pair). Written only by a worker whose setup
  * carried `test.timing` (the bench build's page, never a shipped one): the client worker after each
  * `frame()` call (`CB_CLIENT_FRAME_US` = the call's duration in whole microseconds, then
@@ -116,7 +116,7 @@ export const CB_CLIENT_FRAME_N = 67
 export const CB_SIM_TICK_US = 68
 
 /**
- * docs/plan/39o-large-save-tick-breakdown.md: the parts of that same timed pass (indices 69-73), written
+ * M39o: the parts of that same timed pass (indices 69-73), written
  * by the sim worker before `CB_SIM_TICK_US`, only under `test.timing`. Whole microseconds each:
  * `CB_SIM_SEAL_US` (`sim_seal_frame`), `CB_SIM_ONETICK_US` (`sim_tick`), `CB_SIM_FRAME_US` (the frame
  * build and send over every connection), all three of the pass's own paced tick (catch-up ticks
@@ -130,7 +130,7 @@ export const CB_SIM_RESYNC_US = 72
 export const CB_SIM_CATCHUP = 73
 
 /**
- * docs/plan/39y-wasm-tick-cost.md: the phases of that `sim_tick` (`bench_phase.rs`'s `Phase`, ids 1-13;
+ * M39y: the phases of that `sim_tick` (`bench_phase.rs`'s `Phase`, ids 1-13;
  * word `CB_SIM_PHASE0 + id`), whole microseconds, written beside `CB_SIM_ONETICK_US` under
  * `test.timing`. Zero unless the module was built with cargo feature `bench-phases` (the bench build).
  */
@@ -145,7 +145,7 @@ export const PROFILE_RESYNC = 3
 export const PROFILE_CATCHUP = 4
 export const PROFILE_SLOTS = 5
 
-// Worker indexes (docs/plan/06-sab-primitives-and-workers.md, Seams).
+// Worker indexes (M06, Seams).
 export const WORKER_CLIENT = 0
 export const WORKER_HOST = 1 // sim or net
 export const WORKER_GEN0 = 2
@@ -184,7 +184,7 @@ export class ControlBlock {
    * lose a wake-up: if `wake()` already ran between the caller's own load and this call,
    * `Atomics.wait` sees the mismatch and returns immediately instead of blocking.
    *
-   * Deliberately returns nothing (docs/plan/11-camera-and-input.md step 7, Deviations, "fix 1"):
+   * Deliberately returns nothing (M11 step 7, Deviations, "fix 1"):
    * `runBlockingLoop` used to discard this method's own return value and then re-read the same
    * word a second time with its own separate `Atomics.load` one line later -- a genuine redundant
    * native call on every single wake, removed here (the caller now does the one load it always

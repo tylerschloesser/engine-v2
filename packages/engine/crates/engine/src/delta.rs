@@ -36,7 +36,7 @@ pub enum Delta<G: Game> {
         who: PlayerId,
         online: bool,
     },
-    /// Engine-only, seventh variant (docs/plan/12b-world-access-and-sim-driver.md Deviations):
+    /// Engine-only, seventh variant (M12b Deviations):
     /// the host's per-player last-processed `seq` (0004) is a field of `Store`'s `PlayerSlot`
     /// (M12: "`last_seq` is sim state"), and `Store::apply` is that state's only mutator, so
     /// `Authority` reaches it through this variant rather than a private backdoor. Never sent to a

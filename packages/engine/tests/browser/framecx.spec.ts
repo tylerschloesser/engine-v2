@@ -1,4 +1,4 @@
-// docs/plan/18-picking-and-overlay.md Tests added (this cut's own share, steps 4-6): `framecx.
+// M18 Tests added (this cut's own share, steps 4-6): `framecx.
 // tap_visible_in_frame`, `framecx.emit_visible_in_frame`. Drives `framecx.html` (`fixtures/overlay`'s
 // real WASM `ClientSide::frame`, module doc comment of `pages/src/framecx.ts`): the one thing steps
 // 1-3's own hand-filled-SAB precedent (`real-camera.html`, no WASM) cannot prove -- that an event

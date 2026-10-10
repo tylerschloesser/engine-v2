@@ -1,4 +1,4 @@
-//! docs/plan/22-persistence-log-and-snapshots.md Exit criteria: "The native log written by step 3
+//! M22 Exit criteria: "The native log written by step 3
 //! and the log written by the Node host for the same script are byte-identical
 //! (`log_bytes_native_equals_wasm`)." Step 3's own recorded log (`persist_fixture_log.hex`) was
 //! built by directly pushing a hand-picked `Record::Player{Joined}` through testkit

@@ -1,4 +1,4 @@
-// Which `dist/*.js` files a set of exports-map subpaths reach (docs/plan/35-packaging-and-adapters.md,
+// Which `dist/*.js` files a set of exports-map subpaths reach (M35,
 // size test): relative `import`/`export ... from` specifiers plus `new URL('./x.js', import.meta.url)`
 // (how `client.js` reaches `worker-auto.js`). Comments are stripped first: a specifier in prose is not
 // an edge.

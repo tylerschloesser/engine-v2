@@ -1,6 +1,6 @@
 // `localStorage` save/restore (docs/decisions/0019-camera-input-and-overlay.md §1: "The camera is
 // saved to `localStorage` when motion ends and on `visibilitychange`, and restored at start.";
-// docs/plan/11-camera-and-input.md Scope: "localStorage save/restore under `engine.camera.
+// M11 Scope: "localStorage save/restore under `engine.camera.
 // <ClientOptions.cameraKey ?? 'default'>`"; Planning decisions "Persistence key": "`engine:camera:
 // v1:<'local' | remote URL>`; world identity (M23) can refine the suffix later without migration").
 //

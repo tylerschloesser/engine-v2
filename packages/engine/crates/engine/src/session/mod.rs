@@ -1,5 +1,5 @@
 //! Handshake codecs (docs/decisions/0013-sessions-and-integrity.md "Handshake";
-//! docs/plan/28-sessions-and-reconnect.md steps 1-2): `Hello`, `Welcome`, `Reject`, `Bye`.
+//! M28 steps 1-2): `Hello`, `Welcome`, `Reject`, `Bye`.
 //!
 //! `Hello`/`Reject` open with a **frozen prefix** (`magic u32 · protocol_version u16 · build_hash
 //! [u8; 32]`, 38 bytes, layout never changes) whose first wire byte (`magic`'s low byte, since
@@ -145,7 +145,7 @@ fn read_varint_len(r: &mut ByteReader<'_>) -> Result<usize, WireError> {
 /// Reads a 0013 `resume?` block (`resume_present u8 · resume?{epoch u32 · last_tick u32 · n
 /// varint x (dx i16, dy i16, version u32)}`) directly off `r`, the exact layout [`write_hello`]
 /// writes right after `Hello`'s own `CameraReport` -- factored out of [`read_hello`] so
-/// `host::Host::attach` (docs/plan/28b-reconnect-and-lifecycle.md step 5) can decode the same
+/// `host::Host::attach` (M28b step 5) can decode the same
 /// bytes out of `sim_attach`'s own `hello_tail` (`CameraReport` bytes then this, forwarded
 /// verbatim by the TS handshake), without re-deriving the byte layout a second time.
 pub fn read_resume_tail(r: &mut ByteReader<'_>) -> Result<Option<ResumeHint>, WireError> {
@@ -317,7 +317,7 @@ pub struct Welcome<'a, G: Game> {
     pub last_processed_action_seq: u32,
     pub presence: Option<&'a G::Presence>,
     /// The `HASH_ALL` flag: the host sends a hash for every subscribed chunk in every frame
-    /// (docs/plan/31b-desync-hashes.md), so this client keeps dump files on a mismatch.
+    /// (M31b, so this client keeps dump files on a mismatch.
     pub hash_all: bool,
 }
 

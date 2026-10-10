@@ -1,4 +1,4 @@
-//! `extract_hash_player_circle` (docs/plan/20b-reference-player-and-collect-ui.md Tests added):
+//! `extract_hash_player_circle` (M20b Tests added):
 //! a DrawList hash golden (0020 §6a) proving `RefClient::extract` keeps producing the same
 //! `circle` + `ring` bytes for a fixed spring position -- a native byte-format golden distinct
 //! from `pnpm golden`'s cross-runtime scenario kind (this crate has no ABI-facing driver for it

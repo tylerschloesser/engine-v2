@@ -1,4 +1,4 @@
-// Test-only worker for `control.test.ts`'s `control.no_lost_wakeup` (docs/plan/06-sab-primitives-
+// Test-only worker for `control.test.ts`'s `control.no_lost_wakeup` (M06
 // and-workers.md, Planning decisions "The wake word is per consumer thread"). Loops the exact
 // pattern `waitForWake` exists for: load the wake word, check the real condition (`CB_FRAME_REQ`
 // reaching a target the main thread also bumps), and only block if it has not; a wake that raced

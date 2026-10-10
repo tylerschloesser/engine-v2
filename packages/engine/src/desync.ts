@@ -1,4 +1,4 @@
-// The desync report as games see it (docs/plan/37-robustness-events.md step 4, `client.onDesync`):
+// The desync report as games see it (M37 step 4, `client.onDesync`):
 // the TS mirror of M31b's `integrity::DesyncReport`, read from the client instance's ring
 // (`client_desync(index)`, 40 little-endian bytes into `Result`: `count u32` (total ever), `retained
 // u32`, then the `index`th retained report, oldest first: `tick u32`, `scope u32` (0 Chunk, 1

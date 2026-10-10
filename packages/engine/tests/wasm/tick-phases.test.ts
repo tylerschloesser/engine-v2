@@ -1,4 +1,4 @@
-// `tick-phases @slow` (docs/plan/39y-wasm-tick-cost.md steps 2-3): `sim_tick` of the standard large
+// `tick-phases @slow` (M39y steps 2-3): `sim_tick` of the standard large
 // save split by phase under Node, from the release `bench` module. The module imports
 // `engine.bench_mark(phase)` (cargo feature `bench-phases`, bench builds only); a hook reads the host
 // clock and attributes the time since the previous mark. The same phase ids, sampling and overhead

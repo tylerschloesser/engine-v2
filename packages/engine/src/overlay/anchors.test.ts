@@ -1,4 +1,4 @@
-// docs/plan/18-picking-and-overlay.md Tests added: `overlay.rebase_math`, `overlay.align_offsets`.
+// M18 Tests added: `overlay.rebase_math`, `overlay.align_offsets`.
 // Pure math only, no DOM (`vitest.config.ts`'s `unit` project runs `environment: 'node'`) -- exactly
 // the functions `createOverlay`'s stateful per-frame code calls, exercised directly.
 import { expect, test } from 'vitest'

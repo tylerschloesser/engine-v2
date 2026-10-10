@@ -1,4 +1,4 @@
-// `mp.html`'s script (docs/plan/29-net-worker-and-reference-server.md Scope): a real multiplayer
+// `mp.html`'s script (M29 Scope): a real multiplayer
 // `createClient()` topology (`host: { kind: 'remote' }`, fixture `puts`, M16's action fixture) --
 // `slice.html`'s own HUD/Paint-control precedent, plus the link state and `?linklog=1`'s on-page
 // `client.debug.linkLog()` view. Unlike `slice.ts` (a real device page with real camera/input),
@@ -54,7 +54,7 @@ declare global {
      * terrain after. */
     __mpProbeCenterPixel?: () => Promise<{ r: number; g: number; b: number; a: number }>
     __mpHudText?: () => string
-    /** docs/plan/33f: what `mp/remote_client_configures_from_welcome` reads: how many gen workers
+    /** M33f: what `mp/remote_client_configures_from_welcome` reads: how many gen workers
      * exist now, and the page's own timeline in ms since page start (`null` = not yet). */
     /** Chunk results the gen workers have pushed to this client (their result rings' counters). */
     __mpGenDelivered?: () => number
@@ -161,7 +161,7 @@ const clientOptions: ClientOptions = {
   genWorkers: 1,
   assets: { tiles: '/terrain/tiles.json' },
   // No `test.game`: the client and its gen workers take the world's seed and params from
-  // `Welcome` (ADR 0042, docs/plan/33f), unless `?testGame=1` asks for the old escape hatch.
+  // `Welcome` (ADR 0042, M33f, unless `?testGame=1` asks for the old escape hatch.
   ...(genDelayMs > 0 ? { test: { genSpawnDelayMs: genDelayMs } } : {}),
   ...(holdIndicator ? { test: { scheduler: holdingScheduler } } : {}),
   ...(testGame
@@ -190,7 +190,7 @@ if (blockedWorker) {
 
 const client: Client = createClient(clientOptions)
 
-// docs/plan/33f: the timeline `mp/remote_client_configures_from_welcome` reads. Listeners are
+// M33f: the timeline `mp/remote_client_configures_from_welcome` reads. Listeners are
 // attached before anything can settle: `Welcome` applied (`online`), the gen workers up
 // (`untilConfigured`), the first reveal (polled).
 const timeline: { welcomeMs: number | null; genUpMs: number | null; revealedMs: number | null } = {
@@ -300,7 +300,7 @@ if (workersReady) {
     clock: systemClock,
     scheduler: systemScheduler,
     onCamera,
-    // docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): the one real page
+    // M29 Scope ("Reveal gate"): the one real page
     // this milestone wires it into -- `client.revealed()` straight through, no page-owned state.
     revealed: () => client.revealed(),
   })
@@ -395,7 +395,7 @@ window.__mpHudText = hudText
 window.__errors = () => device.errors()
 window.__adapterInfo = () => device.adapterInfo
 
-// --- `window.__check` (docs/plan/39f-device-auto-runner.md, step 8) -------------------------------------
+// --- `window.__check` (M39f, step 8) -------------------------------------
 // `linkEvents` stamps every `client.onLink` transition with the wall clock (the link log has none), which
 // is what M29's per-drop timing reads for a drop that happens with the page in front of the person.
 const linkEvents: { state: string; t: number }[] = []

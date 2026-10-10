@@ -1,4 +1,4 @@
-// `hidden-tab-upload.html`'s script (docs/plan/20c-client-ack-freeze-under-untilquiescent.md, the
+// `hidden-tab-upload.html`'s script (M20c, the
 // "production question": can a client worker reach the same frozen-ack state a hidden tab would
 // also produce, since a hidden tab's own `FrameLoop.pause()` -- 0018 §8's own backgrounding rule,
 // `attachVisibilityHandling` -- stops exactly the "upload" phase (`frame-loop.ts`'s `tick()`) that

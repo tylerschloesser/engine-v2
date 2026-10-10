@@ -1,4 +1,4 @@
-// `reference_golden_replay` (docs/plan/34b-reference-scripted-single-player.md Tests added): the
+// `reference_golden_replay` (M34b Tests added): the
 // full-game golden log of the reference game (`games/reference/tests/golden/full-game.log`, recorded
 // by `pnpm --filter reference golden:record`) replayed as `.wasm` under Node; every checkpoint hash
 // must match, and a mismatch names the first divergent tick. Native leg: `reference-sim`'s

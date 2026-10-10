@@ -1,4 +1,4 @@
-// `gc-drawables.html`'s script (docs/plan/17-drawlist-and-sprites.md step 6, Tests added: "page id
+// `gc-drawables.html`'s script (M17 step 6, Tests added: "page id
 // `drawables` through `zeroGcSuite` (fixture with a few hundred entities, panning, actions from
 // pre-encoded bytes; isolates `main`, `client`, `sim`, `gen0`)"): `gc-slice.ts`'s own real,
 // connected, panning + dispatched-action topology, over `fx-drawables` instead of `fx-puts`, with
@@ -60,7 +60,7 @@ declare global {
       instanceBytes: number
       drawListDropped: number
     }
-    /** Test-only, outside `engine/test` (docs/plan/17-drawlist-and-sprites.md Tests added:
+    /** Test-only, outside `engine/test` (M17 Tests added:
      * `drawlist.triple_newest_wins`, `counters.draws_equal_nonempty_layers`; docs/plan/
      * 18-picking-and-overlay.md gate round 1: `drawlist.picker_matches_renderer_frame_seq`): every
      * read goes through `drawListSlot` (the client's own single `DrawListSlot`/`TripleReader`,
@@ -88,7 +88,7 @@ declare global {
       /** `frame_seq` of the slot `acquire()`/`acquireAndDraw()` last read, off `drawablesRenderer`
        * itself (what got uploaded to the GPU). */
       frameSeq(): number
-      /** docs/plan/18-picking-and-overlay.md gate round 1: `frame_seq` off the *same* `DrawListSlot`
+      /** M18 gate round 1: `frame_seq` off the *same* `DrawListSlot`
        * object (`clientTestHandle(client).drawListSlot`), read independently of `drawablesRenderer`
        * -- `drawlist.picker_matches_renderer_frame_seq` compares this against `frameSeq()` above to
        * prove picking and rendering see the same frame every time, not just that each one works. */
@@ -185,7 +185,7 @@ await pumpUntilLive(client)
 // own new setup-time population loop exposed).
 const harness = asHarness(client)
 
-// docs/plan/18-picking-and-overlay.md gate round 1: the renderer takes the client's own single
+// M18 gate round 1: the renderer takes the client's own single
 // `DrawListSlot` (`ClientTestHandle.drawListSlot`) and never builds its own `TripleReader` -- `drive`
 // below calls `client.pick.acquire()` once, before `drawablesRenderer.acquire()`, the same order
 // `frame-loop.ts`'s own `acquire`/`render` phases use. Kept as its own binding (not just inlined into
@@ -199,7 +199,7 @@ const drawablesRenderer: DrawablesRenderer = await createDrawablesRenderer(devic
 })
 attachDrawables(renderer, drawablesRenderer)
 
-// docs/plan/17b-sprites-and-frame-budget.md fix round 1: "loads the atlas into the real renderer".
+// M17b fix round 1: "loads the atlas into the real renderer".
 // One-time setup (0016 §2), like `loadTileArt` above -- `setSpriteAtlas` only swaps texture/bind-
 // group references, never touched again inside `drive()`.
 const spriteAtlas = await loadSpriteAtlas(device.device, assets.sprites, {
@@ -224,7 +224,7 @@ cameraState.halfExtentTilesY = POPULATE_HALF_EXTENT
 // every one lands in a subscribed chunk from the very first tick. One-time setup (0016 §2): every
 // dispatch/tick pair below runs *before* `installGcPage`, outside any measured window.
 //
-// Fix round 1 (docs/plan/17-drawlist-and-sprites.md, coordinator review): spread across three
+// Fix round 1 (M17, coordinator review): spread across three
 // layers with a gap (0, 3, 7 -- layers 1/2/4/5/6 stay empty), not all on layer 0
 // (`fx-drawables`' own genesis entities are, unchanged -- `layer` defaults to `0` on `Entity`).
 // `counters.draws_equal_nonempty_layers` needs this to have more than one non-empty layer to prove
@@ -236,7 +236,7 @@ const POPULATE_COUNT = 300
 const GRID_COLS = 20
 const GRID_SPACING = 4
 const POPULATE_LAYERS = [0, 3, 7]
-// docs/plan/17b-sprites-and-frame-budget.md fix round 1: "draws some" -- every 10th populated
+// M17b fix round 1: "draws some" -- every 10th populated
 // entity draws as a sprite (`sprite_id::QUAD`) instead of a circle, 30 of the 300, so the measured
 // window's own DrawList genuinely contains sprite-kind records, not just circles.
 const SPRITE_EVERY = 10
@@ -356,7 +356,7 @@ window.__drawablesGcCounters = () => ({
 // independent `TripleReader` over the same `drawList` SAB (`sab/triple.ts`'s own `acquire()` mutates
 // shared triple-buffer state on every call, so two readers racing each other tear the "current front
 // slot" handoff; found by this page's own first draft, Deviations, and again -- live in production,
-// this time -- at docs/plan/18-picking-and-overlay.md's gate round 1).
+// this time -- at M18's gate round 1).
 window.__drawablesTest = {
   resume() {
     return resumeWorkers(client)

@@ -1,5 +1,5 @@
 // What a page for any fixture other than `hash` loads through, since one plugin instance serves one
-// crate (docs/plan/02b-vite-plugin.md, "One plugin instance = one crate"). Shaped exactly like
+// crate (M02b, "One plugin instance = one crate"). Shaped exactly like
 // `virtual:engine/wasm`'s `EngineWasm` so a page cannot tell the two apart.
 import type { EngineWasm } from 'virtual:engine/wasm'
 

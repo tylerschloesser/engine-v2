@@ -1,4 +1,4 @@
-// `pnpm device:walk` serve-time mount (docs/plan/39f-device-auto-runner.md step 2), against real `vite
+// `pnpm device:walk` serve-time mount (M39f step 2), against real `vite
 // preview` processes of the fixture app's own build output (`pnpm test`'s `pages` step builds it):
 //  - with `ENGINE_WALK_PORT` every HTML page carries the agent tag (COOP/COEP headers intact), and
 //    `/__walk` -- http and WebSocket -- reaches the phone API through the preview's own proxy;

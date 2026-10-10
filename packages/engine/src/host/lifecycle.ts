@@ -1,4 +1,4 @@
-// Grace + idle world lifecycle (docs/plan/28b-reconnect-and-lifecycle.md step 4;
+// Grace + idle world lifecycle (M28b step 4;
 // docs/decisions/0013-sessions-and-integrity.md "A disconnected player's state" / "World
 // lifecycle"). A pure state machine over an injected `Clock`/`Scheduler` -- the same "one
 // dead-timer/probe/backoff state machine on an injected Clock/Scheduler" shape `net/link.ts`'s own

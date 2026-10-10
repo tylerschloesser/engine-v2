@@ -1,8 +1,8 @@
-//! Noise helpers for `RefWorldgen` (docs/plan/20-reference-game-v0.md Order of work step 2;
+//! Noise helpers for `RefWorldgen` (M20 Order of work step 2;
 //! Planning decisions "Noise helpers stay in the game crate (`sim/src/noise.rs`)").
 //!
 //! **Deviation** (recorded in full under this brief's Deviations): that planning decision predates
-//! `engine::noise` (docs/plan/08-worldgen-and-gen-worker.md), which now exists as an *optional*
+//! `engine::noise` (M08, which now exists as an *optional*
 //! module -- "a game's `Worldgen` impl may use", dropped by LTO if unused -- and which the
 //! `fx-worldgen` fixture already calls directly. Reimplementing f64 simplex fBm here would
 //! duplicate that exact, already-`.claude/rules/determinism.md`-compliant algorithm; this file

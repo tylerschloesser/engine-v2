@@ -1,9 +1,9 @@
-//! `Sim<G>` (docs/plan/12b-world-access-and-sim-driver.md Scope): the host driver. `genesis` builds
+//! `Sim<G>` (M12b Scope): the host driver. `genesis` builds
 //! a fresh world and runs `Game::genesis` once at tick 0; `step` runs one frame's recorded inputs
 //! in 0004 order (`on_player`, or `apply` then the host's per-player `last_seq = seq`), then
 //! `Game::tick`, then advances the tick.
 //!
-//! `timers`/`wake`/`active` (docs/plan/21b-timers-wakeups-and-tickcx.md): the timer wheel, wake
+//! `timers`/`wake`/`active` (M21b: the timer wheel, wake
 //! queue and per-system active lists `Store` holds as sim state (0007 §7); `Authority`/`TickCx`
 //! (`crate::authority`) are the only callers, so every type here is `pub(crate)`.
 
@@ -22,7 +22,7 @@ use crate::worldgen::{Pristine, Worldgen};
 /// 0007 §8's host cache budget default (1,024 chunks = 4 MiB at the default 32x32 chunk size).
 /// Not part of [`WorldParams`]: 0009's `WorldConfig.params` only lists the state-budget fields
 /// this milestone's Scope names, and `cacheChunks` is a separate, host-only knob there.
-/// `pub(crate)` since docs/plan/22b-persistence-load-and-fs.md: `host::Host`'s own restore path
+/// `pub(crate)` since M22b: `host::Host`'s own restore path
 /// builds an identical shell `Store` (the cache is excluded from a snapshot, so its capacity is
 /// inert either way -- reusing this constant just keeps the two shells built the same way).
 pub(crate) const DEFAULT_CACHE_CHUNKS: u32 = 1024;
@@ -38,7 +38,7 @@ pub struct WorldParams<G: Game> {
 }
 
 // Bounded on the worldgen params' own `Clone` (mirrors `Record<G>`'s manual `Clone` above):
-// `testing::heavy` (docs/plan/22-persistence-log-and-snapshots.md) needs two independent geneses
+// `testing::heavy` (M22 needs two independent geneses
 // from one `WorldParams` value (an uninterrupted run and a save/restore run, both from the same
 // seed and params).
 impl<G: Game> Clone for WorldParams<G>
@@ -105,14 +105,14 @@ pub enum Rejected<G: Game> {
 
 /// 0004 Decision, verbatim: `RateLimited` (admission, never reaches `apply`), `StateBudgetFull`
 /// (0007 §8's check), `EngineFault` (0005 skip-record recovery). None is produced by this
-/// milestone (docs/plan/12b-world-access-and-sim-driver.md Non-scope). `Serialize` (docs/plan/
+/// milestone (M12b Non-scope). `Serialize` (docs/plan/
 /// 16-action-round-trip.md): a rejected action's result JSON (`client.onActionResult`) needs to
 /// encode this half of `Rejected<G>`, tagged `{"Engine":<this>}` -- `game_instance::
 /// push_result_record` keeps `Rejected<G>`'s own `Game`/`Engine` level in the JSON rather than
 /// flattening it away (orchestrator ruling at the M16 gate): 0004's Decision defines `Rejected<G>`
 /// as exactly this two-variant enum, and collapsing the tag would make a game's own reject variant
 /// indistinguishable from the engine's by name alone once `RateLimited` (M31) and `StateBudgetFull`
-/// (M21) are real. `TS` (docs/plan/16-action-round-trip.md step 4), deliberately **without**
+/// (M21) are real. `TS` (M16 step 4), deliberately **without**
 /// `#[ts(export)]`: `EngineReject` is engine-side, not a `G::Reject`, and ts-rs's own derive macro
 /// puts its `export_bindings_<type>` test in the crate that derives `TS` -- `engine` here, not a
 /// downstream game crate -- so `cargo test export_bindings` run from `fixtures/puts` (0017 §5's own
@@ -142,7 +142,7 @@ pub struct Outcome<G: Game> {
     pub result: Result<Applied, Rejected<G>>,
 }
 
-/// The host driver (docs/plan/12b-world-access-and-sim-driver.md Scope). Wraps one [`Authority`]
+/// The host driver (M12b Scope). Wraps one [`Authority`]
 /// and runs `Game`'s hooks against it in 0004 order.
 pub struct Sim<G: Game> {
     authority: Authority<G>,
@@ -153,7 +153,7 @@ impl<G: Game> Sim<G> {
     /// once, at tick 0 (0003). `Store::new` needs a `G::Global` value before `Game::genesis`'s own
     /// first `put_global` overwrites it, and `G::Global` carries no `Default` bound in the `Game`
     /// trait itself (`crate::store`'s doc comment) -- this is the one caller that needs one, so the
-    /// bound lives here rather than on `Game` (docs/plan/12b-world-access-and-sim-driver.md
+    /// bound lives here rather than on `Game` (M12b
     /// Deviations).
     pub fn genesis(params: WorldParams<G>) -> Self
     where
@@ -236,7 +236,7 @@ impl<G: Game> Sim<G> {
                         self.authority.store().entity_count(),
                         self.authority.store().modified_tile_count(),
                     );
-                    // The undo journal (docs/plan/21b-timers-wakeups-and-tickcx.md Planning
+                    // The undo journal (M21b Planning
                     // decisions, adopted -- `authority::UNDO_JOURNAL_ADOPTED`'s own doc comment has
                     // the measured numbers): always records, so a rejecting `apply` that wrote can
                     // be rolled back below instead of only asserted against.
@@ -260,7 +260,7 @@ impl<G: Game> Sim<G> {
                 }
             }
         }
-        // The fixed point (0007 §7; docs/plan/21b-timers-wakeups-and-tickcx.md Scope): swap the
+        // The fixed point (0007 §7; M21b Scope): swap the
         // wake queue at the start of `G::tick`, compact every active list's tombstones and drop
         // whatever the wake queue's `now` list still holds at the end of it.
         use crate::bench_phase::{Phase as Bp, mark};
@@ -290,10 +290,10 @@ impl<G: Game> Sim<G> {
         &self.authority
     }
 
-    /// Wraps an already-built `Authority` (docs/plan/22-persistence-log-and-snapshots.md
+    /// Wraps an already-built `Authority` (M22
     /// `testing::replay`/`testing::heavy`, restoring from a decoded snapshot via
     /// `Authority::from_snapshot`): the counterpart to [`Sim::genesis`] that skips building a
-    /// fresh world. Plain `pub` since docs/plan/22b-persistence-load-and-fs.md: `host::Host::
+    /// fresh world. Plain `pub` since M22b: `host::Host::
     /// sim_restore_end` is now a genuine production caller (the same "un-gated, real production
     /// caller now exists" move M22 steps 4-6 already made for `Authority::rng`).
     pub fn from_parts(authority: Authority<G>) -> Self {

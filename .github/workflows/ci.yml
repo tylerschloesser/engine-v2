@@ -1,4 +1,4 @@
-# docs/plan/10-ci-workflow.md. One job, `ubuntu-latest`, SwiftShader WebGPU (docs/decisions/
+# M10. One job, `ubuntu-latest`, SwiftShader WebGPU (docs/decisions/
 # 0020-testing-strategy.md §6, §10). `pnpm lint`, `pnpm test` (fast tier), `pnpm test:slow`
 # (Order of work step 5): three-browser determinism (ADR 0026: `pnpm test` alone no longer proves
 # it), every production page's `burst` negative control, the Linux `fs.watch` rebuild test.
@@ -50,7 +50,7 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      # cargo-nextest, prebuilt binary at the pin of 0017 §10 (docs/plan/01-scaffolding.md decision
+      # cargo-nextest, prebuilt binary at the pin of 0017 §10 (M01 decision
       # (c): "M10 installs the same pin in CI with a prebuilt-binary action").
       - name: Install cargo-nextest
         uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2
@@ -63,7 +63,7 @@ jobs:
         with:
           bun-version: 1.4.2
 
-      # `deno-adapter @slow` (docs/plan/35b-bun-and-deno-adapters.md): Deno is best-effort (0009), so
+      # `deno-adapter @slow` (M35b: Deno is best-effort (0009), so
       # its version is pinned here only, not in 0017 §10's table. `REQUIRE_DENO` (slow step below)
       # makes the test fail, not warn `deno-missing`, if this step ever stops providing it.
       - name: Install Deno
@@ -71,7 +71,7 @@ jobs:
         with:
           deno-version: 2.9.6
 
-      # `build: wasm-opt changes hash and sets game.json @slow` (docs/plan/35-packaging-and-adapters.md,
+      # `build: wasm-opt changes hash and sets game.json @slow` (M35,
       # 0017 §5): binaryen's release tarball, pinned by version and SHA-256 (the value its release page
       # publishes beside the file), put on PATH. `REQUIRE_WASM_OPT` (slow step below) makes the test
       # fail, not warn `wasm-opt-missing`, if this step ever stops providing it. Same version as the
@@ -114,7 +114,7 @@ jobs:
         run: pnpm lint
 
       # --budget-scale 1000: no suite can fail on time here (0020 §10; timings are recorded, never
-      # gating). --timings-json: docs/plan/10-ci-workflow.md Seams.
+      # gating). --timings-json: M10 Seams.
       - name: pnpm test
         env:
           CI: 'true'

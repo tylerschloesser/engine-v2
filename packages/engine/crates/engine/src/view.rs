@@ -1,5 +1,5 @@
 //! View geometry shared by generation and subscriptions (docs/decisions/0008-chunk-generation.md
-//! §5, `docs/plan/08b-gen-workers-and-queue.md` Seams): [`visible_rect`] turns a camera's centre
+//! §5, `M08b` Seams): [`visible_rect`] turns a camera's centre
 //! and half extent into a chunk rectangle; [`lookahead_chunks`] is the look-ahead function
 //! generation and 0010's subscriptions share ("the chunks that 0010's look-ahead subscribes beyond
 //! ring 1"); [`nearest_first`] orders a chunk rect nearest-first (offered to M13's `host::warm`).
@@ -31,7 +31,7 @@ pub fn visible_rect(
     ChunkRect::new(dims.chunk_of(min), dims.chunk_of(max))
 }
 
-/// docs/plan/17-drawlist-and-sprites.md Seams: `FrameView::visible()` ("visible rectangle plus a
+/// M17 Seams: `FrameView::visible()` ("visible rectangle plus a
 /// 2-tile margin"). Tile-space counterpart of [`visible_rect`] (chunk-space): floors `[center -
 /// half_extent - margin, center + half_extent + margin]` to tile boundaries per axis, then clamps
 /// into the valid tile range -- same float/clamp shape as `visible_rect`, one level finer.
@@ -55,7 +55,7 @@ pub fn visible_tile_rect(
 /// that axis. `velocity` is Q24.8 tiles/second (the same units `GenQueue`'s `GenView::velocity`
 /// carries); only its sign matters here. `dims` is accepted for symmetry with the rest of this
 /// module's signatures and to leave room for a future chunk-size-aware shape; unused today
-/// (`docs/plan/08b-gen-workers-and-queue.md` Deviations: 0008 §5 does not pin an exact algorithm
+/// (`M08b` Deviations: 0008 §5 does not pin an exact algorithm
 /// down beyond "at most 2 extra chunks", so this is this milestone's own reading, shared verbatim
 /// by generation and M10's subscriptions).
 pub fn lookahead_chunks(

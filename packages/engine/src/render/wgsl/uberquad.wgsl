@@ -24,7 +24,7 @@ struct DrawFrame {
 }
 @group(0) @binding(0) var<uniform> frame: DrawFrame;
 
-// Sprite atlas + sprite table (docs/plan/17b-sprites-and-frame-budget.md Scope, Planning decisions
+// Sprite atlas + sprite table (M17b Scope, Planning decisions
 // "Sprite table in data textures, not uniforms"): `atlas_tex` is the padded, 2-mip sprite sheet
 // (`render/atlas.ts`); `sprite_rect_tex`/`sprite_pivot_size_tex` are the 64x64 `rgba32float` data
 // textures a sprite id addresses at `(id % 64, id / 64)` with `textureLoad` (unfilterable in
@@ -52,7 +52,7 @@ const SPRITE_TABLE_EDGE: u32 = 64u;
 const SPRITE_MAX_LOD: f32 = 1.0; // SPRITE_MIP_LEVEL_COUNT - 1
 
 /// `SCREEN_PX_STROKE`'s own fixed on-screen width (device pixels), applied to `KIND_RING`'s band
-/// thickness -- the one kind here with a natural "stroke" (docs/plan/17-drawlist-and-sprites.md
+/// thickness -- the one kind here with a natural "stroke" (M17
 /// steps 4-6 Deviations: the brief names the flag but not which kind(s) use it). 6, not a thinner
 /// value: the AA transition (`aa`, below) is itself roughly 1 real screen pixel wide per edge, so a
 /// band has to be several times that to leave any pixel at full unblended coverage for a probe.
@@ -70,7 +70,7 @@ struct VOut {
   @location(3) @interpolate(flat, either) flags: u32,
   @location(4) param: f32,
   @location(5) @interpolate(flat, either) stroke_uv: f32,
-  // Sprite-only (docs/plan/17b-sprites-and-frame-budget.md steps 1-3): `sprite_rect` is frame 0's own
+  // Sprite-only (M17b steps 1-3): `sprite_rect` is frame 0's own
   // atlas rect in pixels (`fs_main` offsets it by the frame index); `sprite_world_size` is the
   // sprite's own size in tiles (`sprites.json`'s `size`) -- both looked up once per vertex from the
   // sprite tables (below) rather than a second `textureLoad` per fragment. Zero for every other kind.
@@ -112,7 +112,7 @@ fn vs_main(
     hidden = frame.cursor_valid == 0u;
   }
 
-  // Sprite kind (docs/plan/17b-sprites-and-frame-budget.md steps 1-3): geometry is built from the
+  // Sprite kind (M17b steps 1-3): geometry is built from the
   // *unflipped* quad uv and the sprite's own pivot/size (looked up by sprite id, low 12 bits of
   // `kind_layer_flags` -- 0018 §2's own packing), never from `uv`/`inst_size` above -- `FLIP_X`
   // mirrors only the *sampled* texture (`sample_uv`, passed to `fs_main` as `out.uv`), never the
@@ -202,7 +202,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
   } else if (in.kind == KIND_GHOST) {
     alpha = 0.5;
   } else if (in.kind == KIND_SPRITE) {
-    // Sprite sampling (docs/plan/17b-sprites-and-frame-budget.md steps 1-3; binding rule: anchor the
+    // Sprite sampling (M17b steps 1-3; binding rule: anchor the
     // magnified path on `floor(texel + 0.5)`, never `floor(texel)` -- `docs/plan/
     // 09b-terrain-art-and-lifecycle.md` Deviations "Fix round 2" found the inverted form saturates to
     // a shared texel *edge* instead of the texel's own centre, blending ~50/50 with the neighbour

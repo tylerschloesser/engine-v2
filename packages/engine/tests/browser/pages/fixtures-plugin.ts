@@ -15,7 +15,7 @@ const REFERENCE_BUILD = fileURLToPath(
 )
 const PREFIX = '/fixtures/'
 
-// `start.not_isolated_error`/`start.worker_blocked_error` (docs/plan/06b-workers-and-spawn.md,
+// `start.not_isolated_error`/`start.worker_blocked_error` (M06b,
 // Tests added; 0015 §3): both need a page served without the isolation headers this app's normal
 // routes always carry (`vite.config.ts`'s `preview.headers`), which only a route terminating its
 // own response before Vite's own header middleware can produce (the same trick as `serve` above,

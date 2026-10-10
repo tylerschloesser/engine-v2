@@ -1,4 +1,4 @@
-// The clock block (docs/decisions/0015 §2 "clocks"; docs/plan/16-action-round-trip.md Scope): a
+// The clock block (docs/decisions/0015 §2 "clocks"; M16 Scope): a
 // seqlock-guarded SAB record the client worker writes after each `on_frame` (`worker/
 // client-net.ts`); main reads it synchronously from `dispatch()` and, in production, from the
 // per-rAF UI-ring drain and (M16b) `client.clock()`. Same hand-rolled shape as `camera/block.ts`
@@ -9,7 +9,7 @@
 // `sab/layout.ts`'s `createSeqlock(CLOCK_BLOCK_DATA_BYTES)` backs `SabSet.clockBlock` with 32
 // data bytes (8 `u32` slots: M06's own sizing, "M16 owns the field layout"). M16/M16b used the
 // first six: `authoritativeTick, predictedTick, ticksPerSecond, sessionState, seqSeed, ackSeq`.
-// docs/plan/26-prediction-rendering-and-clocks.md steps 4-6 claims the seventh, `tickFraction`
+// M26 steps 4-6 claims the seventh, `tickFraction`
 // (an `f32`, not a tick count -- `ClientCore::tick_fraction`'s own `HostClock`-derived value,
 // `client_clock_stats`'s newly widened result). The eighth (offset 28) stays reserved for
 // `revealed` (M28).
@@ -26,7 +26,7 @@ export const CLOCK_OFF_ACK_SEQ = 20
 /** M26 steps 4-6: an `f32`, read/written through a `Float32Array` view over the same bytes (every
  * other field here is a `u32`). */
 export const CLOCK_OFF_TICK_FRACTION = 24
-/** docs/plan/28-sessions-and-reconnect.md Seams: "the `revealed` clock-block word" -- the eighth
+/** M28 Seams: "the `revealed` clock-block word" -- the eighth
  * and last slot the 32-byte data region has room for (this file's own module doc comment: "stays
  * reserved for `revealed`"). `0`/`1` as a `u32` (`ClientCore::revealed()`'s own boolean, crossed
  * the same "numbers only" way every other field here is): true once every chunk of the visible
@@ -36,9 +36,9 @@ export const CLOCK_OFF_REVEALED = 28
 /** Bytes of all eight fields this file owns -- the whole 32-byte data region. */
 export const CLOCK_FIELDS_BYTES = 32
 
-/** `session_state` (docs/plan/28-sessions-and-reconnect.md Seams, extending M16's `0 Connecting, 1
+/** `session_state` (M28 Seams, extending M16's `0 Connecting, 1
  * Live`): `0 Handshaking | 1 Online | 2 Rejected(reason) | 3 Superseded | 4 Resyncing`
- * (docs/plan/28b-reconnect-and-lifecycle.md step 2). `Handshaking`/`Online` keep M16's own `0`/`1`
+ * (M28b step 2). `Handshaking`/`Online` keep M16's own `0`/`1`
  * values (`Connecting`/`Live` renamed, not renumbered) so a reader that only ever compared against
  * `1` for "live" is unaffected. `Resyncing` is set the instant a second `Welcome` is detected on an
  * already-`Online` connection (0005 "clients see `Resyncing`, then the reconnect-style full
@@ -62,7 +62,7 @@ export type ClockFields = {
   ackSeq: number
   /** M26 steps 4-6: real from this milestone on (`ClientCore::last_tick_fraction`). */
   tickFraction: number
-  /** docs/plan/28-sessions-and-reconnect.md: `0`/`1`, `ClientCore::revealed()`'s own value. */
+  /** M28: `0`/`1`, `ClientCore::revealed()`'s own value. */
   revealed: number
 }
 
@@ -79,7 +79,7 @@ export class ClockBlockView {
   /** M26 steps 4-6: the one non-`u32` field here -- a plain `Float32Array` view over the same SAB
    * bytes, same construction shape as every other field. */
   private readonly tickFraction: Float32Array
-  /** docs/plan/28-sessions-and-reconnect.md: `ClientCore::revealed()`'s own `u32` (`0`/`1`). */
+  /** M28: `ClientCore::revealed()`'s own `u32` (`0`/`1`). */
   private readonly revealed: Uint32Array
   private readonly bytes: Uint8Array
   private readonly scratch: Uint8Array
@@ -199,10 +199,10 @@ export function readClockBlockInto(block: ClockBlockView, out: Uint32Array): boo
  * and the same order `writeClockBlock` writes them). */
 /** A little-endian `f32` read from `u8[off..off+4)`, bit-reinterpreted, no `DataView`
  * (`.claude/rules/hot-paths.md`): `client-net.ts`'s own reader for `client_clock_stats`'s widened
- * result (docs/plan/26-prediction-rendering-and-clocks.md steps 4-6, `tick_fraction`). Built once
+ * result (M26 steps 4-6, `tick_fraction`). Built once
  * per owner (its own constructor, the same "created at setup" shape every SAB view in this file
  * already uses) and reused on every call; not in `sab/bytes.ts` alongside `readU32LE` because
- * `sab.no_alloc_syntax` (docs/plan/06-sab-primitives-and-workers.md) bans a bare top-level `new`
+ * `sab.no_alloc_syntax` (M06 bans a bare top-level `new`
  * anywhere under `src/sab/**` outside a constructor/`create*` factory, and a scratch `Float32Array`
  * view has nowhere to live there except as exactly that -- this file is outside that scan. */
 export class F32Reader {
@@ -227,6 +227,6 @@ export const CLOCK_FIELD = {
   AckSeq: 5,
   // Slot 6 is `tickFraction`'s raw bits (an `f32`, read back through `scratchFieldsFloatView()`,
   // never through `out` as if it were a plain `u32` -- this map deliberately has no entry for it).
-  /** docs/plan/28-sessions-and-reconnect.md: `ClientCore::revealed()`, `0`/`1`. */
+  /** M28: `ClientCore::revealed()`, `0`/`1`. */
   Revealed: 7,
 } as const

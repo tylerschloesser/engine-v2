@@ -1,5 +1,5 @@
 //! `TerrainFeed`: the ABI-facing wrapper around `GenQueue` a client instance embeds beside its own
-//! `TerrainStore` (`docs/plan/08b-gen-workers-and-queue.md` Seams; M15's client core does the same
+//! `TerrainStore` (`M08b` Seams; M15's client core does the same
 //! beside the replica's store). `on_frame` runs the queue step every `frame` call (Planning
 //! decisions 3); `take`/`deliver` encode and decode the `genRequest`/`genResult` records (Planning
 //! decisions 1) that the `gen_take`/`gen_deliver` ABI exports (`abi/mod.rs`) copy to and from the

@@ -1,4 +1,4 @@
-// `world.html`'s own tests (docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4): the sim
+// `world.html`'s own tests (M23 steps 3-4): the sim
 // worker's real OPFS-backed startup order (Web Lock -> OPFS probe -> `Persistence.open` -> tick
 // loop), `WorldBusy`, `durable: false`, `client.onStorage`, `navigator.storage.persist()` (Planning
 // decision 5), and the hidden/visible clean boundary. Chromium only (no `@engines`): the OPFS
@@ -249,7 +249,7 @@ test('world_survives_reload', async ({ page }) => {
   // hash at a small, shared tick count, measured while developing this test.)
   expect(resumed.tick).toBeGreaterThanOrEqual(beforeReload.tick)
 
-  // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: `exportWorld` + `replayWorld`, not
+  // M23 step 5: `exportWorld` + `replayWorld`, not
   // `world-dump-worker.ts`'s own raw OPFS walk (step 3-4's stand-in, its own doc comment: "Step 5
   // should delete this file once `exportWorld` covers the same need" -- kept, not deleted, since
   // `paced_session_lands_periodic_snapshots` still needs `__dumpWorldStorage` for a real,

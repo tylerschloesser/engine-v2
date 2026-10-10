@@ -1,4 +1,4 @@
-// `engine/test`'s `gen` namespace (docs/plan/08b-gen-workers-and-queue.md, Seams: `gen.stats`,
+// `engine/test`'s `gen` namespace (M08b, Seams: `gen.stats`,
 // `gen.idle`, `gen.chunkHash`), built on `callParked` (orchestrator decision 1 at the step-5
 // boundary): the client instance recomputes `GenStats` and answers `client_chunk_hash` inside its
 // own non-shared WASM memory (0015 §4: no shared WASM memory, ever), unreachable from main except

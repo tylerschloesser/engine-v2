@@ -5,18 +5,18 @@
 //! encoded); `Global` is one game-defined value plus the engine roster's online bits (0011,
 //! `Delta::Roster`, 0024 §8).
 //!
-//! Canonical order (docs/plan/12-store-and-game-trait.md Scope "in the order 0005 'Snapshot'
+//! Canonical order (M12 Scope "in the order 0005 'Snapshot'
 //! lists for the engine section"): player table, id counters, `Global`, terrain
 //! (`TerrainStore::write_canonical`), entities. `Tick` and `SimRng` are not fields here -- 0005's
 //! engine section lists them before the player table, but they are the host driver's state
 //! (`Authority`, M12b), not the replicated `Store` the Goal of this milestone names ("tile
 //! overlays, entities, players, global"); M22 stitches the full snapshot together. Placing
-//! `Global` is this module's own choice, recorded in docs/plan/12-store-and-game-trait.md
+//! `Global` is this module's own choice, recorded in M12
 //! Deviations: 0005 does not name where the single `Global` value sits among "player table, id
 //! counters, overlays, entities", so it goes beside the player table it is broadcast alongside
 //! (0011 "Scopes": `Global` and `Player` are both "sent in full on every connect").
 //!
-//! docs/plan/21b-timers-wakeups-and-tickcx.md widens this to 0007 §7's own three structures --
+//! M21b widens this to 0007 §7's own three structures --
 //! active lists, timers, and the wake queue's `next` list -- placed after entities: 0005's own
 //! "Snapshot" line lists them in exactly that order ("... entities, active lists and timers in
 //! canonical order"). The wake queue is not named in 0005 (which predates it); it goes last of all,
@@ -46,7 +46,7 @@ use index::ChunkIndex;
 /// The chunks (and each chunk-local tile index) a footprint anchored at `anchor` overlaps, under
 /// `dims` (0007 §5: at most 4, since `Registry::add_prototype` asserts footprint <= chunk edge).
 /// Always driven by the `Store`'s own `TerrainStore::dims()` rather than a separately derived
-/// `ChunkDims::new(G::CHUNK_BITS)` (docs/plan/21-entities-and-timers.md Deviations "One dims,
+/// `ChunkDims::new(G::CHUNK_BITS)` (M21 Deviations "One dims,
 /// always the terrain's own"): a handful of this crate's own pre-M21 unit tests build a
 /// `TerrainStore` at a different `ChunkDims` than their test `Game::CHUNK_BITS` default, which
 /// never mattered before `ChunkIndex`'s fixed-size bitset existed to index out of bounds over it.
@@ -77,7 +77,7 @@ pub(crate) fn footprint_rect(anchor: TilePos, footprint: Footprint) -> TileRect 
     )
 }
 
-/// One player's replicated state (docs/plan/12-store-and-game-trait.md Planning decisions):
+/// One player's replicated state (M12 Planning decisions):
 /// `last_seq` is sim state (0004) and `online` is the engine roster bit (`Delta::Roster`, 0024
 /// §8), so both are encoded and hashed alongside the game-defined `state`.
 pub struct PlayerSlot<G: Game> {
@@ -86,7 +86,7 @@ pub struct PlayerSlot<G: Game> {
     pub online: bool,
 }
 
-/// The replicated state (Goal of docs/plan/12-store-and-game-trait.md): tile overlays, entities,
+/// The replicated state (Goal of M12: tile overlays, entities,
 /// players, global. `Store::apply` is its only mutator, on both the host and every client replica
 /// (0011).
 pub struct Store<G: Game> {
@@ -101,7 +101,7 @@ pub struct Store<G: Game> {
     players: BTreeMap<PlayerId, PlayerSlot<G>>,
     global: G::Global,
     /// Trait tables + entity prototypes (0007 §6, §5), built once by `Game::register` at
-    /// construction (M21, docs/plan/21-entities-and-timers.md Deviations: moved here from
+    /// construction (M21, M21 Deviations: moved here from
     /// `Authority`/`Replica`, which each built and held their own copy before this milestone, so
     /// `Store::apply` can consult footprints for `ChunkIndex` maintenance without `apply`'s own
     /// signature growing a `&Registry` parameter -- a `Provides`-changing rename this milestone
@@ -182,7 +182,7 @@ impl<G: Game> Store<G> {
                 let new_anchor = G::anchor(entity);
                 let new_fp = self.registry.footprint(G::prototype(entity));
                 // Skip the index churn entirely when neither the anchor nor the footprint moved
-                // (docs/plan/21b-timers-wakeups-and-tickcx.md Deviations "Unconditional index
+                // (M21b Deviations "Unconditional index
                 // churn on every EntityPut"): a property-only update -- which every tick-rule put
                 // through `TickCx` is, since 0007 §7's own timer/wake/active machinery never moves
                 // an entity -- previously removed and immediately re-added the same occupancy
@@ -228,7 +228,7 @@ impl<G: Game> Store<G> {
             }
             Delta::Roster { who, online } => {
                 // No slot: 0024 §8's roster changes only through logged connection events, and
-                // `on_player(.., Joined)` always `put_player`s first (docs/plan/12-store-and-
+                // `on_player(.., Joined)` always `put_player`s first (M12
                 // game-trait.md Planning decisions -- M12b asserts this), so a missing slot here
                 // means the event stream itself is malformed. `apply` never fails (0003: it is
                 // infallible, unlike `Game::apply`), so this is a harmless, idempotent no-op
@@ -238,7 +238,7 @@ impl<G: Game> Store<G> {
                 }
             }
             Delta::Ack { who, seq } => {
-                // Same no-slot convention as `Roster` (docs/plan/12b-world-access-and-sim-
+                // Same no-slot convention as `Roster` (M12b
                 // driver.md Deviations): `apply` never fails, so a missing slot is a harmless,
                 // idempotent no-op rather than a panic.
                 if let Some(slot) = self.players.get_mut(who) {
@@ -308,7 +308,7 @@ impl<G: Game> Store<G> {
     }
 
     /// `TickCx::player_count` (M12b): the player table's size, for index-based iteration (Planning
-    /// decisions of docs/plan/12b-world-access-and-sim-driver.md: "index-based so rules can write
+    /// decisions of M12b: "index-based so rules can write
     /// while iterating").
     pub fn player_count(&self) -> usize {
         self.players.len()
@@ -329,7 +329,7 @@ impl<G: Game> Store<G> {
     /// Calls `f` for every id of `ids` (ascending) that names a stored entity, in order: what a
     /// loop of [`Store::entity`] over `ids` yields. When the ids lie close together in id space
     /// (a chunk filled in one go) it walks the map's leaves once instead of searching the tree from
-    /// the root for each id (docs/plan/39ag); otherwise it falls back to the lookups.
+    /// the root for each id (M39ag; otherwise it falls back to the lookups.
     pub fn for_each_entity_in(&self, ids: &[EntityId], mut f: impl FnMut(EntityId, &G::Entity)) {
         let (Some(&first), Some(&last)) = (ids.first(), ids.last()) else {
             return;
@@ -356,14 +356,14 @@ impl<G: Game> Store<G> {
 
     /// Every entity in ascending id order (`BTreeMap`'s own iteration order, 0022 §1's `Ord`).
     /// Additive accessor beyond M12's own Provides list, like `terrain()`/`next_entity_id()`
-    /// (docs/plan/12-store-and-game-trait.md Deviations): nothing needed to enumerate every entity
+    /// (M12 Deviations): nothing needed to enumerate every entity
     /// before `wire::encode_chunk_snapshot` (M14), which scans them to find those anchored to one
     /// chunk.
     pub fn entities(&self) -> impl Iterator<Item = (EntityId, &G::Entity)> + '_ {
         self.entities.iter().map(|(&id, e)| (id, e))
     }
 
-    /// The entity table itself, ascending `EntityId` order (docs/plan/17-drawlist-and-sprites.md
+    /// The entity table itself, ascending `EntityId` order (M17
     /// Seams: `FrameView::entities()`/`EntityIter` need a concrete, nameable iterator type over a
     /// borrow that outlives one method call -- `Self::entities`'s `impl Iterator` return cannot be
     /// named as a struct field, so `client::frame_view::EntityIter` wraps `BTreeMap::iter` taken
@@ -374,7 +374,7 @@ impl<G: Game> Store<G> {
 
     /// The trait tables + prototype table `Game::register` filled at construction (M21): every
     /// `WorldRead` implementor's `traits_at`/`entities_in` reads through this instead of holding a
-    /// second copy (docs/plan/21-entities-and-timers.md Deviations "moved here from Authority/
+    /// second copy (M21 Deviations "moved here from Authority/
     /// Replica").
     pub fn registry(&self) -> &Registry {
         &self.registry
@@ -552,7 +552,7 @@ impl<G: Game> Store<G> {
         self.timers.next_due(now)
     }
 
-    /// The undo journal's own pre-image capture (docs/plan/21b-timers-wakeups-and-tickcx.md fix
+    /// The undo journal's own pre-image capture (M21b fix
     /// round 1): `id`'s current timer, without removing it.
     pub(crate) fn timer_tick_of(&self, id: EntityId) -> Option<Tick> {
         self.timers.tick_of(id)
@@ -610,7 +610,7 @@ impl<G: Game> Store<G> {
         self.active.restore_mask(id, mask);
     }
 
-    /// The one host-side `Err(Unknown)` for a missing player (docs/plan/12-store-and-game-trait.md
+    /// The one host-side `Err(Unknown)` for a missing player (M12
     /// Planning decisions "Missing player").
     pub fn last_seq(&self, who: PlayerId) -> Result<u32, Unknown> {
         self.player_slot(who).map(|s| s.last_seq)
@@ -698,7 +698,7 @@ impl<G: Game> Store<G> {
         self.timers = timers;
         self.wake = wake;
         // 0007 §5 "rebuilt on load": a decoded `Store` must never be observed with a stale or
-        // absent `ChunkIndex` (docs/plan/21-entities-and-timers.md Provides "rebuilt by
+        // absent `ChunkIndex` (M21 Provides "rebuilt by
         // Store::rebuild_indexes() after decode").
         self.rebuild_indexes();
         Ok(())
@@ -1053,7 +1053,7 @@ mod tests {
         assert_eq!(s.modified_tile_count(), 1);
     }
 
-    // -- M21 footprint/`ChunkIndex` tests (docs/plan/21-entities-and-timers.md Tests added) -------
+    // -- M21 footprint/`ChunkIndex` tests (M21 Tests added) -------
     // A dedicated small game: `FpEntity` carries its own position and a `wide` flag selecting
     // between a 1x1 prototype (id 0) and a 3x3 one (id 1), so a single footprint can be made to
     // straddle up to 4 of `terrain()`'s edge-16 chunks (anchor near a multiple of 16).

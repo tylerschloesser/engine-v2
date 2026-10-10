@@ -10,7 +10,7 @@ import {
 
 // A non-square viewport and an off-centre, non-integer point on purpose: at the viewport centre,
 // or with a square viewport, a swapped axis or a halved/doubled `tilesPerPx` all agree with the
-// correct formula (docs/plan/11-camera-and-input.md's own warning, from M09b's texel-centre
+// correct formula (M11's own warning, from M09b's texel-centre
 // lesson). `widthPx` (1600) is the long axis here, so `tilesAcross` (20) maps to it, not `heightPx`
 // (800): a formula that used `heightPx` for the long axis, or averaged the two axes, disagrees with
 // this expectation.

@@ -1,4 +1,4 @@
-// Uber-quad readback probes (docs/plan/17-drawlist-and-sprites.md Tests added): each test opens
+// Uber-quad readback probes (M17 Tests added): each test opens
 // `drawables.html` once and hand-fills the DrawList header/body directly (`support/draw-scene.ts`),
 // grouping several probes per page load (0020 §4: "group probes into one page load where that
 // doesn't weaken what each test asserts"). Probes sit off-centre, at shape edges, or inside a ring's
@@ -84,7 +84,7 @@ test('draw.circle_and_ring_probe', async ({ page }, testInfo) => {
   expectNoGpuErrors(await page.evaluate(() => window.__drawables?.errors() ?? []))
 })
 
-// Step 5 (docs/plan/17-drawlist-and-sprites.md Order of work): the cursor-anchored ghost. Both
+// Step 5 (M17 Order of work): the cursor-anchored ghost. Both
 // tests below `acquireFromBytes` exactly once, then call `writeFrameUniform`/`renderAndRead` twice
 // with no second `acquireFromBytes` in between -- proving the two behaviours 0018 §2/Planning
 // decisions promise happen entirely in the vertex shader, off whatever `writeFrameUniform` last

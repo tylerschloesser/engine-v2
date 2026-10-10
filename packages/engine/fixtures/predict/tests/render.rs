@@ -1,4 +1,4 @@
-//! `swap_is_one_render`/`reject_is_one_render` (docs/plan/26-prediction-rendering-and-clocks.md
+//! `swap_is_one_render`/`reject_is_one_render` (M26
 //! step 2, "expected green by construction ... the failability proof is what makes them
 //! evidence"): drives `PredictClient::extract`/`ui` through a real, prediction-merged `FrameView`
 //! (`testing::testkit::Loopback::frame_view`) every frame from dispatch through well after the

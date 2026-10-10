@@ -1,4 +1,4 @@
-// M17c step 3, fix round 3 (docs/plan/17c-client-park-stall.md): calls `armedLoop`
+// M17c step 3, fix round 3 (M17c: calls `armedLoop`
 // (`src/test/harness-worker.ts`) directly against a caller-supplied step block, so the race in its
 // own doc comment (a `Yield` already set before `armedLoop`'s own first wait) can be constructed
 // deterministically rather than timed through a real `parkOne` message round trip. Posts `'returned'`

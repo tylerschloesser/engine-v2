@@ -1,6 +1,6 @@
 // `engine/worker`'s `run()`: hosts every worker kind of docs/decisions/0015-threads-memory-and-
 // topology.md §1 in one script (0017 §2's "self-contained" is read as "no bare imports, no dynamic
-// `import()`": relative imports of sibling files are fine, docs/plan/06b-workers-and-spawn.md,
+// `import()`": relative imports of sibling files are fine, M06b,
 // Planning decisions "Worker script layout"). The kind arrives in the setup message, so there is one
 // worker script however many workers a topology spawns (pattern A/B, 0017 §3).
 import { MODULE_REFUSED } from './module-refused.js'
@@ -60,22 +60,22 @@ function post(m: FromWorker): void {
 export function run(): void {
   let shell: Shell | null = null
   // Set once, off the resolved `LoopState`, only when this worker's own setup carried `test`
-  // (orchestrator decision 1 at the step-5 boundary, docs/plan/08b-gen-workers-and-queue.md): a
+  // (orchestrator decision 1 at the step-5 boundary, M08b: a
   // production `createClient()` never sets `options.test`, so a production worker never answers a
   // `test-call` message at all, whatever its kind returns.
   let testEnabled = false
   let testCall: ((m: TestCallMessage) => FromWorker) | null = null
-  // docs/plan/23-persistence-opfs-and-lifecycle.md steps 3-4: `sim-pause`/`sim-resume`, `sim`-kind
+  // M23 steps 3-4: `sim-pause`/`sim-resume`, `sim`-kind
   // only (`worker/sim.ts`'s own `LoopState.simControl`), routed the same way `testCall` already is.
   let simControl: ((m: SimControlMessage) => void) | null = null
-  // docs/plan/23-persistence-opfs-and-lifecycle.md step 5: export/import/delete requests, routed the
+  // M23 step 5: export/import/delete requests, routed the
   // same way `simControl` already is (`worker/sim.ts`'s own `LoopState.worldOp`).
   let worldOp: ((m: SimWorldOpMessage) => void) | null = null
-  // docs/plan/29-net-worker-and-reference-server.md steps 1-2: `probe`/`retry`, routed to `worker/
+  // M29 steps 1-2: `probe`/`retry`, routed to `worker/
   // net.ts`'s own `LoopState.linkControl` -- deliverable at any time (this kind is never blocked in
   // `Atomics.wait`, unlike `simControl`/`worldOp`'s parked-only messages), so no `W_PARKED` gate.
   let linkControl: ((m: NetControlMessage) => void) | null = null
-  // docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "M06b's `stop` sends
+  // M29 steps 1-2 (Scope: "M06b's `stop` sends
   // `Bye{Leave}` first"): `worker/net.ts`'s own `{ type: 'stop' }` cleanup, called before
   // `shell?.stop()` below. `null` for every kind but `net`.
   let netStop: (() => void) | null = null
@@ -112,10 +112,10 @@ export function run(): void {
           netStop = loop?.stop ?? null
           // The wake word is read before `ready` goes out, not after: main can wake this worker the
           // instant it sees `ready`, and a wake between the post and the loop's own first read
-          // would be lost (`Shell.observeWake`; fix round 3, docs/plan/06b-workers-and-spawn.md).
+          // would be lost (`Shell.observeWake`; fix round 3, M06b.
           const seen = s.observeWake()
           post({ type: 'ready' })
-          // docs/plan/29-net-worker-and-reference-server.md steps 1-2: `loop?.body`, not merely
+          // M29 steps 1-2: `loop?.body`, not merely
           // `loop` -- the `net` kind returns a real, non-null `LoopState` (to carry `linkControl`/
           // `stop`) with no `body` at all (event-driven, never blocked in `Atomics.wait`, 0015 §2).
           if (loop?.body) runBlockingLoop(s, loop.body, loop.timeoutMs ?? noTimeout, seen)

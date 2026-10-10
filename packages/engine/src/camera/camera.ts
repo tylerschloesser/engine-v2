@@ -8,7 +8,7 @@
 // Steps 1-3 (an earlier range of this same milestone) built pan/pinch/wheel/WASD/inertia and left
 // `constraints` mutable in place as a forward-compatible hook (Deviations); step 6 of that same
 // earlier range added `moveTo`, `setViewClamp`, `setFollow` as a no-op store. Steps 4-6 of the
-// picking-and-overlay milestone's own second range (docs/plan/18-picking-and-overlay.md) give
+// picking-and-overlay milestone's own second range (M18 give
 // `follow` real behaviour: `integrate()` centres on it and ignores pan while `valid`, zoom still
 // works. Also built by that earlier range: the device-pixel-at-rest snap and an `onMotionEnd` hook
 // `client.ts` uses for `localStorage` persistence. `client.camera.{setConstraints, moveTo, read}`

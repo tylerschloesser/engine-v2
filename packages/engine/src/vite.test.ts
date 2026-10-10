@@ -1,4 +1,4 @@
-// `watchCrate`'s own regression (docs/plan/17d-fast-tier-wall-time.md, CI round 1): the paths it
+// `watchCrate`'s own regression (M17d, CI round 1): the paths it
 // passes to `fs.watch` must never let a recursive watch descend into `target/` (cargo's own scratch
 // dir, whose churn crashed the recursive JS watcher on Linux -- see `watchCrate`'s doc comment in
 // `vite.ts`). Inspects the real arguments through a `node:fs` mock rather than exercising the actual

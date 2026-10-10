@@ -1,4 +1,4 @@
-// Guard for docs/plan/24c-engine-edit-rebuild-time.md: `crates/engine/tests/` must not quietly grow
+// Guard for M24c: `crates/engine/tests/` must not quietly grow
 // a new top-level `*.rs` file, because each one is its own compiled+linked test binary, and on
 // macOS every freshly linked binary pays a one-time first-execution security-check tax (Deviations
 // has the measurement: ~1.2-3s each, serial-ish across the binaries a build touches) -- the whole

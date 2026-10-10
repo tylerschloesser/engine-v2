@@ -1,5 +1,5 @@
 // `engine/server/node`: the Node adapter (docs/decisions/0017 §2). M27 extends this file (`node
-// Host Services`, docs/plan/27-server-entrypoint-and-netcode-harness.md Scope); M35b adds the Bun
+// Host Services`, M27 Scope); M35b adds the Bun
 // and Deno files, which re-export `loadGame`/`fsStorage` from here and share `nodeHostServices`'s
 // body (`server-host-services.ts`).
 import { readFile } from 'node:fs/promises'
@@ -27,7 +27,7 @@ export async function loadGame(
  * for its runtime like `bunHostServices`/`denoHostServices`. */
 export const nodeHostServices = hostServices
 
-// docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "`attachWebSocketServer(wss,
+// M29 steps 1-2 (Scope: "`attachWebSocketServer(wss,
 // server)` in `engine/server/node`, structurally typed (0009 Node)"): 0009 §"Node" verbatim --
 // "the game's server package installs `ws`, constructs the `WebSocketServer`, and passes it to the
 // engine's Node adapter, which is typed structurally (`{ on('connection', cb) }`, socket `{ send,

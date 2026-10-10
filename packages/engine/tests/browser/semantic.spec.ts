@@ -1,4 +1,4 @@
-// `input: events reach wasm` (docs/plan/11-camera-and-input.md, Tests added): the whole
+// `input: events reach wasm` (M11, Tests added): the whole
 // `client.input.recognize` -> `inputRing` -> client worker drain -> `on_input` -> `InputQueue` path
 // against a real `fx-terrain` client (`semantic.html`/`semantic.ts`). The test export is `on_input`
 // itself, called with `len=0` through the parked-only `test-call` channel: nothing new to decode,
@@ -45,7 +45,7 @@ declare global {
   }
 }
 
-// Shared by every `real-camera.html` test below (docs/plan/11-camera-and-input.md, Order of work
+// Shared by every `real-camera.html` test below (M11, Order of work
 // step 6: `input.suspend_resume`, `input.keyboard_focus_rules`, `input.dom_path_pan_and_tap`,
 // `input.widget_blocks_canvas`, `input.drag_survives_passing_under_widget`).
 async function createReal(page: Page): Promise<void> {
@@ -106,7 +106,7 @@ test('input: events reach wasm', async ({ page }) => {
   expect(stats?.tileY).toBe(0)
 })
 
-// `input: suspend resume` (docs/plan/11-camera-and-input.md, Tests added): `client.input.suspend()`
+// `input: suspend resume` (M11, Tests added): `client.input.suspend()`
 // stops recognition entirely (`semantic.ts`'s own `recognize()`: `if (suspended) return`, before any
 // bookkeeping is even touched), not just event delivery -- a down/up cycle injected while suspended
 // must leave no trace for `resume()` to pick up later.
@@ -134,7 +134,7 @@ test('input: suspend resume', async ({ page }) => {
   expect(await count(page, 'tap')).toBe(2) // resumed: the down/up cycle suspend() swallowed is gone
 })
 
-// `input: keyboard focus rules` (docs/plan/11-camera-and-input.md, Tests added; 0019 §4): a real
+// `input: keyboard focus rules` (M11, Tests added; 0019 §4): a real
 // `<input>` on the page (`real-camera.html`), real `page.keyboard` dispatch (not injection -- the
 // filter lives in the DOM listener itself, `input/keys.ts`'s `shouldIgnoreKeyDown`), and a real
 // `blur` event.
@@ -161,7 +161,7 @@ test('input: keyboard focus rules', async ({ page }) => {
   await page.keyboard.up('KeyW') // release the real key so it doesn't leak into another test
 })
 
-// `input: dom path pan and tap` (docs/plan/11-camera-and-input.md, Tests added): the one real-DOM-
+// `input: dom path pan and tap` (M11, Tests added): the one real-DOM-
 // path test -- real `PointerEvent`s via Playwright's `page.mouse`, through the client's own
 // automatically-installed `installPointerListeners` (`src/client.ts`), not `engine/test` injection.
 test('input: dom path pan and tap', async ({ page }) => {
@@ -186,7 +186,7 @@ test('input: dom path pan and tap', async ({ page }) => {
   expect(await count(page, 'tap')).toBe(1)
 })
 
-// `input: widget blocks canvas` (docs/plan/11-camera-and-input.md, Tests added; 0019 §4 "Input over
+// `input: widget blocks canvas` (M11, Tests added; 0019 §4 "Input over
 // DOM UI"): a sibling element with `pointer-events: auto` above the canvas keeps the browser's own
 // hit-testing from ever delivering the click to the canvas at all -- the engine "listens nowhere
 // else for pointers" (0019 §4), so a widget click must produce neither a pan nor a tap.
@@ -207,7 +207,7 @@ test('input: widget blocks canvas', async ({ page }) => {
   expect(await count(page, 'tap')).toBe(0) // never reached the canvas: no tap either
 })
 
-// `input: drag survives passing under widget` (docs/plan/11-camera-and-input.md, Tests added; 0019
+// `input: drag survives passing under widget` (M11, Tests added; 0019
 // §3/§4: "Pointer capture keeps a world drag alive when it passes under a widget"): the drag starts
 // on bare canvas (real `setPointerCapture` on that `pointerdown`), so every later `pointermove` --
 // even while the cursor is visually over the widget -- is still routed to the canvas by the browser.

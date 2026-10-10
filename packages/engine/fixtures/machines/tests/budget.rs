@@ -1,7 +1,7 @@
 //! The state-budget check's second half (docs/decisions/0023-action-growth-declaration.md
 //! Consequences: "the scripted 'state budget when full' test ... gains a second half: placing is
 //! rejected, removing is accepted, and placing then succeeds again") and the growth-honesty audit
-//! (docs/plan/21-entities-and-timers.md Tests added), against `fx-machines`'s own real handlers.
+//! (M21 Tests added), against `fx-machines`'s own real handlers.
 
 use engine::game::PlayerId;
 use engine::sim::{EngineReject, Record, Rejected, Sim, WorldParams};

@@ -1,4 +1,4 @@
-// `sim-worker.html`'s tests (docs/plan/13-sim-host-tick-loop.md, step 5, Tests added):
+// `sim-worker.html`'s tests (M13, step 5, Tests added):
 // `sim_worker_steps_and_hashes` (hash after `stepTick(100)` equals `fixtures/puts`'s own
 // `.wasm`-authoritative golden, the same one `wasm_idle_100_matches_native` -- Node -- and
 // `puts_idle_100_golden` -- native -- are each compared against) and `sim_worker_yields_for_cdp`

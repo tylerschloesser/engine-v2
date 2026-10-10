@@ -1,4 +1,4 @@
-// `world.html`'s Export/Import/Delete controls (docs/plan/23-persistence-opfs-and-lifecycle.md step
+// `world.html`'s Export/Import/Delete controls (M23 step
 // 5, Tests added): `export_import_roundtrip_browser`, `delete_world_removes_all_keys`,
 // `export_works_after_load_failure`, `export_browser_import_node_same_hash`, and the overlap test
 // Rules and traps asks for (export racing a hidden-boundary pause). Chromium only, same reasoning as
@@ -166,7 +166,7 @@ test('export_works_after_load_failure', async ({ page }) => {
   expect(await page.evaluate(() => window.__errors?.())).toEqual([])
 })
 
-/** docs/plan/24b-upgrade-and-migration.md step 5: `client.ready` rejects with `EngineStartError
+/** M24b step 5: `client.ready` rejects with `EngineStartError
  * { code: 'save-incompatible' }` for a stored world whose manifest names a `chunkBits` the running
  * build cannot satisfy (Scope: "`Persistence.open` compares [chunkBits] ... before any load") --
  * still-valid JSON, unlike `export_works_after_load_failure`'s own garbage-manifest trigger, so this

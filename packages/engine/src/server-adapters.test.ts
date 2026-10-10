@@ -1,4 +1,4 @@
-// `server adapters export parity` (docs/plan/35b-bun-and-deno-adapters.md): the three `./server/*`
+// `server adapters export parity` (M35b: the three `./server/*`
 // adapters export parallel names -- `loadGame`, `fsStorage`, `<runtime>HostServices` and one
 // attachment function -- so a game's server entry differs between runtimes by import path alone.
 // `wsSocketConnection` is the one extra: Node's `ws` transport harness builds on it (M29).

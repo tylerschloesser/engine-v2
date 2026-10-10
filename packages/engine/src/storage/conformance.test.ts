@@ -1,4 +1,4 @@
-// docs/plan/22-persistence-log-and-snapshots.md Tests added: `storage_conformance_memory`. Needs
+// M22 Tests added: `storage_conformance_memory`. Needs
 // no `.wasm` fixture (unlike the rest of this milestone's own Persistence tests, `tests/wasm/
 // persistence.test.ts`), so it lives beside its source per `packages/engine/CLAUDE.md`'s own
 // convention ("unit: *.test.ts beside the source in src/").
@@ -7,7 +7,7 @@ import { runStorageConformance } from './conformance.js'
 import { memoryStorage } from './memory.js'
 
 test('storage_conformance_memory', async () => {
-  // A shared backing `Map` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Deviations):
+  // A shared backing `Map` (M27, Deviations):
   // every existing check above still gets an object it alone writes to (each uses its own key
   // namespace), but `flush_then_reopen_sees_the_write` needs `make()` to return a fresh instance
   // over the *same* backing store, the way `fsStorage(dir)`'s own conformance call already does.

@@ -1,4 +1,4 @@
-// `fx-busy-field` through the real `.wasm` and the netcode harness (docs/plan/31-rates-and-
+// `fx-busy-field` through the real `.wasm` and the netcode harness (M31
 // integrity.md step 2): the steady field replicates and converges, and `Action::Fill` makes a dense
 // chunk that reaches a second client's replica.
 import { expect, test } from 'vitest'

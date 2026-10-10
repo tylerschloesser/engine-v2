@@ -1,10 +1,10 @@
-// `sim: zero-GC over real ticking` (docs/plan/13-sim-host-tick-loop.md, step 6, Tests added: "zero-
+// `sim: zero-GC over real ticking` (M13, step 6, Tests added: "zero-
 // GC test extended to the sim isolate"): a real `createClient()` local topology over `fx-puts`, the
 // sim isolate driven by one deterministic `sim_tick` per measured frame (`gc-sim.ts`). No `post-
 // message` control, same reasoning as `topology`/`echo`/`gen` (orchestrator decision 2 of 06b): a
 // production worker has no spare `postMessage` type for a message-driven tick.
 //
-// docs/plan/23-persistence-opfs-and-lifecycle.md step 6: `gc-sim.ts` now runs with persistence on
+// M23 step 6: `gc-sim.ts` now runs with persistence on
 // unconditionally (`host.persist: true`) -- `sim clean`, above, is therefore also the strict,
 // snapshot-free half of Planning decision 1 ("the strict test runs without a snapshot"; measured:
 // still comfortably under the 8 B/frame budget, `gc-sim.ts`'s own Deviations has the numbers).

@@ -1,4 +1,4 @@
-// `gc-slice: zero-GC window with actions` (docs/plan/16-action-round-trip.md, step 6): `gc-slice.ts`
+// `gc-slice: zero-GC window with actions` (M16, step 6): `gc-slice.ts`
 // is `gc-connected-terrain.ts`'s own real connected+rendered+panning topology plus a periodic
 // `dispatchRaw` call inside the measured window -- `main` allocates a real, non-zero amount for it
 // (a dispatched action's own *result* is JSON-parsed on `main`, `gc-slice.ts`'s own module comment
@@ -21,7 +21,7 @@ zeroGcSuite({
   path: '/gc-slice.html',
   expectAdapter: true,
   controlKinds: ['object', 'burst'],
-  // Open gate failures item 3, gate round 1 (docs/plan/26-prediction-rendering-and-clocks.md):
+  // Open gate failures item 3, gate round 1 (M26:
   // proves this page's own dispatched `Paint` was actually predicted `Applied`, not
   // `NotPredictable` -- a real counter (`ClientCore::predict_applied_ever`), not just a claim
   // resting on the fixture's shape. Read after `measure()` has already finished (never inside the

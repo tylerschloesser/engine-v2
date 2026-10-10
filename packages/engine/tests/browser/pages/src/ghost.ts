@@ -1,4 +1,4 @@
-// `ghost.html`'s script (docs/plan/18-picking-and-overlay.md Tests added, steps 7-8: `ghost.
+// `ghost.html`'s script (M18 Tests added, steps 7-8: `ghost.
 // mouse_tracks_cursor_tile`, `ghost.touch_tap_then_confirm`; Scope: "a cursor-anchored ghost works
 // end to end for mouse and for the touch tap-then-confirm flow"). Unlike `framecx.html` (no camera,
 // no overlay -- proves only that `cx.input()`/`client.input.emit` reach Rust) and `real-camera.html`

@@ -1,5 +1,5 @@
 //! Own test binary (only a dedicated binary's `#[global_allocator]` is counted; see
-//! `no_alloc_gen_queue.rs`). docs/plan/30-interpolation.md `interp_alloc`: 600 frames of
+//! `no_alloc_gen_queue.rs`). M30 `interp_alloc`: 600 frames of
 //! `InterpBuffer` pushes/samples over 7 remote keys plus `InterpDelay` arrivals/slew allocate zero
 //! bytes once the keys exist (`.claude/rules/hot-paths.md`).
 

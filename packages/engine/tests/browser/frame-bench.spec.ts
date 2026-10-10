@@ -1,4 +1,4 @@
-// `bench.frame_worstcase` (docs/plan/17b-sprites-and-frame-budget.md Scope, Planning decisions
+// `bench.frame_worstcase` (M17b Scope, Planning decisions
 // "Frame-time criterion lands here"): the repo's first frame-time exit criterion. `frame-bench.html`
 // (a real, connected `fx-drawables` client under real `requestAnimationFrame`) at 0018 §6's own
 // worst case -- 256x256 tiles, 65,536 drawables, maximum zoom-out -- 300 frames after 120 warm-up,

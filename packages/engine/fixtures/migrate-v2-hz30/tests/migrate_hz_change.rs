@@ -1,4 +1,4 @@
-//! `migrate_hz_change_rescales_engine_timers` (docs/plan/24b-upgrade-and-migration.md Tests
+//! `migrate_hz_change_rescales_engine_timers` (M24b Tests
 //! added): `fx-migrate-v1` (schema 1, 20Hz) into `fx-migrate-v2-hz30` (schema 2, 30Hz) -- a schema
 //! bump *and* a tick-rate change at once, so the engine's own timer-wheel carry must go through
 //! `Rescale::deadline`, not the identity path `fx-migrate-v2`'s own same-rate test exercises.

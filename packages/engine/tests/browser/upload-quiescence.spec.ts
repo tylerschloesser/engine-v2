@@ -1,4 +1,4 @@
-// `upload-quiescence.html`'s test (docs/plan/20c-client-ack-freeze-under-untilquiescent.md):
+// `upload-quiescence.html`'s test (M20c:
 // `untilQuiescent` (inside `stepTick`) must not wait on `uploadRing` -- the one ring only a page's
 // own renderer/test code drains, never a worker (Deviations: "which ring each side owns"). Before
 // the fix this hangs for `untilQuiescent`'s own 10s `POLL_TIMEOUT_MS` once real chunk uploads have

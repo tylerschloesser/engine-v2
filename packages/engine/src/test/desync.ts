@@ -1,4 +1,4 @@
-// Reading the desync report rings (docs/plan/31b-desync-hashes.md): `sim_desync(index)` and
+// Reading the desync report rings (M31b: `sim_desync(index)` and
 // `client_desync(index)` each write 40 little-endian bytes into `Result`: `count u32` (total ever
 // recorded), `retained u32`, then the `index`th retained report, oldest first: `tick u32`,
 // `scope u32` (0 Chunk, 1 Global, 2 OwnPlayer), `cx i32`, `cy i32`, `host_hash u64`, `client_hash
@@ -44,7 +44,7 @@ export function readDesyncLog(
   return out
 }
 
-/** One hash-all dump (docs/plan/31b-desync-hashes.md): both encodings of a chunk whose hash
+/** One hash-all dump (M31b: both encodings of a chunk whose hash
  * mismatched. `client` is the replica's bytes when the mismatched `Hashes` entry was checked;
  * `host` is the replica's bytes after the host's resync snapshot replaced them, i.e. the host's
  * encoding when it answered. Both are `integrity::encode_chunk` bytes (snapshot version written 0). */

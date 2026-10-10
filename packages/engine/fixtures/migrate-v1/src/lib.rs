@@ -1,4 +1,4 @@
-//! Fixture game `fx-migrate-v1` (docs/plan/24b-upgrade-and-migration.md Scope: "fixture games
+//! Fixture game `fx-migrate-v1` (M24b Scope: "fixture games
 //! migrate-v1, migrate-v2, migrate-v2-hz30"). `SCHEMA_VERSION = 1`, `TICK_RATE` the default 20Hz.
 //! The "old" schema `fx-migrate-v2`'s own `migrate()` brings forward: one self-rearming timer
 //! entity (mirrors `fx-persist`'s own `Timer`, plus a `keep` flag so a test scenario can choose,

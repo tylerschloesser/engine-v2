@@ -1,4 +1,4 @@
-// The one place engine events are handled (docs/plan/37-robustness-events.md; the audit is
+// The one place engine events are handled (M37; the audit is
 // `packages/engine/src/engine-events.test.ts`). Framework-free plain text, one button where a button
 // helps:
 // - link state (M34, `client.onLink`): a small line, nothing while online; no retry button (the

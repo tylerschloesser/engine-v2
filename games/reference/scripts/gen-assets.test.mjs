@@ -1,4 +1,4 @@
-// `gen_assets_reproducible` (docs/plan/20-reference-game-v0.md Tests added): runs `gen-assets.mjs`
+// `gen_assets_reproducible` (M20 Tests added): runs `gen-assets.mjs`
 // twice into a fresh temp dir, asserts the bytes equal the committed `assets/` files, and checks
 // the generated `tiles.json` obeys 0018 §4's limits.
 import { execFileSync } from 'node:child_process'

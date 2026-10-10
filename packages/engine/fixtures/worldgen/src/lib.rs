@@ -1,5 +1,5 @@
 //! Fixture game `worldgen`: a `Worldgen` impl in the `gen` role only, benchmark-representative
-//! (Planning decisions 5 of docs/plan/08-worldgen-and-gen-worker.md) -- five-octave height,
+//! (Planning decisions 5 of M08 -- five-octave height,
 //! three-octave moisture, a scatter hash for resources -- the spike's shape
 //! (`spikes/determinism-hash`), so `worldgen-bench`'s number is comparable with 0008 §6.
 //!
@@ -18,7 +18,7 @@ use engine::worldgen::{GenCore, Pristine, hash2};
 pub use engine::worldgen::Worldgen;
 
 /// Chunk edge this fixture always generates at (0007 §3's default): fixed at compile time, like a
-/// real game's `CHUNK_BITS` (Planning decisions 1 of docs/plan/07-world-model-core.md).
+/// real game's `CHUNK_BITS` (Planning decisions 1 of M07.
 const EDGE: i32 = 32;
 const FREQ: f64 = 1.0 / 128.0;
 
@@ -114,13 +114,13 @@ struct Config {
     #[serde(default)]
     params: FixtureParams,
     /// Client role only: how many gen workers `TerrainFeed` sizes its in-flight bookkeeping for
-    /// (docs/plan/08b-gen-workers-and-queue.md, `gen: one and two workers give equal chunk hashes`
+    /// (M08b, `gen: one and two workers give equal chunk hashes`
     /// drives this with 1 and 2). Ignored by the gen role.
     #[serde(default = "default_gen_workers")]
     gen_workers: u32,
     /// `ChunkDims` bits (0007 §3: 4/5/6, edge 16/32/64), default 5 (`EDGE = 32`, unchanged for
     /// every other test and the golden). Not a general chunk-size feature (Non-scope of
-    /// docs/plan/08b-gen-workers-and-queue.md: "chunk sizes other than the default in the browser
+    /// M08b: "chunk sizes other than the default in the browser
     /// topology"): the one caller that sets it is `gen: oversize slab is a readable fatal`,
     /// simulating Planning decisions 6's "the first game that changes CHUNK_BITS" against the
     /// browser topology's fixed `genResult` ring slot (16 + 4,096 B) -- `generate()`'s own `EDGE`

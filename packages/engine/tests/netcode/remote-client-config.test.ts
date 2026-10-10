@@ -1,4 +1,4 @@
-// `remote_client_without_game_config_matches_host` (docs/plan/33f, ADR 0042): a `HeadlessClient`
+// `remote_client_without_game_config_matches_host` (M33f, ADR 0042): a `HeadlessClient`
 // created with no `game` takes the world from `Welcome`, builds its generator then, and ends up
 // with the host's replica and the pristine terrain a client configured directly would hold.
 // `createNetHarness` passes no `game` to its clients, so `clients[0]` is the remote-style client;

@@ -1,4 +1,4 @@
-// `reference_full_game_single` (docs/plan/34b-reference-scripted-single-player.md Tests added): the
+// `reference_full_game_single` (M34b Tests added): the
 // whole reference game, once, through the real DOM: spawn on land, mine to the unlock, craft, place,
 // pick the empty furnace up and place it two tiles over, fetch iron and coal, deposit, smelt, take;
 // a last pick-up is refused because fuel is left. `Ui` is asserted after every phase (the script's

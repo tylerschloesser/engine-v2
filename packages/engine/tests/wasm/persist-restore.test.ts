@@ -1,4 +1,4 @@
-// docs/plan/22b-persistence-load-and-fs.md, Order of work step 1: the restore/replay ABI drivers
+// M22b, Order of work step 1: the restore/replay ABI drivers
 // (`sim_restore_begin/push/end`, `sim_replay_begin/push/end/valid_end`, `sim_tick_now`) over M22's
 // readers, proven against a real snapshot + log an M22 `Persistence`/`SimHost` run actually wrote --
 // not a hand-built container. `Persistence.open`/`loadLatest` (the full load path, crash matrix,
@@ -254,7 +254,7 @@ describe('restore/replay ABI drivers (fx-persist)', () => {
     expect(fresh.call0(fresh.x.sim_replay_valid_end)).toBe(seg0Header.length + seg0Tail.length)
 
     // Crossing the boundary: `sim_segment_header` resets the tick_delta reference for segment 1's
-    // own first frame (fix round 2, docs/plan/22-persistence-log-and-snapshots.md) -- without this
+    // own first frame (fix round 2, M22 -- without this
     // call, segment 1's own reference would incorrectly carry over from segment 0's last logged
     // tick (1) instead of the roll point (2).
     expect(fresh.call2(fresh.x.sim_segment_header, 1, rollTick)).toBe(h1Len)

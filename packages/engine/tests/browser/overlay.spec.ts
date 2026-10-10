@@ -1,4 +1,4 @@
-// docs/plan/18-picking-and-overlay.md Tests added (this cut's own share, step 3, static anchors
+// M18 Tests added (this cut's own share, step 3, static anchors
 // only): `overlay.anchor_tracks_world_point`, `overlay.idle_writes_nothing`, `overlay.
 // pan_one_write_zoom_two`, `overlay.rebase_beyond_50000px`, `overlay.offscreen_hidden_on_transition_
 // only`, `overlay.widget_click_not_a_tap`. Drives `real-camera.html` (a real, document-attached
@@ -30,7 +30,7 @@ declare global {
     __rcOverlayRemove?: (id: string) => void
     __rcOverlayUpdate?: () => void
     __rcOverlayStyleWrites?: () => number
-    // docs/plan/18-picking-and-overlay.md steps 4-6: `overlay.anchorSlot`, and the hand-filled
+    // M18 steps 4-6: `overlay.anchorSlot`, and the hand-filled
     // header publish `follow.spec.ts`/`pick.spec.ts` also use.
     __rcOverlayAnchorSlot?: (id: string, slot: number) => void
     __rcOverlayAnchorSlotRemove?: (id: string) => void

@@ -22,7 +22,7 @@ impl Worldgen for Marked {
 }
 
 /// `Pristine<W>::generate` is exactly `W::generate(seed, &params, chunk, out)`: no extra
-/// indirection changes a byte (Planning decisions 2 of docs/plan/07-world-model-core.md).
+/// indirection changes a byte (Planning decisions 2 of M07.
 #[test]
 fn pristine_matches_generate() {
     let dims = ChunkDims::new(4);

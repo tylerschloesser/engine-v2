@@ -4,7 +4,7 @@
 // by convention even though the fields themselves are plain `number`s. Not restricted by
 // `sab.no_alloc_syntax` (only `camera/block.ts` is): this is an ordinary data object, constructed
 // once by its owner and mutated every frame.
-/** A fresh camera's `tilesAcross`: inside `[DEFAULT_MIN_TILES, DEFAULT_MAX_TILES]` (docs/plan/39aj-zoom-feel.md). */
+/** A fresh camera's `tilesAcross`: inside `[DEFAULT_MIN_TILES, DEFAULT_MAX_TILES]` (M39aj. */
 export const DEFAULT_TILES_ACROSS = 32
 
 export class CameraState {
@@ -22,7 +22,7 @@ export class CameraState {
   cursorTileX = 0
   cursorTileY = 0
   cursorValid = false
-  /** M17 (docs/plan/17-drawlist-and-sprites.md, steps 4-6): the real device-pixel viewport size,
+  /** M17 ( steps 4-6): the real device-pixel viewport size,
    * set by `frame-loop.ts`'s `tick()` each rAF from `renderer.viewport.widthPx/heightPx` (post
    * render-scale) -- distinct from `camera/transform.ts`'s CSS-pixel `CameraViewport`. `0` until a
    * real `TerrainRenderer.viewport` has been sized at least once. */

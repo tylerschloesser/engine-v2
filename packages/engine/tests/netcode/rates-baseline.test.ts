@@ -1,4 +1,4 @@
-// `rates/baseline-*` (docs/plan/31-rates-and-integrity.md step 1): M27's own scenarios, replayed
+// `rates/baseline-*` (M31 step 1): M27's own scenarios, replayed
 // with `assertBudget`, so the numbers M31's pacing changes must not silently move are recorded in
 // `budgets.json` (`counters.net.baseline*`). Seeds and flows mirror `counters-exact`, `join-converges`
 // and `late-join`.

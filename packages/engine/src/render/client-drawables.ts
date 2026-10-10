@@ -1,4 +1,4 @@
-// `attachClientDrawables` (docs/plan/33c-drawables-on-real-pages.md Scope 1): the one public way a
+// `attachClientDrawables` (M33c Scope 1): the one public way a
 // game page draws its client's DrawList. Builds the drawables renderer over the client's own
 // `DrawListSlot`, loads the sprite atlas named by `ClientOptions.assets.sprites` (when present) and
 // attaches the renderer to the terrain renderer's pass (`attachDrawables`, one shared render pass,

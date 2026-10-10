@@ -1,10 +1,10 @@
 // Pure camera transforms (docs/decisions/0019-camera-input-and-overlay.md §1, §4 "Picking";
-// docs/plan/11-camera-and-input.md Scope: "worldToScreen, screenToWorld, tile under a point; pure
+// M11 Scope: "worldToScreen, screenToWorld, tile under a point; pure
 // functions shared with M18 picking"). No DOM, no allocation: every function writes into a
 // caller-owned `out` object (`.claude/rules/hot-paths.md` -- these run on the per-frame camera and
 // picking paths).
 //
-// Convention (matches `terrain.wgsl`'s `fs_main`, `docs/plan/09-renderer-terrain.md` Planning
+// Convention (matches `terrain.wgsl`'s `fs_main`, `M09` Planning
 // decisions "Bind group layout": `rel = (frag_coord.xy - half_viewport) * tiles_per_px`): world X
 // increases right, world Y increases down, exactly like screen/CSS pixels -- no axis flip. One
 // scalar `tilesPerPx` (not a per-axis one) is applied to both axes, derived from `tilesAcross`
@@ -12,7 +12,7 @@
 // shows fewer tiles, which is what makes `halfExtentTilesX`/`halfExtentTilesY` asymmetric for a
 // non-square viewport (`camera/camera.ts` writes these into `CameraState` every frame; the device
 // page's own stand-in, replaced by a later range, computed a wrong *uniform* `tilesAcross / 2` for
-// both axes -- docs/plan/09b-terrain-art-and-lifecycle.md Deviations, "Interpretation calls").
+// both axes -- M09b Deviations, "Interpretation calls").
 //
 // `CameraViewport` is deliberately not `render/terrain.ts`'s `Viewport`: that one is the renderer's
 // own device-pixel, DPR/render-scale-aware backing-store size. Chunk subscription and gesture math

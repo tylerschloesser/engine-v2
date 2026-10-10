@@ -1,6 +1,6 @@
-//! Golden and replay scenarios for `fx-puts` (docs/plan/12b-world-access-and-sim-driver.md Tests
+//! Golden and replay scenarios for `fx-puts` (M12b Tests
 //! added). Both goldens here are `.wasm`-authoritative (`assert_golden`/`assert_golden_named`):
-//! `puts_idle_100` since M13, `puts_script_a` since M16 (docs/plan/16-action-round-trip.md step
+//! `puts_idle_100` since M13, `puts_script_a` since M16 (step
 //! 5) -- it was native-blessed (`assert_golden_hash!`) until then, since no sim ABI admit path
 //! existed to drive `golden/scenario-script-a.json`'s real `sim_connect`/`sim_admit` traffic.
 
@@ -20,7 +20,7 @@ fn new_sim(seed: u64) -> Sim<Puts> {
     })
 }
 
-/// A script exercising every handler (docs/plan/12b-world-access-and-sim-driver.md Scope): a
+/// A script exercising every handler (M12b Scope): a
 /// join, one put of each scope kind, both rejecting handlers (`Bump`/`Remove`, always `NotFound`
 /// this milestone -- see `fx_puts`'s module doc comment), and `Roll`, spread across enough ticks
 /// (idle gaps included) to also exercise `tick`'s own once-a-second walk/day bump.
@@ -132,7 +132,7 @@ fn script_a() -> Vec<(Tick, Record<Puts>)> {
     ]
 }
 
-/// `.wasm`-authoritative since M13 (docs/plan/13-sim-host-tick-loop.md exit note; M12b's own
+/// `.wasm`-authoritative since M13 (exit note; M12b's own
 /// note on this test): `golden/golden.json` is written by `pnpm golden puts`, from the `.wasm`
 /// run over `golden/scenario.json` under Node (0002). This native run drives `Sim<Puts>` directly
 /// (the same call sequence `host::Host<Puts>`'s `sim_genesis`/`sim_tick` make) and is compared
@@ -149,7 +149,7 @@ fn puts_idle_100_golden() {
     engine::testing::assert_golden(env!("CARGO_MANIFEST_DIR"), &[sim.state_hash()]);
 }
 
-/// `.wasm`-authoritative since M16 (docs/plan/16-action-round-trip.md step 5; was native-blessed
+/// `.wasm`-authoritative since M16 (step 5; was native-blessed
 /// via `assert_golden_hash!` reading `tests/golden/puts_script_a.hash`): `golden/golden-script-a.
 /// json` is written by `pnpm golden puts`, from the `.wasm` run over `golden/scenario-script-a.
 /// json` under Node (0002) -- the same script as `script_a()` below, driven through the real admit

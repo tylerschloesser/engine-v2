@@ -38,7 +38,7 @@ try {
   `secrets`/`addClient(secret?)`, each client's `PlayerId` from `Welcome`): see their doc comments in
   `src/test/net-harness.ts` (`serverInternals` in `src/server.ts`); `support.ts`'s `buildHelloBytes` builds a raw `Hello`. `crypto.subtle.digest` finishes in unseeded order, so joiners are serialised by `sessionMutationChain` in `Hello`-arrival order and the harness awaits `handshakesSettled()` each tick. `Reject` only follows a parseable `Hello`; garbage counts to 8, then `ProtocolError` (5 s with no `Hello` too).
 
-## Byte counters and `assertBudget` (docs/plan/31-rates-and-integrity.md)
+## Byte counters and `assertBudget` (M31
 
 `counters(i)` also has `sections` (bytes per `SectionId` name), `header`, `frames`, `heartbeats`,
 `chunkEnters`/`chunkLeaves`, `worstSecondBytesDown`, and the host's pacing counters (`degradeLevel`, `queuedEnters`,
@@ -55,6 +55,6 @@ player slot immediately (required for acks past the pending-queue cap, 32); its 
 fills every tile `Tile::new(1, 0, 0)` (a `Paint` writing that back is a no-op overlay-wise). `fixture`
 may also be a `buildGame()` directory path, resolved via `engine/server/node`'s `loadGame`.
 
-## Desync hashes (docs/plan/31b-desync-hashes.md)
+## Desync hashes (M31b
 
 Hash-all is the harness default (`createNetHarness({ hashAll })`, default `true`; `world: { debugHashMode: 'off' | 'production' | 'all' }` wins): every subscribed chunk is hashed in every frame sent and announced to clients by `Welcome`'s `HASH_ALL` flag, so each scenario is also a replication test and `assertConverged()` also calls `assertNoDesync()` (skipped once a fault was injected). Pass `hashAll: false` only for a scenario that pins non-hash bytes or budgets, with a one-line reason (`rates/*`, `zoomout/*`, `reconnect/cost`, `counters-exact`, `liveness/heartbeat-idle-world`, `interpolation/presence_bytes_budget`). **Reading a report:** a mismatch is `{ tick, scope: 'chunk' | 'global' | 'ownPlayer', cx, cy, hostHash, clientHash }` on the client (`harness.desyncs()`, tagged with the client index) and on the host (`harness.hostDesyncs()`, `serverInternals(server).desyncCount`; its `clientHash` is zeros: `ResyncChunk` carries only the coord), plus a `desync (client|host): ...` line in `engine.log`; `global`/`ownPlayer` use coord `(-2147483648, -2147483648)`. Only `chunk` mismatches dump: `harness.desyncDumps()` and `test-results/desync/<tick>-<cx>_<cy>.{client,host}.bin` (the replica's bytes when the hash mismatched, and after the host's resync snapshot replaced them; `firstDiff` is the first differing offset; bytes are `integrity::encode_chunk`, snapshot version 0). Faults: `client.corruptChunk(cx, cy)`, `harness.skipDelta(i, cx, cy)`, `harness.skipGlobalDelta(i)`. A host that holds frames (degrade level 4) lags the replica by up to 3 ticks, so `assertConverged()` only passes on the tick a held frame just went out: that is not a desync (no report).

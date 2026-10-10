@@ -1,4 +1,4 @@
-// `remote-rest-walk` (docs/plan/39ab-remote-lurch-after-rest.md step 3): a remote that has stood still for
+// `remote-rest-walk` (M39ab step 3): a remote that has stood still for
 // seconds and then starts walking must never be drawn behind where it stood. `InterpBuffer::sample` used to
 // follow the tangent of a very long rest-to-walk segment and drew the circle up to a tile behind for ~250 ms
 // (the Hermite tangents are now clamped per Fritsch-Carlson, `interp/buffer.rs`). Same multiplayer page as

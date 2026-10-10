@@ -1,4 +1,4 @@
-// `reference_player_circle_lags_and_settles` (docs/plan/20b-reference-player-and-collect-ui.md
+// `reference_player_circle_lags_and_settles` (M20b
 // Order of work step 1: "browser check that the circle lags and settles"). Stepped frames,
 // injected input (here: a direct `__setCamera` jump rather than a real drag -- the spring itself
 // does not care how the camera got where it is): the own-player circle (`window.__playerCircle`,

@@ -1,4 +1,4 @@
-//! M16 (docs/plan/16-action-round-trip.md "Tests added", step 1): the host admit pipeline --
+//! M16 ("Tests added", step 1): the host admit pipeline --
 //! `Host::on_uplink`'s decode/dedup/`G::admit`/queue-for-T+1 path, and `Host::tick`'s routing of
 //! `Sim::step`'s outcomes back to the sending connection's per-tick `pending_results`, drained by
 //! `Host::build_frame` as an `ActionResults` section -- proven end to end through

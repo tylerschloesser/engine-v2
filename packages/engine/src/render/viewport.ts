@@ -74,7 +74,7 @@ export interface ViewportController {
    * change display DPI. Takes effect on the next `applyPending()`, not immediately (the same "applied
    * at the start of the next frame" contract a real resize report follows).
    *
-   * Fix round 1 (docs/plan/09b-terrain-art-and-lifecycle.md Deviations, "Found and fixed: a real
+   * Fix round 1 (M09b Deviations, "Found and fixed: a real
    * `ResizeObserver` race, attributed"): calling this while a real observer is also armed
    * (`opts.test?.observeReal` unset or `true`) is a genuine, unfixable-by-timing race -- a
    * `ResizeObserver`'s own delivery is scheduled by the browser's rendering pipeline, not by JS task

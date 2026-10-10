@@ -3,14 +3,14 @@
 /**
  * 0004 Decision, verbatim: `RateLimited` (admission, never reaches `apply`), `StateBudgetFull`
  * (0007 §8's check), `EngineFault` (0005 skip-record recovery). None is produced by this
- * milestone (docs/plan/12b-world-access-and-sim-driver.md Non-scope). `Serialize` (docs/plan/
+ * milestone (M12b Non-scope). `Serialize` (docs/plan/
  * 16-action-round-trip.md): a rejected action's result JSON (`client.onActionResult`) needs to
  * encode this half of `Rejected<G>`, tagged `{"Engine":<this>}` -- `game_instance::
  * push_result_record` keeps `Rejected<G>`'s own `Game`/`Engine` level in the JSON rather than
  * flattening it away (orchestrator ruling at the M16 gate): 0004's Decision defines `Rejected<G>`
  * as exactly this two-variant enum, and collapsing the tag would make a game's own reject variant
  * indistinguishable from the engine's by name alone once `RateLimited` (M31) and `StateBudgetFull`
- * (M21) are real. `TS` (docs/plan/16-action-round-trip.md step 4), deliberately **without**
+ * (M21) are real. `TS` (M16 step 4), deliberately **without**
  * `#[ts(export)]`: `EngineReject` is engine-side, not a `G::Reject`, and ts-rs's own derive macro
  * puts its `export_bindings_<type>` test in the crate that derives `TS` -- `engine` here, not a
  * downstream game crate -- so `cargo test export_bindings` run from `fixtures/puts` (0017 §5's own

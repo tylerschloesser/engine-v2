@@ -1,4 +1,4 @@
-//! Furnace placement rules (docs/plan/33-reference-furnace.md Tests added). The prediction cases
+//! Furnace placement rules (M33 Tests added). The prediction cases
 //! are in `place_predict.rs`.
 
 mod common;

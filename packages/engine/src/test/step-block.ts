@@ -1,10 +1,10 @@
 // Test-only control block: one small `SharedArrayBuffer` per harness worker, read and written with
 // `Atomics` only. **Internal, replaced later**: M06/M06b own the production control block, its
-// `yield` flag and the ring sequence/ack counters (docs/plan/03-browser-harness.md, Seams); this
+// `yield` flag and the ring sequence/ack counters (M03, Seams); this
 // shape exists only so `harness.ts`/`harness-worker.ts` can drive `stepTick`/`stepFrame`/`park`/
 // `resume` at the ABI level. Never imported by production code.
 //
-// M04 adds `Control` (docs/plan/04-zero-gc-harness.md, Seams: "the hook sits in ... workers"):
+// M04 adds `Control` (M04, Seams: "the hook sits in ... workers"):
 // M03 shipped five slots (Req/Ack/State/Yield/Op), collapsing the brief's assumed `CONTROL`/`ERR`
 // into `Op`; M04's negative-control hook needs its own word (a worker reads it fresh every tick, so
 // `harness.ts`'s `setWorkerControl` can write it any time, typically while the worker is parked)
@@ -25,7 +25,7 @@ export const StepBlockField = {
   /** A `StepControl` value: the negative-control allocation this worker applies on its next tick
    * (docs/decisions/0016 §3 step 8). Read fresh every tick, not latched. */
   Control: 5,
-  /** M19b (docs/plan/19b-sim-park-while-armed.md) step 2: diagnostic only, never read by
+  /** M19b (step 2: diagnostic only, never read by
    * production logic. Bumped once per `Atomics.wait` call `armedLoop` makes since this worker last
    * armed, so a `park('<name>')`/`send(...)` timeout can report how many waits this worker had
    * already completed (`harness.ts`'s `diagWorkers`) -- distinguishing "stuck on its very first
@@ -42,7 +42,7 @@ export const StepBlockField = {
    * -- a notify landing in the gap between `armedLoop`'s own `Yield` check and the moment its
    * `Atomics.wait` call actually registers as a waiter was lost for good, with nothing left to send
    * a second one. Fixed by giving every signal a word whose *value* always changes, not by
-   * narrowing the gap further (docs/plan/19b, Deviations). */
+   * narrowing the gap further (M19b, Deviations). */
   Wake: 7,
 } as const
 
@@ -50,7 +50,7 @@ export const STEP_BLOCK_INT32S = 8
 
 /** Negative-control allocation a worker applies once per tick (0016 §3 step 8); `None` is the
  * default a fresh `SharedArrayBuffer` already reads as zero. `'post-message'` controls are not
- * encoded here: they replace the SAB step protocol itself (docs/plan/04-zero-gc-harness.md,
+ * encoded here: they replace the SAB step protocol itself (M04,
  * Planning decisions "Sequence"). */
 export const StepControl = {
   None: 0,
@@ -83,7 +83,7 @@ export function stepBlockView(sab: SharedArrayBuffer): Int32Array {
   return new Int32Array(sab)
 }
 
-/** M19b (docs/plan/19b-sim-park-while-armed.md), gate round 1: the one place `Wake` is bumped and
+/** M19b ( gate round 1: the one place `Wake` is bumped and
  * notified, so `harness.ts`'s `wake()` and `parkOne` -- and `tests/browser/pages/src/
  * park-notify-race-worker.ts`'s own page script, which must send the *exact* signal `parkOne` sends
  * to prove the fix rather than a hand-written copy of it -- share a single implementation. Calling

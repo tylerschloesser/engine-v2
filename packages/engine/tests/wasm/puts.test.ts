@@ -1,11 +1,11 @@
-// The WASM-under-Node leg of `fx-puts`'s idle-100 golden (docs/plan/13-sim-host-tick-loop.md step
+// The WASM-under-Node leg of `fx-puts`'s idle-100 golden (M13 step
 // 3): the `.wasm` run's hash after 100 idle ticks (no actions -- Actions are M16, Non-scope) equals
 // `golden/golden.json`, which `pnpm golden puts` writes from this very run (0002, 0020 §5) and which
 // the native leg (`fixtures/puts/tests/puts_scenarios.rs`'s `puts_idle_100_golden`, driving
 // `Sim<Puts>` directly) is compared against too -- so this and the native test prove `.wasm` matches
 // native transitively, through the one shared golden file.
 //
-// docs/plan/27-server-entrypoint-and-netcode-harness.md, Order of work 1 ("move the wasm suite
+// M27, Order of work 1 ("move the wasm suite
 // onto [createWorldServer]"): these three golden tests (idle, connected, script-a) are the ones
 // that actually drive a real `Game` (`fx-puts`, `Host<G>`-based) through the sim role -- unlike
 // `determinism.test.ts`/`worldgen.test.ts` (`fx-hash`/`fx-worldgen`, low-level `export_instance!`
@@ -54,7 +54,7 @@ function hexEncode(bytes: Uint8Array): string {
 }
 
 /** 16 bytes, arbitrary but fixed: these tests never care about identity beyond "some player
- * joins" (docs/plan/28-sessions-and-reconnect.md gate item). */
+ * joins" (M28 gate item). */
 const TEST_SECRET = new Uint8Array(16).fill(0x42)
 
 /** `client_hello()` off a throwaway `Role.Client` instance (mirrors `src/test/headless-client.ts`'s
@@ -133,7 +133,7 @@ async function tickPutsThroughServer(
   })
   await server.ready
   if (connectAtStart) {
-    // docs/plan/28-sessions-and-reconnect.md gate item: `createWorldServer` always wires the real
+    // M28 gate item: `createWorldServer` always wires the real
     // handshake now (Deviations, step 1-2), so a connection that never speaks `Hello` simply never
     // attaches. Speak it, the same way `HeadlessClient.sendHello` does, then await the digest
     // before ticking -- `crypto.subtle.digest` resolves through a real threadpool callback in
@@ -170,7 +170,7 @@ test('wasm_idle_100_matches_native', async () => {
   expect(memGrows).toBe(0)
 })
 
-// docs/plan/15b-ring-connection-and-replica-rendering.md, Orchestrator ruling 1: `puts_idle_100`
+// M15b, Orchestrator ruling 1: `puts_idle_100`
 // stays the zero-connection golden above; a connection changes `sim_hash()` from the very first
 // tick (`Host::connect`'s own queued `Record::Player{Joined, Connected}`, which `fx-puts`'s
 // `on_player` turns into a real state write), so it gets its own scenario/golden pair
@@ -190,7 +190,7 @@ test('wasm_connected_100_matches_its_own_golden', async () => {
 })
 
 /**
- * docs/plan/16-action-round-trip.md step 5: the WASM-under-Node leg of `puts_script_a`'s golden,
+ * M16 step 5: the WASM-under-Node leg of `puts_script_a`'s golden,
  * `puts_scenarios.rs`'s `puts_script_a_golden` native leg's own counterpart -- both compare against
  * `golden/golden-script-a.json`, so this and the native test prove `.wasm` matches native
  * transitively (`wasm_idle_100_matches_native`'s own precedent, above). The value must not move
@@ -247,7 +247,7 @@ test('wasm_script_a_matches_native', async () => {
       tick += 1
     }
     if (entry.connect) {
-      // docs/plan/28-sessions-and-reconnect.md gate item: a real `Hello`/`Welcome` handshake, not
+      // M28 gate item: a real `Hello`/`Welcome` handshake, not
       // `server.accept(conn)` alone. `state.status` only reaches `'settled'` (and `onMessage` only
       // routes to `sim_admit`) once `pumpHandshakes` drains the attach at a *tick boundary*
       // (`server.ts`), so this entry's own action(s) below cannot land on `entry.tick` the way the
@@ -311,7 +311,7 @@ function manualTimer() {
 }
 
 /**
- * docs/plan/13b-tick-timing-allocation.md (Tests added: "a real overrun increments tickOverruns and
+ * M13b (Tests added: "a real overrun increments tickOverruns and
  * a real drop increments ticksDropped ... they must be real here" -- M13 shipped these exercised
  * only against a fake `SimInstance`, `server.test.ts`'s own `simhost_resync_*` tests). This drives
  * the same resync-window scenario against `wrapEngineInstance` over the real `fx-puts` `.wasm`:
@@ -366,7 +366,7 @@ test('real overrun and drop increment tickOverruns/ticksDropped, driving the rea
 })
 
 /**
- * docs/plan/15b-ring-connection-and-replica-rendering.md step 3: `SimHost.accept` over a real, real
+ * M15b step 3: `SimHost.accept` over a real, real
  * `.wasm` instance, driven through a real SAB ring pair (`RingConnection`, an in-thread "client"
  * consumer on the other end -- no worker, `createRing`/`RingProducer`/`RingConsumer` directly, same
  * shape `ring-connection.test.ts` already exercises). Compared against a *second* real instance of

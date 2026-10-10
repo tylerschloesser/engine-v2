@@ -1,4 +1,4 @@
-//! Shared script for `fx-persist`'s own recorded log (docs/plan/22-persistence-log-and-snapshots.md
+//! Shared script for `fx-persist`'s own recorded log (M22
 //! Order of work step 3: "record the `persist` fixture log by a scripted native run"). `record()`
 //! drives a `Sim<Persist>` through a fixed, deterministic script while writing the exact same
 //! records through `engine::persist::FrameWriter`, so the log and the live hashes stay in lockstep
@@ -174,7 +174,7 @@ pub fn record() -> Recorded {
     checkpoints.push((sim.tick(), sim.state_hash()));
 
     // Run well past several 25-tick (and 1-tick) heavy-mode snapshot boundaries with the timer
-    // still pending (docs/plan/22-persistence-log-and-snapshots.md implementer notes: "heavy mode
+    // still pending (M22 implementer notes: "heavy mode
     // actually crosses snapshot points with pending timers").
     while sim.tick().0 < 320 {
         idle(&mut sim, &mut out, &mut idle_since);

@@ -1,4 +1,4 @@
-// The client worker's DrawList publish pump (docs/plan/17-drawlist-and-sprites.md, step 3): copies
+// The client worker's DrawList publish pump (M17, step 3): copies
 // the header plus only the body blocks a frame actually used from `RegionId.DrawList` (Rust-owned
 // WASM memory, written by `frame()`'s own `DrawList::sort_into`) into the `drawList` triple
 // buffer's back slot, then publishes -- Planning decisions "Proportional publish": staging and each

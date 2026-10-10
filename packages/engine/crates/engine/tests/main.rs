@@ -1,5 +1,5 @@
 //! One shared integration-test binary for every `crates/engine` scenario/replay test that has no
-//! reason to be its own process (docs/plan/24c-engine-edit-rebuild-time.md). Each former top-level
+//! reason to be its own process (M24c. Each former top-level
 //! `tests/*.rs` file is now `tests/main/*.rs`, pulled in below with `#[path]` so cargo compiles and
 //! links it once, as part of this one binary, instead of once per file.
 //!
@@ -14,7 +14,7 @@
 //! `#[path]` (not moving these into a `mod` declared with a matching directory, which would work
 //! identically) keeps every test's own module-relative code unchanged; only the reported binary
 //! name changes (`engine::codec` -> `engine::main`, for example) -- `cargo nextest list`'s own
-//! output changes exactly there and nowhere else (docs/plan/24c-engine-edit-rebuild-time.md
+//! output changes exactly there and nowhere else (M24c
 //! Deviations has the before/after comparison).
 #[path = "main/action_round_trip.rs"]
 mod action_round_trip;

@@ -1,4 +1,4 @@
-//! Colour assignment (docs/plan/34-reference-multiplayer.md Scope, Tests added): `on_player(Joined)`
+//! Colour assignment (M34 Scope, Tests added): `on_player(Joined)`
 //! draws a free palette index with `w.rng()` and does one `put_global`; nothing else writes `Global`.
 
 mod common;

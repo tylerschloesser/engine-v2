@@ -1,4 +1,4 @@
-// `pnpm device:walk` serve-time mount (docs/plan/39f-device-auto-runner.md step 2): when
+// `pnpm device:walk` serve-time mount (M39f step 2): when
 // `ENGINE_WALK_PORT` is set, `vite preview` answers every HTML page with the agent's `<script>` tag
 // added to its `<head>`, and proxies `/__walk` to the phone API on that loopback port (the two Vite
 // configs add the proxy beside this plugin). Nothing else. The release bundle is untouched: the plugin

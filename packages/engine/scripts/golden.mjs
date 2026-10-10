@@ -41,7 +41,7 @@ for (const name of wanted === undefined ? names : [wanted]) {
     const suffix = scenarioFile.slice('scenario'.length, -'.json'.length) // '' or '-connected'
     const scenario = JSON.parse(readFileSync(join(golden, scenarioFile), 'utf8'))
     const inst = instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} })
-    // docs/plan/16-action-round-trip.md step 5: a `script` scenario needs a second, client-role
+    // M16 step 5: a `script` scenario needs a second, client-role
     // instance of the same `.wasm` purely to encode each scripted action into real wire bytes
     // (`runScriptScenario`'s own doc comment has the detail) -- every other scenario kind needs
     // only the one instance `runHashScenario` already takes.

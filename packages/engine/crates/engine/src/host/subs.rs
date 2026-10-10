@@ -25,7 +25,7 @@ pub const CAP_CHUNKS: usize = 144;
 pub const MAX_HALF_TILES: u16 = 128;
 /// 0010 does not name a minimum (only "zero or over-large extents are clamped about the centre,
 /// never rejected"): one tile is the smallest extent that still names a chunk to subscribe
-/// (docs/plan/15-connection-and-subscriptions.md Deviations records this as this milestone's own
+/// (M15 Deviations records this as this milestone's own
 /// reading of an unspecified number, same footing as `view::lookahead_chunks`'s own algorithm
 /// reading of 0008 §5).
 pub const MIN_HALF_TILES: u16 = 1;
@@ -92,7 +92,7 @@ enum Class {
     Retained = 3,
 }
 
-/// One connection's subscribed chunk set (docs/plan/15-connection-and-subscriptions.md Scope).
+/// One connection's subscribed chunk set (M15 Scope).
 /// [`SubscriptionSet::update`] is the only mutator: given the latest camera report and the current
 /// tick, it recomputes the target, applies hysteresis and the cap, and reports what changed since
 /// the previous call via [`SubscriptionSet::entered`]/[`SubscriptionSet::left`] (each call's own

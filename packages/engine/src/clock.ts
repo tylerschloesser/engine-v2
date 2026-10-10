@@ -29,11 +29,11 @@ export const systemScheduler: Scheduler = {
   cancelFrame: (id) => cancelAnimationFrame(id),
 }
 
-/** docs/plan/15d-client-clock-allocation.md: the same shape as `SimHost.resync()`
+/** M15d: the same shape as `SimHost.resync()`
  * (docs/decisions/0030) applied to a client frame path instead of a tick path. `clock.now()`'s
  * return is a fractional double -- V8 boxes a fresh `HeapNumber` for it on every read, the same
  * defect class 0030 fixed on the sim worker (measured there: ~11.92 B per read; measured here,
- * `stepFrame@client-*.js`: ~11.96 B/frame, docs/plan/15d, Deviations). Unlike 0030's own read, this
+ * `stepFrame@client-*.js`: ~11.96 B/frame, M15d, Deviations). Unlike 0030's own read, this
  * one boxes at ~12 B/read under forced `--no-opt --no-sparkplug` *and* under default V8 once moved
  * into this function's own accumulator (Deviations) -- not purely an interpreter-tier artefact here,
  * so the fix is about read *frequency*, not which V8 tier wins the compilation race. Reading the

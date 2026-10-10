@@ -7,7 +7,7 @@ import {
   WORKER_GEN1,
 } from './layout.js'
 
-// `layout.sab_total_under_budget` (docs/plan/06-sab-primitives-and-workers.md, Tests added) lives
+// `layout.sab_total_under_budget` (M06, Tests added) lives
 // in tests/support/layout-budget.test.ts: `tests/support/budgets.ts` cannot be imported from a
 // file under src/ (tsc's rootDir for packages/engine/tsconfig.json is src/ itself).
 test('layout.createSabSet shape', () => {

@@ -1,4 +1,4 @@
-// M19b (docs/plan/19b-sim-park-while-armed.md): constructs, deterministically, the residual race
+// M19b ( constructs, deterministically, the residual race
 // `armedLoop`'s own fix closes -- a park signal (`harness.ts`'s `parkOne`) landing in the gap
 // between the loop's own `Yield` check and the moment its `Atomics.wait` call actually registers
 // this thread as a waiter. `armedLoop` cannot be paused from outside mid-statement, so this worker

@@ -42,7 +42,7 @@ pub fn high_water_bytes() -> usize {
 }
 
 /// Bytes allocated minus bytes freed through [`Arena`] **by the calling thread only**: what a
-/// native `no_alloc_*` test measures (docs/plan/30c-ci-reds-after-m30.md). Signed, since a thread
+/// native `no_alloc_*` test measures (M30c. Signed, since a thread
 /// may free what another thread allocated (the test thread's first act is freeing the boxed
 /// closure libtest's main thread allocated for it). Only differences between two readings on the
 /// same thread mean anything.

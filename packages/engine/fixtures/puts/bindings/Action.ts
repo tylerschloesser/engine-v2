@@ -2,10 +2,10 @@
 import type { Pos } from './Pos.js'
 
 /**
- * One action per handler this fixture exercises (docs/plan/12b-world-access-and-sim-driver.md
+ * One action per handler this fixture exercises (M12b
  * Scope): `Paint`/`Spawn` are chunk-scoped puts, `Bump`/`Remove` exercise the reject path
  * (occupancy is Non-scope, see the module doc comment), `SetNote` is player-scoped, `SetMotd` is
- * global-scoped, `Roll` reads `SimRng`. `#[ts(export)]` (docs/plan/16-action-round-trip.md step
+ * global-scoped, `Roll` reads `SimRng`. `#[ts(export)]` (M16 step
  * 4, 0017 §5's bindings step): without it ts-rs's derive macro emits no `export_bindings_action`
  * test at all, so `cargo test export_bindings` would silently write nothing.
  */

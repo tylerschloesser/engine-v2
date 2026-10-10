@@ -1,4 +1,4 @@
-//! `admit_witness`, `presence_is_not_state` (docs/plan/19-presence-channel.md Tests added, step
+//! `admit_witness`, `presence_is_not_state` (M19 Tests added, step
 //! 3): goes through the real pipeline (`Host::on_uplink` -> decode presence -> `G::admit`) rather
 //! than calling `fx_presence::Presence::admit` directly, so "an admit rejection leaves the sealed
 //! frame's records unchanged" is a real end-to-end property, not an assumption about `Sim::step`

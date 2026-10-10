@@ -1,4 +1,4 @@
-// `createVirtualClock` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Seams): "M03's
+// `createVirtualClock` (M27, Seams): "M03's
 // `ManualClock` plus `advanceTo(t)` ... and `advanceBy(ms)`" -- docs/decisions/0020-testing-
 // strategy.md §7's "Time is a virtual clock" paragraph: "`advanceTo(t)` awaits physical arrival of
 // every message with `deliverAt <= t`, then releases them in the total order `(deliverAt, link,

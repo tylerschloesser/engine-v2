@@ -1,4 +1,4 @@
-// `browser` suite (docs/decisions/0020 §1, §3, §6; docs/plan/03-browser-harness.md, Planning
+// `browser` suite (docs/decisions/0020 §1, §3, §6; M03, Planning
 // decisions "Browsers and projects"). `pnpm test`'s `pages` build step has already run `vite build`
 // on `tests/browser/pages`; `webServer` only runs `vite preview` (Planning decisions, "Served build,
 // not dev server").
@@ -8,7 +8,7 @@ import { defineConfig, devices } from '@playwright/test'
 const port = Number(process.env.ENGINE_TEST_PORT ?? 4517)
 const baseURL = `http://127.0.0.1:${port}`
 
-// docs/plan/20-reference-game-v0.md, Deviations: `games/reference`'s own browser tests reach the
+// M20, Deviations: `games/reference`'s own browser tests reach the
 // `browser` suite through a second project (`reference`, below) and a second `webServer` entry
 // here, rather than a new top-level suite or a separate `playwright.config.ts` -- the `playwright`
 // adapter (`scripts/lib/adapters.mjs`) hardcodes this one config file for every playwright-kind
@@ -29,14 +29,14 @@ const baseURL = `http://127.0.0.1:${port}`
 const referencePort = port + 3
 const referenceBaseURL = `http://127.0.0.1:${referencePort}`
 
-// M04: base port for the `gc` project's `flat` CDP transport (docs/plan/04-zero-gc-harness.md,
+// M04: base port for the `gc` project's `flat` CDP transport (M04,
 // Planning decisions "CDP transport"); `TEST_PARALLEL_INDEX` is set per worker process by
 // Playwright itself, so two workers of one run (and, with distinct `ENGINE_CDP_PORT`s, two
 // worktrees) never collide.
 const cdpPort =
   Number(process.env.ENGINE_CDP_PORT ?? 9333) + Number(process.env.TEST_PARALLEL_INDEX ?? 0)
 
-// M10 (docs/plan/10-ci-workflow.md; docs/decisions/0020-testing-strategy.md §6): unset locally,
+// M10 (M10; docs/decisions/0020-testing-strategy.md §6): unset locally,
 // `channel: 'chromium'` gives a real Metal adapter headless and `--enable-unsafe-webgpu` alone is
 // enough. CI (`ubuntu-latest`) sets `ENGINE_GPU=swiftshader`, which adds the flags a software
 // WebGPU adapter needs; `libvulkan1`/`mesa-vulkan-drivers` are the matching apt packages (ci.yml).
@@ -61,7 +61,7 @@ const swiftshaderArgs =
       ]
     : []
 
-// Spike B fallback rung 1 (docs/plan/10-ci-workflow.md "Fallbacks if SwiftShader fails"; first CI
+// Spike B fallback rung 1 (M10 "Fallbacks if SwiftShader fails"; first CI
 // run, M10 Deviations): `channel: 'chromium'` (new headless mode: playwright-core's own
 // `LaunchOptions.channel` doc comment, `'"chromium"' to opt in to new headless mode`) returned a
 // null adapter on ubuntu-latest even with the flags above. `channel: 'chromium-headless-shell'` is
@@ -78,7 +78,7 @@ const swiftshaderArgs =
 const chromiumChannel =
   process.env.ENGINE_GPU === 'swiftshader' ? 'chromium-headless-shell' : 'chromium'
 
-// docs/plan/10-ci-workflow.md, Deviations: `[webkit] terrain: probe tile colours webkit
+// M10, Deviations: `[webkit] terrain: probe tile colours webkit
 // @webkit-gpu @slow` failed on ubuntu-latest with `navigator.gpu is not present` -- WebKitGTK,
 // what Playwright ships on Linux, has no WebGPU at all (a platform capability fact, not a
 // software-adapter question any flag fixes). `@webkit-gpu` therefore runs only off Linux, where
@@ -89,7 +89,7 @@ const chromiumChannel =
 // covering macOS the day WebGPU broke there.
 const webkitGrep = process.platform === 'linux' ? /@engines/ : /@engines|@webkit-gpu/
 
-// docs/plan/10-ci-workflow.md, Deviations: the `gc` project's own `burst` negative controls
+// M10, Deviations: the `gc` project's own `burst` negative controls
 // (40 KB/frame, real GC work over 0028's two 600-frame windows) needed up to 29.9 s just to PASS
 // on the CI runner, and one timed out at 30.655 s against the local 30 s default -- measured from
 // run 35619437805's own `report.json` per-test durations (`echo`/`terrain neg burst main` both
@@ -155,7 +155,7 @@ export default defineConfig({
     {
       // Sim hash only (0020 §6: Firefox returns a null WebGPU adapter headless); multi-engine repeats
       // stay to the determinism spec (`@engines`; Planning decisions, "Browsers and projects").
-      // `@webkit-gpu` (docs/plan/09-renderer-terrain.md, Tests added "`@slow`: `terrain.
+      // `@webkit-gpu` (M09, Tests added "`@slow`: `terrain.
       // probe_tile_colours` on Playwright WebKit"): WebKit, unlike Firefox, does give a real WebGPU
       // adapter headless (0018 §7's own support table), so this one extra tag lets a GPU test opt
       // into WebKit without also being picked up by Firefox's `@engines`-only grep below -- a plain
@@ -172,7 +172,7 @@ export default defineConfig({
       testIgnore: '**/gc-*.spec.ts',
     },
     {
-      // docs/plan/17b-sprites-and-frame-budget.md, steps 4-6: `bench.frame_worstcase` alone, real
+      // M17b, steps 4-6: `bench.frame_worstcase` alone, real
       // `requestAnimationFrame` pacing (0020 §3's "browser tests never use real rAF pacing" rule is
       // about lockstep determinism tests; this one exists specifically to measure real frame
       // pacing, `device.html`'s own precedent). `--disable-frame-rate-limit --disable-gpu-vsync`
@@ -201,7 +201,7 @@ export default defineConfig({
       timeout: 120_000,
     },
     {
-      // docs/plan/04-zero-gc-harness.md, Seams: the zero-GC assertion of 0016 §3. Launch args:
+      // M04, Seams: the zero-GC assertion of 0016 §3. Launch args:
       // 0016 §3, plus a `--remote-debugging-port` (unused under the default `tunnel` transport) so
       // `pnpm gc flat`/the flat-transport parity test can reach this same browser.
       name: 'gc',
@@ -226,7 +226,7 @@ export default defineConfig({
       timeout: gcTimeoutMs,
     },
     {
-      // docs/plan/20-reference-game-v0.md: `games/reference`'s own browser tests (`terrain.spec.ts`
+      // M20: `games/reference`'s own browser tests (`terrain.spec.ts`
       // today), a wholly separate Vite app served by the second `webServer` entry below. `testDir`
       // override (relative to this file, `packages/engine/`) is what keeps this project from ever
       // seeing the other projects' specs and vice versa.
@@ -240,7 +240,7 @@ export default defineConfig({
       },
     },
     {
-      // docs/plan/20b-reference-player-and-collect-ui.md, zero-allocation exit criterion (step 0-2
+      // M20b, zero-allocation exit criterion (step 0-2
       // Deviations: "a new project mirroring the existing `reference` project's own pattern ...
       // and the `gc` project's own launch args/`testMatch`/timeout"). Its own *spec file*
       // (`gc-reference.spec.ts`) lives under this package's own `tests/browser/`, not under

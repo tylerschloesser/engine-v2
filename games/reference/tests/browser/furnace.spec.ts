@@ -1,5 +1,5 @@
 // `reference_furnace_flow`, `reference_furnace_panel_survives_swap`, `reference_furnace_pick_up`
-// (docs/plan/33b-reference-furnace-operation.md Tests added). Real mouse taps on the real canvas and
+// (M33b Tests added). Real mouse taps on the real canvas and
 // real clicks on the panel's buttons; stepped ticks and frames only (a smelt is 100 ticks, never 5 s
 // of waiting). The visuals are read back as pixels on the production page (`window.__pixelAt`,
 // compared with the drawables pass off) as well as from the DrawList.

@@ -1,4 +1,4 @@
-//! `apply_journal_overhead` (docs/plan/21b-timers-wakeups-and-tickcx.md Planning decisions "Host-
+//! `apply_journal_overhead` (M21b Planning decisions "Host-
 //! side atomicity of `apply` via an undo journal"): measures the undo journal's own cost against
 //! `fx-machines` (10k mixed actions, 5% rejecting), native, slow tier -- also checks the "zero
 //! steady-state allocations" half of the adopt criterion, through `fx_machines::export_game!`'s own

@@ -1,4 +1,4 @@
-// `byte-pump-backpressure` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Tests added):
+// `byte-pump-backpressure` (M27, Tests added):
 // "full ring retries, drops stays 0" -- a downlink ring too small to hold every message at once
 // must never drop one (`RingProducer.recordDrop`'s own counter, `RING_DROPS`, shared with the
 // consumer side): `createBytePump`'s own `attach`/`drain` retry a not-yet-pushed delivery instead.

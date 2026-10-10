@@ -1,4 +1,4 @@
-// WebGPU device loss (docs/plan/37b-device-loss.md; docs/decisions/0018-renderer.md §8): a real
+// WebGPU device loss (M37b; docs/decisions/0018-renderer.md §8): a real
 // client over `fx-terrain` behind a `GpuHost` (`pages/src/device-loss.ts`). Both tests lose the
 // device on purpose, so each opts out of the global "a device loss fails the test" rule with
 // `allowDeviceLoss(page)` (0020 §6). Stepped frames and the manual clock only; the picture is proved

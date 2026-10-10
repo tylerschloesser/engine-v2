@@ -1,4 +1,4 @@
-//! `reference-sim`: the reference game's Rust crate (docs/plan/20-reference-game-v0.md). Steps 1-3
+//! `reference-sim`: the reference game's Rust crate (M20. Steps 1-3
 //! (Order of work) scaffolded the crate, worldgen and asset pipeline; step 4-6 add the real
 //! `Action`/`Reject`/`Player`/`Global`/`Ui`, `content::register`, the collect rules and the
 //! depletion `tile_visual` override.

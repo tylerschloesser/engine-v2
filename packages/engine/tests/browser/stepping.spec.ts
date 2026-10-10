@@ -1,5 +1,5 @@
 // The harness's `stepTick`/`resume`/`park`/`untilQuiescent`/`hash`/`memGrows` mechanics
-// (docs/plan/03-browser-harness.md, Tests added), proven through `stepping.html`'s single sim
+// (M03, Tests added), proven through `stepping.html`'s single sim
 // worker. Chromium only: this is ABI-level plumbing, not a determinism claim (that is
 // `determinism.spec.ts`).
 import { expect, test } from '@playwright/test'
@@ -40,7 +40,7 @@ test('stepping: 1,000 stepTick() in one task match a plain reference', async ({ 
     for (let t = 0; t < 1000; t++) harness.stepTick()
     await harness.park()
     const actual = await harness.hash('sim')
-    // M18c (docs/plan/18c-stepping-hash-under-load.md): gathered every run, not only on failure --
+    // M18c ( gathered every run, not only on failure --
     // cheap (one message round trip plus three shared-memory reads), and a mismatch needs this
     // captured at the moment `hash` was read, not reconstructed afterwards.
     const diag = await harness.debugSnapshot('sim')
@@ -48,7 +48,7 @@ test('stepping: 1,000 stepTick() in one task match a plain reference', async ({ 
   })
   // A plain `throw` here, not just `expect(...).toBe(...)`, because the JSON-reporter-based runner
   // does not reliably carry a matcher's own Expected/Received diff into the failure message it
-  // captures (docs/plan/03-browser-harness.md, Deviations: the same lesson forced `no_ambient_random`
+  // captures (M03, Deviations: the same lesson forced `no_ambient_random`
   // off `toEqual` and onto a plain `throw`). This is the one occurrence this milestone exists to
   // explain, so the message must show up on its own, not depend on how the reporter renders a diff.
   if (result.actual !== expected) {

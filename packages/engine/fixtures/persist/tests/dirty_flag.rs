@@ -1,4 +1,4 @@
-//! docs/plan/22-persistence-log-and-snapshots.md fix round 1, gap 2: Planning decisions 7 ("dirty
+//! M22 fix round 1, gap 2: Planning decisions 7 ("dirty
 //! means a put happened *or a record was logged* since the last snapshot"). A reconnect
 //! (`Host::connect` on an already-`ever_joined` slot) pushes only `Record::Player{Connected}` --
 //! no `on_player` state write (`fx_persist::Persist::on_player`'s own `Joined`-only arm), and no

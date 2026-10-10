@@ -6,8 +6,8 @@
 //! M18, Non-scope of the delegating brief) -- this milestone proves the whole
 //! ring -> `Rx` -> decode -> queue path end to end (`fixtures/terrain`'s own `on_input`).
 
-/// Wire `kind` byte values (docs/plan/11-camera-and-input.md Seams, `inputRing` record layout).
-/// `GAME` (docs/plan/18-picking-and-overlay.md Scope, 0024 §7c): `client.input.emit(code, a, b)`'s
+/// Wire `kind` byte values (M11 Seams, `inputRing` record layout).
+/// `GAME` (M18 Scope, 0024 §7c): `client.input.emit(code, a, b)`'s
 /// own kind -- client-local UI intent, never delivered to `client.input.on` (`input/semantic.ts`'s
 /// `emit`/dispatch-callback path is a different function entirely; `emitGame` only ever writes the
 /// ring record), and never dropped by [`InputQueue`]'s overflow policy (see [`InputQueue::push`]).
@@ -21,7 +21,7 @@ pub mod kind {
     pub const GAME: u8 = 7;
 }
 
-/// One decoded `inputRing` record (docs/plan/11-camera-and-input.md Seams: 32 bytes, little-
+/// One decoded `inputRing` record (M11 Seams: 32 bytes, little-
 /// endian). `#[repr(C)]` mirrors the wire layout field for field, but [`InputEvent::decode`] reads
 /// explicit `from_le_bytes` (`.claude/rules/determinism.md`: no reliance on a pointer cast agreeing
 /// with the wire's own byte order) rather than a raw transmute; a golden test exists precisely to
@@ -63,7 +63,7 @@ impl InputEvent {
         }
     }
 
-    /// World position: tile plus its fractional offset (docs/plan/11-camera-and-input.md Seams,
+    /// World position: tile plus its fractional offset (M11 Seams,
     /// `inputRing` record: "frac ... position inside the tile, so world position is exact over
     /// +/-2^23"). `as`/`+` only (`.claude/rules/determinism.md`).
     pub fn world_pos(&self) -> (f64, f64) {
@@ -73,7 +73,7 @@ impl InputEvent {
         )
     }
 
-    /// `kind::GAME`'s own `code` (docs/plan/18-picking-and-overlay.md Provides): `client.input.
+    /// `kind::GAME`'s own `code` (M18 Provides): `client.input.
     /// emit(code, ..)`'s first argument, carried in the `pick_id` field (the same field every other
     /// kind uses for a picked entity's id -- `emit` never picks anything, so the field is free).
     /// Meaningful only when `kind == kind::GAME`; reading it off any other kind just returns that
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn decode_record_golden() {
         // Field values chosen to catch a swapped field, a wrong offset, a sign error on the `i32`
-        // tile pair, or a little/big-endian mistake (docs/plan/11-camera-and-input.md's own
+        // tile pair, or a little/big-endian mistake (M11's own
         // warning): every byte distinct, a negative tile axis, a large positive one, and frac
         // values (0.25/0.75) whose IEEE-754 bit patterns are neither all-zero nor palindromic --
         // the same bytes `packages/engine/src/input/record.test.ts`'s own golden writes.

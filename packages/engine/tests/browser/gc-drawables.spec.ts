@@ -1,4 +1,4 @@
-// `drawables` zero-GC page (docs/plan/17-drawlist-and-sprites.md step 6, Tests added: "page id
+// `drawables` zero-GC page (M17 step 6, Tests added: "page id
 // `drawables` through `zeroGcSuite` (fixture with a few hundred entities, panning, actions from
 // pre-encoded bytes; isolates `main`, `client`, `sim`, `gen0`)"), plus the two production DrawList
 // tests that need a real worker publishing into a real triple buffer rather than the hand-filled
@@ -96,7 +96,7 @@ test('drawlist.triple_newest_wins', async ({ page }, testInfo) => {
   await page.evaluate(() => window.__drawablesTest?.park())
 })
 
-// docs/plan/18-picking-and-overlay.md gate round 1: `pick.matches_interpolated_frame_on_screen`
+// M18 gate round 1: `pick.matches_interpolated_frame_on_screen`
 // (`pick.spec.ts`) never involves a real renderer -- it hand-fills the DrawList itself, so it cannot
 // show that a real render pipeline and real picking agree on which frame is "the one on screen".
 // This does: a real `fx-drawables` client, a real `DrawablesRenderer`, many real publishes, and on
@@ -111,7 +111,7 @@ test('drawlist.picker_matches_renderer_frame_seq', async ({ page }, testInfo) =>
 
   await page.evaluate(() => window.__drawablesTest?.resume())
 
-  // docs/plan/18-picking-and-overlay.md gate round 2 (review Finding 2): `rendererSeq === pickerSeq`
+  // M18 gate round 2 (review Finding 2): `rendererSeq === pickerSeq`
   // alone passes even if `DrawListSlot.acquire()` were a no-op and both readers stuck permanently at
   // `frame_seq = 0` (twenty trivial `0 === 0` checks). `previousSeq` starts at `0` (not `-1`), so
   // "greater than" also forces the very first iteration's own value to be nonzero, not merely
@@ -199,7 +199,7 @@ test('counters.pipeline_switches_and_instance_bytes', async ({ page }, testInfo)
   await page.evaluate(() => window.__drawablesTest?.park())
 })
 
-// docs/plan/17b-sprites-and-frame-budget.md fix round 1: "gpuBytes must cover the whole renderer
+// M17b fix round 1: "gpuBytes must cover the whole renderer
 // ... measured on a real page that has both terrain and drawables" -- `gc-drawables.html` is exactly
 // that page (a real TerrainRenderer + DrawablesRenderer, sprites installed). No `resume()`/`park()`
 // bracketing needed: `gpuBytes()` reads only cached byte counts on the two renderer objects, never

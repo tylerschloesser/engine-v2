@@ -1,4 +1,4 @@
-// `window.__check` of the reference game's check build (docs/plan/39f-device-auto-runner.md "The check
+// `window.__check` of the reference game's check build (M39f "The check
 // reporter contract", steps 11-12). **Bench builds only** (`vite build --mode bench`, `__BENCH__`): `main.ts`
 // reaches this file through `if (__BENCH__)`, so the release build has neither this code nor `__check`
 // (`check-reporter-absent`), and `reference_bench_feature_identical` shows the bench cargo feature leaves a
@@ -248,7 +248,7 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
         frame_build_p95_ms: +h.frameBuildP95Ms.toFixed(3),
         resync_p95_ms: +h.resyncP95Ms.toFixed(3),
         catchup_ticks_per_10s: h.catchupTicksPer10s,
-        // docs/plan/39s: the per-tick series of the last 4,096 sim_tick durations, summarised
+        // M39s: the per-tick series of the last 4,096 sim_tick durations, summarised
         // (the whole ring is `tickSeries()`).
         tick_hist_edges_ms: HIST_EDGES_MS,
         tick_hist: h.tickSeries.counts,
@@ -257,7 +257,7 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
         tick_period_r: +h.tickSeries.periodR.toFixed(3),
         tick_series_n: h.tickSeries.n,
         tick_missed: h.tickSeries.missed,
-        // docs/plan/39y: `[p50, p95]` ms by `sim_tick` phase (sampled ones scaled; zeros off a bench-phases build).
+        // M39y: `[p50, p95]` ms by `sim_tick` phase (sampled ones scaled; zeros off a bench-phases build).
         sim_phases_ms: h.phases,
         main_p95_ms: +h.mainP95Ms.toFixed(3),
         frame_p95_ms: +h.frameP95Ms.toFixed(3),

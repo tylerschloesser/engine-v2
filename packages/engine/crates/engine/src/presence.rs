@@ -1,7 +1,7 @@
 //! `Presence` and `PresenceTable<G>` (docs/decisions/0001-camera-and-presence.md "Presence is an
 //! engine channel"; amended by [0024](../../../../docs/decisions/0024-planning-amendments.md) §6:
 //! `Default`, and the 32-byte limit per encoded sample, not at init). Real now
-//! (docs/plan/19-presence-channel.md, steps 1-3): M12 declared the trait empty and `PresenceTable`
+//! (M19, steps 1-3): M12 declared the trait empty and `PresenceTable`
 //! fieldless (`game.rs`'s own doc comment); both are filled in here and re-exported from `game.rs`
 //! the same way `TickCx`/`FrameCx`/`FrameView`/`DrawList` already are, so every existing
 //! `crate::game::{Presence, PresenceTable}` import path stays the same.
@@ -45,7 +45,7 @@ impl Presence for () {
 /// The 32-byte cap on one encoded [`Presence`] sample (0001: "at most 32 bytes encoded"; 0024 §6:
 /// "The 32-byte limit applies to each encoded sample ... An oversize sample is dropped and
 /// counted"). Checked wherever untrusted bytes decode into a sample (`Host::on_uplink`,
-/// docs/plan/19-presence-channel.md steps 4-6's own site) -- this constant is this crate's single
+/// M19 steps 4-6's own site) -- this constant is this crate's single
 /// home for the number, `wire/CLAUDE.md`'s convention for a shared limit.
 pub const MAX_ENCODED_BYTES: usize = 32;
 

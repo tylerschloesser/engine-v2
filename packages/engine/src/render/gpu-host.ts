@@ -1,4 +1,4 @@
-// `GpuHost` (docs/plan/37b-device-loss.md Scope; docs/decisions/0018-renderer.md §8): owns the
+// `GpuHost` (M37b Scope; docs/decisions/0018-renderer.md §8): owns the
 // current `GpuResources`, watches its device's `lost` promise and, on a loss, drops it and builds
 // another. The loss sequence: `device.lost` -> request adapter -> device -> `GpuResources` again
 // (art re-fetched, visual table rewritten from `tiles.json`) -> subscribers told (the frame loop

@@ -1,4 +1,4 @@
-// The client worker's gen pump (docs/plan/08b-gen-workers-and-queue.md, Order of work 4; Planning
+// The client worker's gen pump (M08b, Order of work 4; Planning
 // decisions 2, 5): called from `worker/client.ts`'s `body()` after `frame`, on every wake (the
 // orchestrator's own decision: `gen_take` costs nothing and returns 0 on a page whose client role
 // has no `TerrainFeed`, so this file runs unconditionally rather than only when a frame was

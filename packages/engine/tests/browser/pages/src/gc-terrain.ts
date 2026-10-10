@@ -1,4 +1,4 @@
-// `terrain` zero-GC page (docs/plan/09-renderer-terrain.md, step 7; `gc-test` skill "Production-
+// `terrain` zero-GC page (M09, step 7; `gc-test` skill "Production-
 // topology pages"): a real `createClient()` over `fx-terrain`, `host: { kind: 'remote', ... }` (no
 // `Sim` role), plus a real device/renderer, driven by a scripted pan so chunks are generated,
 // converted, uploaded and evicted inside the measured window (0016 §2: "chunk-enter bursts are not

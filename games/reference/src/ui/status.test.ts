@@ -1,4 +1,4 @@
-// `statusText` (docs/plan/34-reference-multiplayer.md Scope: link status): pure mapping, no DOM.
+// `statusText` (M34 Scope: link status): pure mapping, no DOM.
 import { expect, test } from 'vitest'
 import { linkLogRow, startFailureText, statusText } from './status.js'
 

@@ -92,7 +92,7 @@ const host = nodeHostServices({
   },
 })
 
-// `--stats-every <s>` (docs/plan/38-hosting-checks.md): one stdout line per window with the tick
+// `--stats-every <s>` (M38: one stdout line per window with the tick
 // callback's own duration (p50/p99/max, ms) and how many fired more than 1.5 ticks after the last
 // one (an overrun). Measured around `timer.every`'s callback, so the engine stays untouched.
 const statsEvery = Number(values['stats-every'])

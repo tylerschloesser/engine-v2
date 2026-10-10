@@ -1,4 +1,4 @@
-// `frame-bench.html`: `bench.frame_worstcase`'s own page (docs/plan/17b-sprites-and-frame-budget.md
+// `frame-bench.html`: `bench.frame_worstcase`'s own page (M17b
 // steps 4-6, Planning decisions "Frame-time criterion lands here, not in M09"). A real, connected
 // `fx-drawables` client (`host: { kind: 'local', connect: true }`, the same production topology
 // `gc-drawables.ts` uses) at 0018 §6's own worst case -- 256x256 tiles, 65,536 drawables, maximum
@@ -65,7 +65,7 @@ declare global {
       /** The same slot's own `dropped` header field (`drawListDropped()`): must be `0` for this
        * scene to be a clean 65,536-record worst case, not a truncated one. */
       dropped(): number
-      /** docs/plan/18-picking-and-overlay.md step 8 (Budgets: "worst-case hover pick scans 65,536
+      /** M18 step 8 (Budgets: "worst-case hover pick scans 65,536
        * records; `bench.frame_worstcase` ... is re-run with hover active"): `client.pick.scanned()`
        * -- `pickCalls()` and `scanned()` rising in lockstep, one per frame, is what proves the hover
        * call below is a real scan every frame, not a cache hit after the first. */
@@ -147,7 +147,7 @@ const client = createClient({
 await pumpUntilLive(client)
 const harness = asHarness(client)
 
-// docs/plan/18-picking-and-overlay.md gate round 1: no `drawListSab`/own `TripleReader` -- this page
+// M18 gate round 1: no `drawListSab`/own `TripleReader` -- this page
 // already drives `createRealFrameLoop` (below), whose own `acquire` phase calls `client.pick.
 // acquire()` once per tick, before `onCamera`'s own `drawablesRenderer.acquire()` call.
 const drawablesRenderer: DrawablesRenderer = await createDrawablesRenderer(device.device, {
@@ -194,11 +194,11 @@ for (let row = 0; row < GRID_SIDE; row++) {
     stepSimTickSync(client, 1)
   }
 }
-// Drain poll (docs/plan/19c-ci-reds-frame-bench-and-admit-path.md step A), replacing a fixed count
-// of trailing `stepFrame`s: CI round 1 (docs/plan/17b-sprites-and-frame-budget.md Deviations) added
+// Drain poll (M19c step A), replacing a fixed count
+// of trailing `stepFrame`s: CI round 1 (M17b Deviations) added
 // one more trailing `stepFrame` after the sim's own trailing tick, reasoning that it "drains that
 // final downlink deterministically" -- true of `on_frame` *applying* the last batch, but M18 moved
-// the renderer onto the acquired `DrawListSlot` (docs/plan/18-picking-and-overlay.md Deviations),
+// the renderer onto the acquired `DrawListSlot` (M18 Deviations),
 // and `worker/client.ts`'s own `body()` order runs `netPump.pump()` (which calls `on_frame`) *after*
 // this same wake's `frame()`/`drawlistPump.publish()` -- so a wake that *applies* the last batch
 // never *publishes* it; publishing it takes one more wake after that. A fixed trailing count assumes
@@ -246,7 +246,7 @@ let marking = false
 let markSeq = 0
 
 function onCamera(): void {
-  // docs/plan/18-picking-and-overlay.md step 8 (Budgets: "worst-case hover pick scans 65,536
+  // M18 step 8 (Budgets: "worst-case hover pick scans 65,536
   // records; `bench.frame_worstcase` ... is re-run with hover active"): one `client.pick.at()` call
   // per frame, at a fixed CSS point -- not a real pointer/DOM listener (Non-scope here, unrelated to
   // what this page measures), just the same call `input/semantic.ts`'s own hover path makes. The

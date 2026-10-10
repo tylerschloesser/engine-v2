@@ -1,4 +1,4 @@
-// `sab.no_alloc_syntax` (docs/plan/06-sab-primitives-and-workers.md, Exit criteria): a source scan,
+// `sab.no_alloc_syntax` (M06, Exit criteria): a source scan,
 // not a parser, over `src/sab/**` and `src/camera/block.ts` (production files only: `*.test.ts` is
 // exempt, matching `no-ambient-random.test.ts` and `hot-paths.md`'s own test-file exemption).
 //
@@ -92,7 +92,7 @@ test('sab.no_alloc_syntax', () => {
 })
 
 test('sab.no_wait_async', () => {
-  // "waitAsync anywhere under packages/engine/src/" (docs/plan/06-sab-primitives-and-workers.md,
+  // "waitAsync anywhere under packages/engine/src/" (M06,
   // Exit criteria): the whole tree, not just src/sab/.
   const problems: string[] = []
   for (const path of walk(SRC)) {

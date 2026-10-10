@@ -1,5 +1,5 @@
 //! `engine::noise`'s own native golden over raw f64 bits (Planning decisions 3 of
-//! docs/plan/08-worldgen-and-gen-worker.md): last-bit drift in `simplex2`/`fbm2` must not hide
+//! M08: last-bit drift in `simplex2`/`fbm2` must not hide
 //! behind a threshold. Uses `engine::testing`, hence `required-features = ["testing"]` in
 //! `Cargo.toml` (same reasoning as `codec`/`world_terrain`).
 

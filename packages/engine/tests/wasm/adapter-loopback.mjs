@@ -3,7 +3,7 @@
 // from a runtime's own adapter (`engine/server/bun` or `/deno`, from `dist/`) on `127.0.0.1:0`, two
 // `HeadlessClient`s dialling it over `wsConnection` on the runtime's global `WebSocket`, a short
 // scripted log, then three checks -- replica hash equals host hash equals `EXPECTED_HASH`; a clean
-// `stop()`; a `Storage` write failure reaching `onError` (docs/plan/35b-bun-and-deno-adapters.md,
+// `stop()`; a `Storage` write failure reaching `onError` (M35b,
 // Tests added). Plain JS and no `Bun.`/`Deno.` names: the caller supplies `serve`.
 import { systemClock, systemScheduler } from '../../dist/clock.js'
 import { parseBuildHash32 } from '../../dist/host/handshake.js'

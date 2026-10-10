@@ -1,4 +1,4 @@
-// `createNetHarness` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Seams; docs/decisions/
+// `createNetHarness` (M27, Seams; docs/decisions/
 // 0020-testing-strategy.md §7): one Node process, the real server-side machinery over the real
 // `.wasm`, K `HeadlessClient`s, joined by in-memory `Connection` pairs behind a seeded `conditionLink`
 // on a `VirtualClock`.
@@ -48,7 +48,7 @@ import { trapSim } from './trap.js'
 import { createVirtualClock, type VirtualClock } from './virtual-clock.js'
 
 /**
- * docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope: "`createNetHarness({ transport:
+ * M29 steps 1-2 (Scope: "`createNetHarness({ transport:
  * 'ws' })` puts `conditionLink` around real sockets on `127.0.0.1:0`"): a synchronous `Connection`
  * proxy over a `Connection` that only exists once `promise` settles (Deviations: not one of this
  * milestone's pinned Seam names -- `makeClient`/`reconnectEntry`/`connectRaw` below all build their
@@ -95,7 +95,7 @@ function deferredConnection(promise: Promise<Connection>): Connection {
   return proxy
 }
 
-/** docs/plan/30c-ci-reds-after-m30.md (red B): one loopback socket's message accounting. Both ends
+/** M30c (red B): one loopback socket's message accounting. Both ends
  * of every `ws` link live in this process, so the harness can know exactly how many whole messages
  * each direction has sent but not yet delivered (a `WebSocket` keeps message boundaries). */
 interface WsPairStats {
@@ -126,7 +126,7 @@ function wsInFlight(p: WsPairStats): number {
   return n
 }
 
-/** docs/plan/30c-ci-reds-after-m30.md (red B, spike C): the order `ws` arrivals are handed on in.
+/** M30c (red B, spike C): the order `ws` arrivals are handed on in.
  * Real arrival order across *different* sockets is whatever the OS poll returns, so arrivals are
  * held and released by `wsDelivered` in the order they were sent (one harness-wide sequence;
  * each direction of one socket is FIFO, so an arrival's sequence is the front of its direction's
@@ -199,7 +199,7 @@ function countedEnd(
  * this only bounds a socket that never delivers, well inside Vitest's 5 s default. */
 const WS_DELIVERY_DEADLINE_MS = 2_000
 
-/** docs/plan/28-sessions-and-reconnect.md Seams: a deterministic per-(seed, index) 128-bit secret
+/** M28 Seams: a deterministic per-(seed, index) 128-bit secret
  * -- `createNetHarness`'s own default when `opts.secrets` names none for a given client, so a
  * scenario that never cares about identity still gets a real, reproducible one (0020 §7: "the seed
  * ... alone reproduces a run"). A trivial splitmix64-style mix, not `crypto.getRandomValues`
@@ -225,7 +225,7 @@ export interface NetHarnessCounters {
   messagesDown: number
   messagesUp: number
   perTick: { tick: number; bytesDown: number; bytesUp: number }[]
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 5 (Seams: "`NetCounters.reconnectBytesUp/Down`
+  /** M28b step 5 (Seams: "`NetCounters.reconnectBytesUp/Down`
    * (bytes between a `Hello` and the first frame after its `Welcome`)"): this link's own *most
    * recent* handshake round trip -- the reconnect that just happened, or (if this link never
    * dropped) its original join. `reconnectBytesUp` is that `Hello`'s own byte length;
@@ -234,7 +234,7 @@ export interface NetHarnessCounters {
    * before the very first `settle()`). */
   reconnectBytesUp: number
   reconnectBytesDown: number
-  /** docs/plan/31-rates-and-integrity.md step 1: what the downlink `Frame` messages carried, parsed
+  /** M31 step 1: what the downlink `Frame` messages carried, parsed
    * from the trace (`net-sections.ts`), so a function of `(seed, scenario)` alone. `sections` is
    * whole-section wire bytes (id + length varint + body) by `SectionId` name; `header` the fixed
    * 10-byte frame headers; a `Welcome` or other non-frame message counts in `bytesDown` only.
@@ -339,7 +339,7 @@ export interface NetHarnessOptions {
   world?: Partial<Omit<WorldConfig, 'params'>> & {
     params?: Partial<Omit<WorldConfig['params'], 'seed'>>
   }
-  /** docs/plan/29-net-worker-and-reference-server.md steps 1-2 (Scope): `'ws'` puts `conditionLink`
+  /** M29 steps 1-2 (Scope): `'ws'` puts `conditionLink`
    * around real loopback sockets (`wsConnection`/`wsSocketConnection`, `127.0.0.1:0`) instead of
    * `memoryConnectionPair()` -- everything else about the harness (ticking, `settle()`,
    * `assertConverged()`, `trace()`) is unchanged; only the bytes' own transport differs. Requires
@@ -347,31 +347,31 @@ export interface NetHarnessOptions {
    * is actually requested -- `engine/test` itself declares no runtime dependency on it). */
   transport?: 'memory' | 'ws'
   conditions?: Partial<ConditionerConditions>
-  /** docs/plan/30-interpolation.md step 4: how often every client steps a frame inside one host
+  /** M30 step 4: how often every client steps a frame inside one host
    * tick, in virtual ms. Default (omitted): once per tick, exactly as before. A smaller value
    * (`12.5` = four frames per 50 ms tick) lets a client observe arrival times finer than a tick,
    * which the interpolation delay's jitter measurement needs; it must divide the tick. */
   clientFrameMs?: number
-  /** docs/plan/33f (ADR 0042): `true` configures every client at construction from the world's
+  /** M33f (ADR 0042): `true` configures every client at construction from the world's
    * seed and params, the way a client with `test.game` was. Default `false`: a client takes them
    * from `Welcome`, as a real page does. Only the test that compares the two paths sets it. */
   clientsConfiguredAtInit?: boolean
-  /** docs/plan/28-sessions-and-reconnect.md Seams: `createNetHarness({ secrets?, joinKey? })` --
+  /** M28 Seams: `createNetHarness({ secrets?, joinKey? })` --
    * explicit per-client identity secrets, in join order. A client past the end of this array (or
    * every client, if omitted) gets `deterministicSecret(seed, index)`. */
   secrets?: Uint8Array[]
-  /** docs/plan/31b-desync-hashes.md: hash-all mode (every subscribed chunk hashed on every frame,
+  /** M31b: hash-all mode (every subscribed chunk hashed on every frame,
    * announced to clients in `Welcome`), **default `true`**: every scenario is then also a
    * replication-correctness test. Pass `false` only where the scenario pins non-hash bytes or
    * budgets (`rates/*`, `zoomout/*`, `reconnect/cost`, `counters-exact`: the hashing is `'off'`,
    * not merely production) and say why at the opt-out. `world.debugHashMode` wins when given. */
   hashAll?: boolean
-  /** docs/plan/37-robustness-events.md step 3: `HostServices.onFatal` (0024 §5) of the world server
+  /** M37 step 3: `HostServices.onFatal` (0024 §5) of the world server
    * this harness builds. */
   onFatal?: (f: { tick: number; message: string }) => void
 }
 
-/** docs/plan/28b-reconnect-and-lifecycle.md step 3: `ConditionedLink` plus one harness-only
+/** M28b step 3: `ConditionedLink` plus one harness-only
  * addition. */
 export interface HarnessLink extends ConditionedLink {
   /** Makes this same client's own `createLink`-driven redial (`HeadlessClient`'s `dial`) build a
@@ -392,17 +392,17 @@ export interface NetHarness {
   storage: Storage
   clients: HeadlessClient[]
   link(i: number): HarnessLink
-  /** docs/plan/28-sessions-and-reconnect.md steps 3-5: `secret` (real, not `deterministicSecret`
+  /** M28 steps 3-5: `secret` (real, not `deterministicSecret`
    * derived) lets a scenario add a client that returns as, or supersedes, a *specific* earlier
    * identity -- omitted, this is exactly the pre-M28 behaviour. */
   addClient(secret?: Uint8Array): HeadlessClient
-  /** docs/plan/28-sessions-and-reconnect.md Seams: a raw `Connection` end, joined to the real
+  /** M28 Seams: a raw `Connection` end, joined to the real
    * server through the same `conditionLink`/`server.accept` path every `HeadlessClient` uses, but
    * with no `HeadlessClient` (and so no automatic `Hello`) attached -- a scenario writes its own
    * hand-rolled bytes to it directly (`connection.send(...)`) and reads the server's replies off
    * `connection.onMessage`, to test the handshake parser/`Reject`/timeout paths byte for byte. */
   connectRaw(): Connection
-  /** docs/plan/28b-reconnect-and-lifecycle.md Seams: `restartServer(opts?: { crash?: boolean })` --
+  /** M28b Seams: `restartServer(opts?: { crash?: boolean })` --
    * `opts.crash` false/omitted: `server.stop()` (a clean shutdown: snapshot-if-dirty, flush) then a
    * fresh `createWorldServer` over the *same* storage. `opts.crash: true`: skips `stop()` entirely
    * (0005 "Tab close, worker or renderer crash, WASM panic": no clean boundary at all) and builds
@@ -416,7 +416,7 @@ export interface NetHarness {
    * them onto the new server is `link(i).reconnect()`'s job, step 3/4). Existing `clients`/`link(i)`
    * entries are untouched; `addClient()` after this call accepts into the new server. */
   restartServer(opts?: { crash?: boolean }): Promise<void>
-  /** docs/plan/28b-reconnect-and-lifecycle.md step 3 (from M24's own Deviations): forces a
+  /** M28b step 3 (from M24's own Deviations): forces a
    * deterministic trap on the *live* sim instance (`engine/test`'s `trapSim`, the M24 test trap
    * hook) and awaits `simHost.recover()` -- the trap alone only kills the instance; `recover()` is
    * what actually re-derives a fresh one from storage, bumps the epoch (`SimHost.onRecovered`,
@@ -430,7 +430,7 @@ export interface NetHarness {
   advanceTo(t: number): Promise<void>
   advanceTicks(n: number): Promise<void>
   /** Called after every client frame of `advanceTicks` (all clients have just stepped): a scenario that
-   * samples between host ticks (docs/plan/39l-remote-motion-staircase.md). `null` clears it. */
+   * samples between host ticks (M39l. `null` clears it. */
   onFrame: (() => void) | null
   settle(): Promise<void>
   /**
@@ -443,7 +443,7 @@ export interface NetHarness {
    * every scenario.
    */
   assertConverged(): void
-  /** docs/plan/31b-desync-hashes.md: every client's own desync reports, oldest first per client,
+  /** M31b: every client's own desync reports, oldest first per client,
    * each tagged with the client's index (`HeadlessClient.desyncs()` is the per-client form). */
   desyncs(): (DesyncReport & { client: number })[]
   /** Throws when any client or the host recorded a desync report. `assertConverged()` calls it,
@@ -513,24 +513,24 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     ...(opts.world?.maxPlayers !== undefined ? { maxPlayers: opts.world.maxPlayers } : {}),
     ...(opts.world?.cacheChunks !== undefined ? { cacheChunks: opts.world.cacheChunks } : {}),
     ...(opts.world?.arenaBytes !== undefined ? { arenaBytes: opts.world.arenaBytes } : {}),
-    // docs/plan/28b-reconnect-and-lifecycle.md step 4: real bug found here -- never forwarded
+    // M28b step 4: real bug found here -- never forwarded
     // before this milestone (0013 "World lifecycle": "unless `keepTickingWhenEmpty` is set"),
     // silently dropped by every scenario that passed it (none did, before `lifecycle.test.ts`).
     ...(opts.world?.keepTickingWhenEmpty !== undefined
       ? { keepTickingWhenEmpty: opts.world.keepTickingWhenEmpty }
       : {}),
-    // docs/plan/31-rates-and-integrity.md: `actionRate`/`bandwidth`/`view` overrides reach the host
+    // M31: `actionRate`/`bandwidth`/`view` overrides reach the host
     // (`rates/action-rate-limited` moves the limit; `WorldConfig.bandwidth` moves the bucket).
     ...(opts.world?.actionRate !== undefined ? { actionRate: opts.world.actionRate } : {}),
     ...(opts.world?.bandwidth !== undefined ? { bandwidth: opts.world.bandwidth } : {}),
     ...(opts.world?.view !== undefined ? { view: opts.world.view } : {}),
-    // docs/plan/31b-desync-hashes.md: hash-all unless the scenario opts out (`hashAll: false`, with
+    // M31b: hash-all unless the scenario opts out (`hashAll: false`, with
     // a reason) or names a mode itself.
     debugHashMode: opts.world?.debugHashMode ?? (opts.hashAll === false ? 'off' : 'all'),
   }
 
   const clock = createVirtualClock()
-  // docs/plan/28b-reconnect-and-lifecycle.md step 2: `let`, not `const` -- `restartServer` (Seams)
+  // M28b step 2: `let`, not `const` -- `restartServer` (Seams)
   // replaces both with a fresh pair on the same (or a `crashClone`d) storage. Every closure below
   // that reads `storage`/`server`/`simHost` (a `function` declaration, not a value captured at
   // definition time) sees the post-restart value on its very next call, including `makeClient`'s
@@ -554,7 +554,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       clock: { now: () => clock.now() },
       timer: { every: () => () => {} }, // ticking is `simHost.stepTick`, driven from `advanceTicks`
       ...(opts.onFatal ? { onFatal: opts.onFatal } : {}),
-      // docs/plan/28b-reconnect-and-lifecycle.md step 4: the real `VirtualClock` (also a real
+      // M28b step 4: the real `VirtualClock` (also a real
       // `Scheduler`) -- grace/idle timers (`host/lifecycle.ts`) must fire deterministically as
       // `advanceTicks`/`advanceTo` advance virtual time, unlike `timer.every` above (stubbed: this
       // harness paces ticks manually).
@@ -623,7 +623,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     throw new Error(`createNetHarness: unsupported transport '${opts.transport}' (M29, Non-scope)`)
   }
 
-  // docs/plan/29-net-worker-and-reference-server.md steps 1-2: the `ws` transport's own real
+  // M29 steps 1-2: the `ws` transport's own real
   // loopback server, built once, lazily -- a `WebSocketServer` on `127.0.0.1:0` (an OS-assigned
   // port, so parallel test workers never collide), `perMessageDeflate` off (0009: "no
   // `permessage-deflate`", the same requirement `attachWebSocketServer` enforces for production).
@@ -703,7 +703,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     ]
   }
 
-  /** docs/plan/30c-ci-reds-after-m30.md (red B): returns once every open `ws` link has delivered
+  /** M30c (red B): returns once every open `ws` link has delivered
    * every message it has sent, polling one real event-loop turn (`setTimeout(1)`) at a time, and
    * has handed every arrival on in send order (`WsOrder`: arrivals are held until then). What
    * the fixed 20 ms per-tick sleep before it only hoped for: that sleep cost every tick 20 ms or
@@ -759,7 +759,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     // `connId` is assumed equal to join order (`linkIdx`), true as long as a scenario never
     // disconnects a client before checking it (M27's own scenarios never do).
     const connId = linkIdx
-    // docs/plan/28-sessions-and-reconnect.md: real secrets, not `connId + 1` -- `opts.secrets[
+    // M28: real secrets, not `connId + 1` -- `opts.secrets[
     // linkIdx]` when the scenario cares, else a value deterministic in `(seed, linkIdx)` (Seams:
     // "createNetHarness({ secrets?, joinKey? })"; `joinKey` itself is `opts.world.joinKey`,
     // already a harness option since M13). `secretOverride` (steps 3-5: `addClient(secret?)`)
@@ -773,7 +773,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       ...(opts.clientsConfiguredAtInit
         ? { game: { seed: worldCfg.params.seed, worldgen: worldCfg.params.worldgen } }
         : {}),
-      // docs/plan/28b-reconnect-and-lifecycle.md step 3: `createLink`'s own `dial` -- reads the
+      // M28b step 3: `createLink`'s own `dial` -- reads the
       // current `clientSide` binding, which `HarnessLink.reconnect()` (below) reassigns to a
       // fresh conditioned end before `createLink`'s own next (0 ms-delayed) backoff attempt.
       dial: () => {
@@ -841,19 +841,19 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
 
   async function advanceTicks(n: number): Promise<void> {
     for (let i = 0; i < n; i++) {
-      // docs/plan/29-net-worker-and-reference-server.md steps 1-2, docs/plan/30c-ci-reds-after-m30.md
+      // M29 steps 1-2, M30c
       // (red B): a real socket's bytes are genuine OS/event-loop I/O, not a microtask a plain
       // `await` waits out. Wait until every `ws` message already sent has actually arrived, so the
       // next `stepTick` sees it -- the same "awaits physical arrival" `memoryConnectionPair` gets
       // for free. First, so a `Hello` delivered here starts its digest before the wait below.
       if (opts.transport === 'ws') await wsDelivered()
-      // docs/plan/28-sessions-and-reconnect.md: a real `await` on the actual in-flight digest
+      // M28: a real `await` on the actual in-flight digest
       // promise (not merely hoping the virtual clock's own microtask yields are enough) --
       // `crypto.subtle.digest` resolves through a real libuv threadpool callback in Node, which a
       // plain `await` on an already-settled/trivial promise does not reliably give a turn to.
       // Cheap when nothing is in flight (`handshakesSettled` returns at once).
       await simHost.handshakesSettled()
-      // docs/plan/28b-reconnect-and-lifecycle.md step 4: `SimHost.stepTick` itself is
+      // M28b step 4: `SimHost.stepTick` itself is
       // unconditional (its own doc comment) -- this harness is what has to honour "the tick
       // counter frozen" while the world is genuinely idle-paused, by simply not calling it.
       // `clock.advanceBy` still runs regardless, so a grace/idle `scheduler.setTimer` (`host/
@@ -922,7 +922,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
   }
 
   async function settle(): Promise<void> {
-    // docs/plan/28-sessions-and-reconnect.md Seams: `serverInternals(server).handshakesSettled()`
+    // M28 Seams: `serverInternals(server).handshakesSettled()`
     // first -- every secret hashed/allocated so far, then one real tick boundary to consume them
     // into `sim_attach` (`pumpHandshakes`'s own doc comment: a caller wants a tick *after* this
     // resolves, not instead of it), before the ordinary settle sweep.
@@ -1106,7 +1106,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
 
   return {
     clock,
-    // docs/plan/28b-reconnect-and-lifecycle.md step 2: getters, not plain fields -- `restartServer`
+    // M28b step 2: getters, not plain fields -- `restartServer`
     // (below) reassigns the closure-scoped `server`/`storage` `let` bindings, and every caller that
     // reads `harness.server`/`harness.storage` after a restart must see the new pair, not the one
     // this object literal happened to close over when it was built.

@@ -1,4 +1,4 @@
-// `terrain: zero-GC over a scripted pan` (docs/plan/09-renderer-terrain.md, Tests added): a real
+// `terrain: zero-GC over a scripted pan` (M09, Tests added): a real
 // `createClient()` over `fx-terrain` plus a real device/renderer, driven the same way `gc-gen.ts`
 // drives `fx-worldgen` -- the camera panning a little every frame so chunks are generated,
 // converted, uploaded and evicted inside the measured window. `expectAdapter: true`: the first
@@ -15,7 +15,7 @@ zeroGcSuite({
   path: '/gc-terrain.html',
   expectAdapter: true,
   controlKinds: ['object', 'burst'],
-  // Gate fix round 2 (docs/plan/09-renderer-terrain.md, Deviations): `client`'s own hot
+  // Gate fix round 2 (M09, Deviations): `client`'s own hot
   // `waitForWake`/`runBlockingLoop` path races a background TurboFan recompilation against the
   // profiler's own start on this page only (measured mechanism and evidence: `measure()`'s own
   // `extraSettleFrames` doc comment, `tests/browser/gc/instrument.ts`).

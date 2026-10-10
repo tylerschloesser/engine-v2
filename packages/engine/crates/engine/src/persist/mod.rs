@@ -1,8 +1,8 @@
 //! Engine persistence containers (docs/decisions/0005-persistence-and-recovery.md Formats;
-//! docs/plan/22-persistence-log-and-snapshots.md): `Identity`, the log's `SegmentHeader` and
+//! M22: `Identity`, the log's `SegmentHeader` and
 //! frame writer/reader, and the streaming snapshot writer/reader. Write side and native
 //! replay/heavy mode only -- loading a stored world, the `node:fs` adapter and the ABI exports
-//! that expose these are `docs/plan/22b-persistence-load-and-fs.md`'s.
+//! that expose these are `M22b`'s.
 //!
 //! **Field order is fixed wire format**, owned by 0005 Formats: see `persist/CLAUDE.md`. Never
 //! iterate an unordered container here (`.claude/rules/determinism.md`).
@@ -41,7 +41,7 @@ pub enum PersistError {
     Malformed,
     /// A trailing CRC-32 did not match the bytes it protects.
     Crc,
-    /// docs/plan/22b-persistence-load-and-fs.md: a snapshot's own `container_version` did not match
+    /// M22b: a snapshot's own `container_version` did not match
     /// this build's (`snapshot::CONTAINER_VERSION`) -- distinct from `Malformed` so the ABI layer
     /// can report `Status::ContainerVersion` rather than a generic `Status::Corrupt`.
     ContainerVersion,
@@ -71,7 +71,7 @@ pub(crate) fn read_sized<T: Codec>(reader: &mut ByteReader) -> Result<T, Persist
     decode_canonical(bytes).map_err(|_| PersistError::Malformed)
 }
 
-/// [`read_sized`]'s tolerant twin (docs/plan/24b-upgrade-and-migration.md decision 6, amending 0024
+/// [`read_sized`]'s tolerant twin (M24b decision 6, amending 0024
 /// §3b): a length-prefixed value whose own bytes fail `decode_canonical` is not a framing error --
 /// the length prefix already lets the reader skip exactly past it -- so this returns `Ok(None)`
 /// instead of `Err`. Only a genuinely truncated length prefix or missing bytes (the frame itself is
@@ -88,7 +88,7 @@ pub(crate) fn read_sized_or_undecodable<T: Codec>(
 
 /// A leading varint's value, peeked without committing to consuming it from a growing buffer that
 /// may not yet hold the whole thing (the streaming readers' own "arbitrary block splits" contract,
-/// docs/plan/22-persistence-log-and-snapshots.md Seams). Same 10-byte `u64` bound as
+/// M22 Seams). Same 10-byte `u64` bound as
 /// `ByteReader::varint`, but distinguishes "not enough bytes buffered yet" from "this varint is
 /// simply too long to be valid" -- a distinction `ByteReader` itself has no reason to make, since
 /// it always reads from a single already-complete slice.

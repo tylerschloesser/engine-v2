@@ -1,4 +1,4 @@
-// `device-serve/proxy-and-apps` (docs/plan/29-net-worker-and-reference-server.md Scope/Tests
+// `device-serve/proxy-and-apps` (M29 Scope/Tests
 // added, Part A of the final cut): spawns `pnpm device:serve`'s own script -- default app (the
 // fixture app) with `--ws puts`, and `--app reference` with `--ws puts` too (Deviations: the exit
 // criterion's own literal `--app reference --ws`, with no fixture named, points the child `games/
@@ -188,7 +188,7 @@ async function checkReferenceApp(): Promise<void> {
 // compile+link alone there), now paid a *second* time by `device-serve.mjs`'s own independent
 // invocation, on a CI runner smaller than any machine that cost was ever measured against. Fixing
 // it for real (scoping `buildGame()`'s bindings step narrower than `--workspace`) is a real,
-// deliberate design change (docs/plan/29-net-worker-and-reference-server.md's own Deviations: "a
+// deliberate design change (M29's own Deviations: "a
 // stale/uncommitted binding anywhere is caught") well outside this milestone's scope.
 //
 // The exit criterion this test partially automated already has its own Tyler-run manual device

@@ -1,4 +1,4 @@
-// The overlay path of `engine()` (docs/plan/02b-vite-plugin.md, "Rebuild tests must not edit
+// The overlay path of `engine()` (M02b, "Rebuild tests must not edit
 // tracked files"): breaking a *copy* of fx-hash reaches Vite's error overlay with rustc's message;
 // restoring it recovers. @slow: the copy gets its own `[workspace]` table and an absolute-path
 // `engine` dependency, so cargo gives it its own cold target dir instead of reusing the repo's
@@ -18,7 +18,7 @@ const ENGINE_CRATE_DIR = fileURLToPath(new URL('../../crates/engine', import.met
 // toolchain by walking up from `cwd` for a `rust-toolchain.toml`, and this copy sits outside the
 // repo tree entirely (its own `[workspace]`, docs comment below), so without its own copy of this
 // file it silently picks up whatever toolchain happens to be the machine's rustup default -- found
-// by CI (docs/plan/10-ci-workflow.md, Deviations): the runner's default lacks the
+// by CI (M10, Deviations): the runner's default lacks the
 // `wasm32-unknown-unknown` target the pin adds, so this one test alone built with an unpinned,
 // target-less compiler. Reading the real file (not embedding the version string a second time)
 // means a future pin bump never needs a second edit here.

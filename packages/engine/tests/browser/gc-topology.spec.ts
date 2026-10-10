@@ -1,5 +1,5 @@
 // `topology`: a real `createClient()` local topology (client + sim + gen0), driven by
-// `test/client.ts`'s `stepFrame` lockstep through `asHarness` (docs/plan/06b-workers-and-spawn.md,
+// `test/client.ts`'s `stepFrame` lockstep through `asHarness` (M06b,
 // Tests added). No `post-message` control: a production worker has no spare `postMessage` type for
 // a message-driven tick (orchestrator decision 2).
 import { zeroGcSuite } from './gc/suite.ts'

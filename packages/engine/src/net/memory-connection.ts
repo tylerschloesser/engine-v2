@@ -1,4 +1,4 @@
-// `memoryConnectionPair` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Seams): the
+// `memoryConnectionPair` (M27, Seams): the
 // in-memory `Connection` implementation of docs/decisions/0009-transport-and-hosting.md -- "most
 // scenarios" of docs/decisions/0020-testing-strategy.md §7. Two ends of one pair, each a real
 // `Connection`: `send` on one copies its bytes and schedules delivery to the other end's

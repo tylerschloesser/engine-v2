@@ -1,4 +1,4 @@
-// The main-thread upload ferry (docs/decisions/0018-renderer.md §3; docs/plan/09-renderer-
+// The main-thread upload ferry (docs/decisions/0018-renderer.md §3; M09
 // terrain.md Scope, Planning decisions "Byte budget accounting", "Which chunks upload"): drains
 // `uploadRing` at frame start under a per-frame byte budget, applying CHUNK/PATCH/INDIR records to
 // a `TerrainRenderer` with reused descriptor objects (`.claude/rules/hot-paths.md`). One record is

@@ -1,6 +1,6 @@
 # packages/engine/src/host
 
-`persistence.ts` (docs/plan/22-persistence-log-and-snapshots.md steps 4-6): `Persistence`, the
+`persistence.ts` (M22 steps 4-6): `Persistence`, the
 write side of 0005 Persistence. One instance per world.
 
 - `Persistence.create(storage, cfg, sim)` creates a brand-new world: writes `ManifestV1` (Planning
@@ -24,7 +24,7 @@ write side of 0005 Persistence. One instance per world.
   in; `createSimHostFromInstance`'s `persistence` parameter is optional, so existing two-argument
   callers (`worker/sim.ts`) are unaffected -- real storage there is a later milestone's.
 
-## Loading (docs/plan/22b-persistence-load-and-fs.md)
+## Loading (M22b
 
 - `Persistence.open(storage, cfg, newInstance)`: create-or-load. No manifest -> `Persistence.
   create`'s own path (`outcome: 'created'`). A manifest -> `Persistence.loadLatest`, wrapped into a
@@ -56,5 +56,5 @@ write side of 0005 Persistence. One instance per world.
   periodic cadence itself ("kept until the new one verifies").
 - `SimHost.pause()`/`stop()` are `async` (step 3): disarm the pacing timer synchronously, then (when
   a `Persistence` is wired in) `snapshotIfDirty()`, `pruneSnapshots()`, `flush()`, in that order.
-- Panic recovery (docs/plan/24-recovery-and-migration.md): a dead instance is only ever *read*.
+- Panic recovery (M24: a dead instance is only ever *read*.
   `recovery.ts`'s `runPanicRecovery` is the Skip retry loop; `SimHost.recover()` owns the guard and re-attach.

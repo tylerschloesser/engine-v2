@@ -1,5 +1,5 @@
 //! Native replay and heavy mode (docs/decisions/0002-determinism-same-wasm-everywhere.md
-//! "Enforcement": "Replay equality... Heavy mode"; docs/plan/22-persistence-log-and-snapshots.md
+//! "Enforcement": "Replay equality... Heavy mode"; M22
 //! Order of work step 3). Both are driven entirely off [`crate::persist::FrameReader`] and
 //! [`crate::sim::Sim`] -- no `Storage`, manifest or ABI involved (that is M22b's half).
 
@@ -35,14 +35,14 @@ pub struct SnapshotBase<G: Game> {
     pub store: Store<G>,
     pub tick: Tick,
     pub rng: SimRng,
-    /// Fix round 2 (docs/plan/22-persistence-log-and-snapshots.md): `persist::SnapshotInfo::
+    /// Fix round 2 (M22: `persist::SnapshotInfo::
     /// log_ref_tick`, verbatim -- [`replay`] seeds its own `tick_delta` reference from this instead
     /// of assuming the log's first tail frame is relative to `tick` (true only when the snapshot
     /// coincided with the last logged frame, false after any idle gap before it).
     pub log_ref_tick: u32,
 }
 
-/// docs/plan/24-recovery-and-migration.md fix round 1: scans the *whole* log once, collecting
+/// M24 fix round 1: scans the *whole* log once, collecting
 /// every `Skip { offset, .. }` record's own `offset` field (the payload, not a byte position --
 /// mirrors `Host::sim_replay_scan_push`'s exact reasoning). Native `replay`/`heavy` take one flat
 /// `log: &[u8]` with no segment concept at all, so `segment` is not checked here (there is only
@@ -71,7 +71,7 @@ fn scan_skip_targets<G: Game>(log: &[u8]) -> BTreeSet<u32> {
     targets
 }
 
-/// docs/plan/24-recovery-and-migration.md fix round 1: the real apply pass, run *after*
+/// M24 fix round 1: the real apply pass, run *after*
 /// `scan_skip_targets` over the same log. `frame.record_offsets[i]` is already absolute from the
 /// `FrameReader`'s own first-ever byte (`persist::frame::DecodedFrame`'s own doc comment) -- byte 0
 /// of `log`, for every caller here (unlike `Host::sim_replay_push`, which resumes mid-segment and
@@ -108,7 +108,7 @@ where
             // Its own target was already collected by `scan_skip_targets`; the `Skip` record
             // itself is always a no-op (0005 "Panic recovery").
             FrameRecord::Skip { .. } => {}
-            // docs/plan/24b-upgrade-and-migration.md decision 6: an action whose own bytes failed
+            // M24b decision 6: an action whose own bytes failed
             // `decode_canonical` under this build -- dropped like a skip target, `last_seq` still
             // advances (`Host::sim_replay_push`'s own treatment, mirrored here for this native
             // testkit path).
@@ -146,7 +146,7 @@ where
     G::Global: Default,
     G::Action: Clone,
 {
-    // Fix round 2 (docs/plan/22-persistence-log-and-snapshots.md): `reference_tick` is the tick
+    // Fix round 2 (M22: `reference_tick` is the tick
     // `frame.tick_delta` is relative to for the *next* frame decoded -- `0` from genesis (no frame
     // logged before tick 0, matching `Host::sim_seal_frame`'s own convention), or the snapshot's
     // own `log_ref_tick` when resuming mid-log. `sim.tick()` alone is *not* a safe stand-in for it:
@@ -160,7 +160,7 @@ where
             b.log_ref_tick,
         ),
     };
-    // Fix round 1 (docs/plan/24-recovery-and-migration.md): a whole-log scan pass before any frame
+    // Fix round 1 (M24: a whole-log scan pass before any frame
     // is applied -- a `Skip`'s own target typically lives in an *earlier* frame than the `Skip`
     // record itself (`Host::sim_replay_scan_*`'s own reasoning, mirrored here).
     let skip_targets = scan_skip_targets::<G>(log);
@@ -297,7 +297,7 @@ where
     let mut sim_a = Sim::genesis(base.clone());
     let mut sim_b = Sim::genesis(base.clone());
     let shell_params = base;
-    // Fix round 1 (docs/plan/24-recovery-and-migration.md): see `replay`'s own doc comment.
+    // Fix round 1 (M24: see `replay`'s own doc comment.
     let skip_targets = scan_skip_targets::<G>(log);
     let mut out: Vec<Outcome<G>> = Vec::new();
     let mut reader: FrameReader<G> = FrameReader::new();
@@ -433,7 +433,7 @@ mod tests {
 
     /// Builds a small log matching a live script run through `Sim::step` directly, so `log` and
     /// the live hashes stay in lockstep by construction (mirrors how the checked-in `persist`
-    /// fixture log is produced, docs/plan/22-persistence-log-and-snapshots.md Order of work step
+    /// fixture log is produced, M22 Order of work step
     /// 3). Script: tick 1 a Joined event; tick 2 a Bump; tick 4 (one idle tick 3 in between) a
     /// rejected action; tick 5 another Bump.
     fn build_log_and_live_hash() -> (Vec<u8>, u64, Vec<(Tick, u64)>) {
@@ -519,7 +519,7 @@ mod tests {
         assert_eq!(result, vec![(Tick(5), final_hash)]);
     }
 
-    /// Fix round 3 (docs/plan/22-persistence-log-and-snapshots.md): the previous claim that this
+    /// Fix round 3 (M22: the previous claim that this
     /// was "covered transitively" by the other replay tests was false -- none of them ever put a
     /// `RecordKind::Skip` into a log `replay` actually decodes, so `to_record`'s own `FrameRecord::
     /// Skip { .. } => None` arm was untested (a review agent replaced it with `panic!()` and the

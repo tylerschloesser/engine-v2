@@ -1,4 +1,4 @@
-// `conditionLink` (docs/plan/27-server-entrypoint-and-netcode-harness.md, Seams; docs/decisions/
+// `conditionLink` (M27, Seams; docs/decisions/
 // 0020-testing-strategy.md §7 "A conditioner wraps any Connection"): per link, one seeded PRNG
 // draws `deliverAt = now + latency + jitter`; loss is "what TCP turns it into" -- order-preserving
 // (never reordered ahead of an already-scheduled message on the same direction, matching real

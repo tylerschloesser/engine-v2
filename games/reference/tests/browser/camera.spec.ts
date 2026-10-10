@@ -1,7 +1,7 @@
 // `reference_pan_and_zoom_work` (Exit criteria: "pan and zoom work"): real pointer-drag and wheel
 // events dispatched by Playwright against the real canvas, read back through `client.cameraState`
 // (`window.__cameraState`). Moved onto the stepped test entry (orchestrator ruling on cut 1's
-// flagged decision, docs/plan/20b-reference-player-and-collect-ui.md steps 3-4 delegation prompt:
+// flagged decision, M20b steps 3-4 delegation prompt:
 // "the production page exposes no `window.__*` hooks") -- `main.ts` no longer carries any hook at
 // all. The gestures themselves are still real: Playwright's own mouse drag/wheel against the real
 // canvas, recorded by the engine's real DOM listeners exactly as production installs them

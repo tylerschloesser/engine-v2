@@ -103,7 +103,7 @@ impl WorldPos {
 }
 
 /// A game's chunk size (0007 §3): a power of two, 16/32/64 tiles (`CHUNK_BITS` 4/5/6). Runtime
-/// value, not a const generic (Planning decisions 1 of docs/plan/07-world-model-core.md): stable
+/// value, not a const generic (Planning decisions 1 of M07: stable
 /// Rust cannot spell `[Tile; N*N]` generic over `G::CHUNK_BITS`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ChunkDims {

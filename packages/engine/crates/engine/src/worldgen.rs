@@ -42,7 +42,7 @@ pub fn hash2(seed: u64, x: i32, y: i32) -> u64 {
 
 /// Adapts a static, game-typed [`Worldgen`] to [`PristineSource`], the object-safe seam
 /// `TerrainStore` calls on a cache miss (Planning decisions 2 of
-/// docs/plan/07-world-model-core.md: a call per miss makes `dyn` free).
+/// M07: a call per miss makes `dyn` free).
 pub struct Pristine<W: Worldgen> {
     seed: u64,
     params: W::Params,
@@ -114,7 +114,7 @@ pub struct WorldgenStamp {
 /// The `gen`-role wrapper (0008 §2 table): owns the seed and params, and turns `gen_chunk(cx, cy)`
 /// into `dims.slab_bytes()` little-endian tile bytes. One scratch slab, reserved once in [`new`]
 /// (not a fresh `Vec` per call), so `generate` itself allocates nothing (`abi::arena` proves it,
-/// Tests added of docs/plan/08-worldgen-and-gen-worker.md).
+/// Tests added of M08.
 ///
 /// [`new`]: GenCore::new
 pub struct GenCore<W: Worldgen> {
@@ -161,14 +161,14 @@ impl<W: Worldgen> GenCore<W> {
 mod tests {
     use super::*;
 
-    // Pinned vectors (computed from this exact implementation; see docs/plan/08-worldgen-and-gen-
+    // Pinned vectors (computed from this exact implementation; see M08
     // worker.md Deviations for how). A change here means `hash2` changed, which changes every
     // worldgen golden.
     #[test]
     fn hash2_vectors() {
         // Computed from this exact implementation (printed with `cargo test -p engine --lib
         // worldgen::tests::hash2_vectors -- --nocapture` and pinned here; see
-        // docs/plan/08-worldgen-and-gen-worker.md Deviations).
+        // M08 Deviations).
         assert_eq!(hash2(0, 0, 0), 0x33fe_8bd4_f9c5_7863);
         assert_eq!(hash2(0x5EED_1234_ABCD_0042, 0, 0), 0xa352_cbaa_41c2_01a1);
         assert_eq!(hash2(0x5EED_1234_ABCD_0042, 1, 0), 0xa330_386c_218d_9e62);

@@ -1,4 +1,4 @@
-// The reference game's `bench` build (docs/plan/36-slow-tier-and-benchmarks.md): the standard large
+// The reference game's `bench` build (M36: the standard large
 // save of docs/decisions/0020 §9 behind cargo feature `bench`, never shipped. `buildBench()` is the
 // only way a test gets it (`buildGame({ features: ['bench'] })`, dir `target/engine/<profile>+bench`,
 // its own build hash); `benchWorldConfig(buildHash, scale)` is the world to start on it: the bench

@@ -1,5 +1,5 @@
-// `net`-kind worker body (docs/plan/06b-workers-and-spawn.md, Scope: "event-driven idle shell, no
-// WASM" until M29 gives it the `WebSocket` and a byte pump). docs/plan/29-net-worker-and-
+// `net`-kind worker body (M06b, Scope: "event-driven idle shell, no
+// WASM" until M29 gives it the `WebSocket` and a byte pump). M29
 // reference-server.md steps 1-2 (Scope): `createBytePump` (M27) + `createLink` (M28) +
 // `wsConnection(url)` (this milestone) -- event-driven, uplink drained on a timer (0015 §2: "the
 // net worker is event-driven ... and drains the uplink ring on a `setInterval`"; Deviations: a
@@ -26,7 +26,7 @@ import { applyGcHook } from './gc-hook.js'
 import type { NetControlMessage, SetupMessage } from './protocol.js'
 import type { LoopState, Shell } from './shell.js'
 
-/** `gc/net-negative-control`'s own hand-built control (docs/plan/29-net-worker-and-reference-
+/** `gc/net-negative-control`'s own hand-built control (M29
  * server.md, this cut's own step 5; `TestFlags.netInjectParse`, `worker/protocol.ts`): wraps a real
  * `Connection` so every downlink message also runs one throwaway `JSON.parse(new TextDecoder()
  * .decode(bytes))` before handing the message on unchanged -- proving `net`'s own isolate (and no
@@ -75,7 +75,7 @@ function injectParseConnection(real: Connection): Connection {
   }
 }
 
-/** `TestFlags.netNoDial` (docs/plan/29-net-worker-and-reference-server.md, M29b fix round 1): a
+/** `TestFlags.netNoDial` (M29, M29b fix round 1): a
  * `Connection` that never actually opens a socket, for a page whose `{ kind: 'remote' }` host is a
  * placeholder topology shape (`url: 'ws://unused.invalid'`, a dozen-plus pre-existing test/device
  * pages) with no real networking intent -- `net/link.ts`'s own dial contract ("already open, or
@@ -138,7 +138,7 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
   // into a function *declaration*'s body (unlike an immediately-evaluated expression), since that
   // body could in principle run at any later point.
   const dialUrl = net.url
-  // docs/plan/29-net-worker-and-reference-server.md, this cut's own step 5 (Scope: "gc/multiplayer-
+  // M29, this cut's own step 5 (Scope: "gc/multiplayer-
   // topology ... asserting 0016 budgets for the main, client, gen and net isolates"): every other
   // production worker kind's own `body()` calls `applyGcHook` once per real wake, gated on `test.
   // gcHook` (`worker/{client,gen,sim}.ts`'s own precedent, `gc-hook.ts`). A `net`-kind worker has no
@@ -157,7 +157,7 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
   // is that one factory, called once at setup and again by `linkControl`'s own `retry` branch below
   // (Deviations: not itself a pinned Seam -- the two message names, `probe`/`retry`, are the only
   // thing this milestone's own Scope actually pins).
-  // docs/plan/30c-ci-reds-after-m30.md (red C): what `CB_LINK_GEN` carries -- every dial of every
+  // M30c (red C): what `CB_LINK_GEN` carries -- every dial of every
   // `Link` this worker ever builds, counted once. `createLink`'s own `gen` restarts at 1 in each
   // new `Link`, so a `retry`'s first dial read the same generation the client worker had already
   // sent its `Hello` for, and it never sent one on the new socket.
@@ -223,7 +223,7 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
     // No `body`/`timeoutMs`: this kind never enters `runBlockingLoop` (`worker.ts`'s own doc
     // comment on the `loop?.body` check).
     linkControl(m: NetControlMessage) {
-      // docs/plan/29-net-worker-and-reference-server.md, this cut's own step 5 (real bug, found
+      // M29, this cut's own step 5 (real bug, found
       // live building `gc/multiplayer-topology`): the drain timer's own 10 ms real-wall-clock
       // cadence (above) fires far too few times inside a measured 600-"frame" window to trip a
       // negative control the way `client`/`gen`/`sim`'s own `body()` reliably does -- those kinds

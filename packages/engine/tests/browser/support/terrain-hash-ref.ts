@@ -103,7 +103,7 @@ export function applyTransform(uv: readonly [number, number], t: Transform): [nu
 
 // M09b fix round 1 (item 2, "jitter is untestable by construction"): mirrors `terrain.wgsl`'s own
 // `JITTER_AMPLITUDE` constant exactly -- **not** a value this reference is free to choose; it must
-// track the shader's own constant of the same name (docs/plan/09b-terrain-art-and-lifecycle.md
+// track the shader's own constant of the same name (M09b
 // Deviations records why 1/255 was picked, but this reference does not re-derive it).
 export const JITTER_AMPLITUDE = 1 / 255
 
@@ -131,7 +131,7 @@ export function jitteredChannelByte(base255: number, delta: number): number {
 // M09b fix round 2 ("magnified sampling was inverted"): mirrors `sample_tile_art`'s magnified
 // ("fat pixel") seam formula exactly, *after* the fix -- anchor on the nearest texel *boundary*
 // (`Math.floor(texel + 0.5)`), offset relative to that anchor, clamped to +-0.5 *screen pixels*'
-// worth of texel-space (no halving: docs/plan/09b-terrain-art-and-lifecycle.md Deviations explains
+// worth of texel-space (no halving: M09b Deviations explains
 // why the undivided, one-screen-pixel-wide band was kept over a sharper, halved one).
 /** One axis of the seam formula: `uvComponent` is the fragment's own tile-local `art_frac`
  * component (`[0, 1)`); `artSize` is the art texture's base-level size (`ART_SIZE`); `texelsPerPx`

@@ -1,7 +1,7 @@
 // `engine/test` (docs/decisions/0020 §8, docs/decisions/0017 §2): the test entrypoint, absent from
 // production bundles. Never imported by production code: `loader.ts`, `abi.ts`, `client.ts`,
 // `vite.ts`, `server-node.ts` never import from `src/test/` or this file (checked by grepping
-// `dist/`, an exit criterion of docs/plan/03-browser-harness.md).
+// `dist/`, an exit criterion of M03.
 export type { Clock, Scheduler } from './clock.js'
 export {
   type ConditionedLink,

@@ -1,4 +1,4 @@
-//! Shared by `fx-migrate-v2` and `fx-migrate-v2-hz30` (docs/plan/24b-upgrade-and-migration.md
+//! Shared by `fx-migrate-v2` and `fx-migrate-v2-hz30` (M24b
 //! Files: "three tiny crates sharing source by `#[path]`"; `fx-migrate-v2-hz30/src/lib.rs`
 //! `#[path]`-includes this exact file). `SCHEMA_VERSION = 2`: `Entity` drops `fx-migrate-v1`'s own
 //! `keep` field and gains `shield`; `Global` gains `version`. The tick rate is a const generic

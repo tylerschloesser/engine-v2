@@ -1,4 +1,4 @@
-// `gc-topology.html`'s script (docs/plan/06b-workers-and-spawn.md, Tests added): a real
+// `gc-topology.html`'s script (M06b, Tests added): a real
 // `createClient()` local topology (client + sim + gen0), driven the way `stepFrame` in
 // `test/client.ts` already does -- camera-block write, wake, `frame`, ack -- through `asHarness`, so
 // `zeroGcSuite` runs the same generated clean-plus-negative-controls suite it runs against
@@ -26,7 +26,7 @@ const client = createClient({
   canvas,
   wasm,
   // `world` is structurally valid but otherwise inert: `test.game` (below) overrides every
-  // worker's real config (docs/plan/13-sim-host-tick-loop.md, Scope "createClient local host"),
+  // worker's real config (M13, Scope "createClient local host"),
   // same as before this milestone's real `WorldConfig` type replaced the old `{ game }` stub.
   host: { kind: 'local', world: { worldId: 'w', params: { seed: '1', worldgen: DEFAULT_GAME } } },
   genWorkers: 1,
@@ -41,7 +41,7 @@ const harness = asHarness(client)
 await parkWorkers(client)
 setCamera(client, { x: 1, y: -1, tilesAcross: 12 })
 
-// Ticks every frame (fix round 2, docs/plan/06b-workers-and-spawn.md, Deviations): a prior
+// Ticks every frame (fix round 2, M06b, Deviations): a prior
 // `STEP_TICK_EVERY = 2` halved `sim`/`gen0`'s own wake count to mask a real per-pass allocation bug
 // (`NO_TIMEOUT`'s `Number.POSITIVE_INFINITY` re-box, `worker/shell.ts`) rather than fix it; with
 // that bug (and `frame(t_ms)`'s own box, `worker/client.ts`) fixed, every isolate's clean reading is

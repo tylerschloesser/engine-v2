@@ -1,4 +1,4 @@
-// `puts-dispatch.html`'s script (docs/plan/16-action-round-trip.md step 4, "bindings step + typed
+// `puts-dispatch.html`'s script (M16 step 4, "bindings step + typed
 // fixture page"): proves the generated `bindings/*.ts` are real types a page can build `dispatch`
 // calls and `onActionResult` handlers against, and that `pnpm lint`'s `tsc` catches a mismatch
 // between them and `client.ts`'s own generic surface. Deliberately separate from `slice.html`
@@ -23,7 +23,7 @@ declare global {
      * `fixtures/puts/src/lib.rs`): the one deterministic way this fixture ever produces a
      * `Rejected` result. */
     __dispatchBumpNothing?: (x: number, y: number) => number
-    /** `add-action-type` skill exercise (docs/plan/16-action-round-trip.md step 7): `SetMotd` is
+    /** `add-action-type` skill exercise (M16 step 7): `SetMotd` is
      * an existing global-scoped action (`fixtures/puts/src/lib.rs`); dispatching it here proves
      * the skill's steps end to end without touching the fixture's own Rust at all. Returns its
      * `seq`; always `Confirmed` (`Puts::apply`'s `SetMotd` arm never rejects). */

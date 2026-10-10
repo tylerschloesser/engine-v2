@@ -1,4 +1,4 @@
-// Terrain renderer (docs/decisions/0018-renderer.md §3, §5; docs/plan/09-renderer-terrain.md Scope,
+// Terrain renderer (docs/decisions/0018-renderer.md §3, §5; M09 Scope,
 // Planning decisions "Bind group layout"): page texture, indirection texture, visual-table uniform,
 // tile-art array texture, frame uniform, one pipeline, one draw. Everything a frame touches is
 // created once and reused (`.claude/rules/hot-paths.md`): the write-side "hand-fill" methods below
@@ -74,7 +74,7 @@ export interface TerrainRenderer {
   /** The bytes the last `writeFrameUniform` staged (a live, read-only view: never write to it).
    * Lets a second renderer copy the camera fields as raw bytes instead of re-reading the double
    * fields of `frameUniform`, which allocates a number per field in unoptimised code
-   * (`render/client-drawables.ts`, docs/plan/33c-drawables-on-real-pages.md Deviations). */
+   * (`render/client-drawables.ts`, M33c Deviations). */
   readonly stagedFrameUniform: Uint8Array
   /** Replaces the whole 16 KiB visual table (`bytes.length === VISUAL_TABLE_BYTES`): built by
    * `render/art.ts` from `tiles.json`, main-thread-only (Planning decisions "Visual table comes from
@@ -99,13 +99,13 @@ export interface TerrainRenderer {
   writeIndir(entries: readonly IndirEntry[], count?: number): void
   /** Installs the tile-art array texture `render/art.ts` builds from `tiles.json`; rebuilds the bind
    * group (a one-time/init cost: WebGPU bind groups are immutable once created). `gpuBytes` is
-   * `LoadedArt.gpuBytes` (docs/plan/17b-sprites-and-frame-budget.md fix round 1: `gpuBytes()` must
+   * `LoadedArt.gpuBytes` (M17b fix round 1: `gpuBytes()` must
    * cover "tile art with mips" too) -- a required argument, not optional, so a caller can never
    * silently under-count by forgetting it. */
   setTileArray(texture: GPUTexture, gpuBytes: number): void
   /** Encodes and submits one frame: the reused colour-attachment/pass-descriptor objects, one
    * `draw(3, 1, 0, 0)`. `target` may be a `GPUTexture` (skips `createView()` when `viewProbePasses`)
-   * or an explicit `GPUTextureView`. docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal
+   * or an explicit `GPUTextureView`. M29 Scope ("Reveal
    * gate"): `opts.reveal` (default `true`) -- `false` still begins the render pass (so the target
    * is cleared to `colorAttachment.clearValue`) but skips the terrain triangle and any `onEncode`
    * callback, so a page gating on `Client.revealed()` shows the clear colour, not a half-populated
@@ -128,14 +128,14 @@ export interface TerrainRenderer {
    * by this milestone's own code outside its constructor defaults -- M09's tests still call
    * `writeFrameUniform` directly with their own values. */
   readonly frameUniform: FrameUniformValues
-  /** Mutated in place by M09b's resize observer (docs/plan/09b-terrain-art-and-lifecycle.md
+  /** Mutated in place by M09b's resize observer (M09b
    * `render/viewport.ts`) and M11's camera (Seams, Provides). */
   readonly viewport: Viewport
   /** Registers `cb`: fired by `notifyViewportChange()` at most once per frame, only when the
    * viewport actually changed (Seams, Provides: "M11 recomputes `half_extent_tiles`; M18 re-bases
    * anchors"). */
   onViewportChange(cb: (viewport: Viewport) => void): void
-  /** M17 (docs/plan/17-drawlist-and-sprites.md, steps 4-6 Deviations "one shared render pass, not
+  /** M17 ( steps 4-6 Deviations "one shared render pass, not
    * two"): registers `cb`, called inside `draw()`'s own pass right after the terrain triangle is
    * encoded, before `pass.end()` -- the mechanism `render/drawables.ts`'s `attachDrawables` uses so
    * "terrain and drawables share one render pass" (Planning decisions "Final main-thread bytes per
@@ -185,7 +185,7 @@ export async function createTerrainRenderer(
      * checked at the same "init, not per frame" point 0018 §1 places `uncapturederror` -- every
      * caller passes its own `initDevice()` result's own method. */
     checkCompilation(label: string, module: GPUShaderModule): Promise<void>
-    /** `ClientOptions.render.gpuTiming` (docs/plan/39k-gpu-exec-metric.md): default off, and then
+    /** `ClientOptions.render.gpuTiming` (M39k: default off, and then
      * `draw` is exactly as before. On: `renderer.gpuTimer` times the main pass. */
     gpuTiming?: boolean
   },
@@ -214,7 +214,7 @@ export async function createTerrainRenderer(
     size: FRAME_UNIFORM_BYTES,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
-  // M09b (docs/plan/09b-terrain-art-and-lifecycle.md Scope): bilinear mag/min, trilinear across
+  // M09b (Scope): bilinear mag/min, trilinear across
   // mips -- `terrain.wgsl` samples exclusively through `textureSampleLevel` with an explicit,
   // possibly-fractional level (never an implicit-derivative `textureSample`/`fwidth` call, Deviations),
   // so `mipmapFilter: 'linear'` is what makes a fractional level blend between its floor/ceil mips.
@@ -481,7 +481,7 @@ export async function createTerrainRenderer(
       if (gpuTimer) gpuTimer.begin(passDescriptor)
       const pass = encoder.beginRenderPass(passDescriptor)
       let calls = 0
-      // docs/plan/29-net-worker-and-reference-server.md Scope ("Reveal gate"): the pass above still
+      // M29 Scope ("Reveal gate"): the pass above still
       // begins (so `loadOp: 'clear'` still runs), only the terrain triangle and `onEncode` are
       // skipped -- `reveal: false` is "show the clear colour", not "skip the frame".
       if (drawOpts?.reveal !== false) {
@@ -542,6 +542,6 @@ export async function createTerrainRenderer(
 
 function isTextureView(t: GPUTexture | GPUTextureView): t is GPUTextureView {
   // `@webgpu/types` gives both interfaces no distinguishing own property; `GPUTexture` is the only
-  // one of the two with `createView` (docs/plan/09-renderer-terrain.md Deviations).
+  // one of the two with `createView` (M09 Deviations).
   return typeof (t as GPUTexture).createView !== 'function'
 }

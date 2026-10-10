@@ -264,7 +264,7 @@ impl<K: Ord + Copy> InterpBuffer<K> {
             // scaled by the whole gap (`h * v`) overshoots its endpoints (a rest-to-walk start drew a
             // tile behind), so |h v| <= 3 |delta| per end. A segment at the relay interval (100 ms; one
             // or two lost relays is 200-300 ms, still about the cap) keeps the plain Hermite -- even
-            // with delta = 0 -- so ordinary motion is unchanged (docs/plan/39ab Deviations).
+            // with delta = 0 -- so ordinary motion is unchanged (M39ab Deviations).
             let (v0, v1) = if h * 1000.0 > EXTRAPOLATION_CAP_MS {
                 let lim = 3.0 * (p1 - p0).abs();
                 let clamp = |v: f64| (v * h).clamp(-lim, lim) / h;

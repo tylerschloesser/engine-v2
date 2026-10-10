@@ -32,7 +32,7 @@ In a game's `apply`/`predict`/`admit` and in the fixtures under `predict/`:
   (`Confirmed`/`Rejected` through `ActionResults`) is authoritative. `NotPredictable` means "no
   ghost yet", not "rejected".
 - **Texel conversion always reads overlay-then-replica, and is triggered only through the dirty
-  set** (docs/plan/26-prediction-rendering-and-clocks.md): a chunk's `CHUNK` upload record
+  set** (M26: a chunk's `CHUNK` upload record
   (`client/upload.rs`'s `Uploader::stage_predicted`) reads pristine, then the replica's own
   overlay, then the prediction overlay's effective tiles (`Overlay::effective_tiles`) on top --
   never the prediction overlay alone, and never outside a dirty-chunk re-stage

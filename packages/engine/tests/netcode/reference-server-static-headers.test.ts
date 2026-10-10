@@ -1,4 +1,4 @@
-// `reference-server/static-headers` (docs/plan/38-hosting-checks.md, Tests added): the real
+// `reference-server/static-headers` (M38, Tests added): the real
 // `games/reference-server --static <dir>` process. Both isolation headers, exact values (0015 §3),
 // on every response including a 404, a traversal refusal and a wrong method; `.wasm` is served as
 // `application/wasm`; `/assets/*` is immutable; `/ws` still upgrades and a `/ws`-less upgrade does not.

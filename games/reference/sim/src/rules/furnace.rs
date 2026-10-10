@@ -1,4 +1,4 @@
-//! Furnace operation (docs/plan/33b-reference-furnace-operation.md): deposit, take, pick-up and
+//! Furnace operation (M33b: deposit, take, pick-up and
 //! smelting.
 //!
 //! **Machines sleep.** A furnace's state changes only in [`advance`], one `put_entity` per change,

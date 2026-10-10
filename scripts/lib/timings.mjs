@@ -1,4 +1,4 @@
-// Pure half of `pnpm test:timings` (docs/plan/36b-suite-audit-and-measurements.md): turn the reports
+// Pure half of `pnpm test:timings` (M36b: turn the reports
 // `pnpm test` already writes into per-test durations, and K runs of those into percentiles. No I/O.
 import { parseVitestDuration } from './timings-vitest.mjs'
 

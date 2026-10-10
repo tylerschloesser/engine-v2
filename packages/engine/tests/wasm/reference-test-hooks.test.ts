@@ -1,4 +1,4 @@
-// The two `@slow` tests of docs/plan/34b-reference-scripted-single-player.md that need the reference
+// The two `@slow` tests of M34b that need the reference
 // game's `test-hooks` build (`buildGame({ features: ['test-hooks'] })`; never shipped, see
 // `build-game-features.test.ts`): a poison `StartCraft` (recipe 255) panics in `apply` and is skipped
 // and acked `EngineFault` while play continues (0005 Panic recovery step 3); a world saved by the

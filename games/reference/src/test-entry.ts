@@ -1,4 +1,4 @@
-// Test-only entry (docs/plan/20b-reference-player-and-collect-ui.md step 0): the same real
+// Test-only entry (M20b step 0): the same real
 // device/renderer/client wiring as `main.ts` (via `startGame`), but with `ClientOptions.test` set
 // (a manual clock, never done by the production entry) and every diagnostic `window.__*` hook this
 // package's browser tests need. Built into `test.html`, served by the `reference` Playwright
@@ -179,7 +179,7 @@ const canvas = document.getElementById('game') as HTMLCanvasElement
 // `real.loop.resume()` inside `startGame` registers a callback that simply never fires: harmless.
 const clock = createManualClock()
 
-// Gate round 1 fix (docs/plan/20b-reference-player-and-collect-ui.md Deviations): `?altSpawnParams`
+// Gate round 1 fix (M20b Deviations): `?altSpawnParams`
 // -- a test-entry option for a *different world* (`ClientOptions.test.game`, the documented escape
 // hatch for every worker's own config, engine `src/client.ts`'s own doc comment) -- raises
 // `water_level` enough that the origin becomes water, so `spawn.spec.ts` can exercise the real

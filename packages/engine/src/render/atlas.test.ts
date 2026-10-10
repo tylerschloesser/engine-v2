@@ -1,4 +1,4 @@
-// docs/plan/17b-sprites-and-frame-budget.md, Tests added: "sprites.schema_errors" -- every failure
+// M17b, Tests added: "sprites.schema_errors" -- every failure
 // mode of 0018 §4's limits and the sprites.json v1 schema (Planning decisions), each naming the
 // offending id, mirroring `art.test.ts`'s "manifest: schema errors".
 import { expect, test } from 'vitest'

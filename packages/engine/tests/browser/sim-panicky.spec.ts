@@ -1,4 +1,4 @@
-// `sim-panicky.html`'s test (docs/plan/24-recovery-and-migration.md, Tests added:
+// `sim-panicky.html`'s test (M24, Tests added:
 // `sim_worker_recovers_from_panic`): the sim worker's own `body()` -> `SimHost.recover()` wiring, a
 // real `.wasm` under a real worker topology (this is the only browser-suite proof of that path;
 // `tests/wasm/panicky-recovery.test.ts` proves the state machine itself, under Node). Chromium only

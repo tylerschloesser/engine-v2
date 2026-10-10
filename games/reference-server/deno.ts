@@ -1,6 +1,6 @@
 // `deno run --allow-read --allow-write --allow-net --allow-env games/reference-server/deno.ts
 // --data <dir> [--game <dir>]`: the Deno entry, `engine/server/deno` on `Deno.serve`
-// (docs/plan/35b-bun-and-deno-adapters.md). Same flags, `PORT` and `JOIN_KEY` as `bun.ts`.
+// (M35b. Same flags, `PORT` and `JOIN_KEY` as `bun.ts`.
 import { denoHandler, denoHostServices, fsStorage, loadGame } from 'engine/server/deno'
 import { createServer } from './common.mjs'
 

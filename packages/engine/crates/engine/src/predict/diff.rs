@@ -1,4 +1,4 @@
-//! `OverlayDiff` (docs/plan/26-prediction-rendering-and-clocks.md Scope, Provides; Planning
+//! `OverlayDiff` (M26 Scope, Provides; Planning
 //! decisions "Change list = tiles only"): the per-frame overlay change list that feeds the dirty
 //! set `ClientCore::drain_dirty` drains. Terrain texels are the only retained renderer state
 //! (entities/players/globals are re-derived from a fresh `extract`/`ui` every frame, so they need

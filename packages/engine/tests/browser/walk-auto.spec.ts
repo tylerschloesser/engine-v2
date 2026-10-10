@@ -1,4 +1,4 @@
-// `pnpm device:walk --auto`'s checks of delegation 2 (docs/plan/39f-device-auto-runner.md steps 5-6)
+// `pnpm device:walk --auto`'s checks of delegation 2 (M39f steps 5-6)
 // end to end in headless Chromium and WebKit: a fake phone (`fake-phone.mjs`: a Playwright page doing
 // what Tyler does with his finger) opens the runner page of a real round, and the real pages are served
 // by `device-serve --walk` (the fixture app's own `vite preview`, agent injected at serve time). What the

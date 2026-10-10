@@ -1,4 +1,4 @@
-// `armed-loop-race.html`'s script (M17c step 3, fix round 3, docs/plan/17c-client-park-stall.md):
+// `armed-loop-race.html`'s script (M17c step 3, fix round 3, M17c:
 // exposes a debug hook that constructs the exact race `armedLoop`'s own doc comment names
 // (`src/test/harness-worker.ts`) -- `Yield` already 1 before `armedLoop`'s own first wait ever
 // runs, the same shape `harness.ts`'s `parkOne` produces when its own `Atomics.notify(Req)` (never

@@ -89,7 +89,7 @@ export function analyseTrace(events: readonly TraceEvent[]): {
   traceEvents: number
   /** Every isolate name the trace's own `gc-isolate:<name>` mark discovery actually produced --
    * the same `isolateNames` map A keys its GC-event attribution by -- regardless of that mark's own
-   * `ts` (gate round 3, docs/plan/09-renderer-terrain.md Deviations: "instrument A looks at this
+   * `ts` (gate round 3, M09 Deviations: "instrument A looks at this
    * page's thread X", kept in the fast tier once `burst` negative controls move to `@slow` for
    * every page but `gc-loop`). Deviation from the decision text, which asked for "at least one
    * event inside the window-start/window-end marks": every `gc-isolate:<name>` mark is sent (via

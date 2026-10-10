@@ -1,4 +1,4 @@
-// `reference_place_touch` (docs/plan/33-reference-furnace.md Tests added): a touch tap moves the
+// `reference_place_touch` (M33 Tests added): a touch tap moves the
 // ghost and shows Confirm anchored to it, a drag still pans, Confirm places. Touch pointers are
 // injected (`engine/test.injectPointer`, `pointerType` 'touch'); the click on Confirm is a real one.
 import { expect, test } from '@playwright/test'

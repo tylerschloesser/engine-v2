@@ -1,5 +1,5 @@
 // `node scripts/embed-wgsl.mjs`: reads every `src/render/wgsl/*.wgsl` file and writes the checked-in
-// `src/render/wgsl.generated.ts` (docs/plan/09-renderer-terrain.md Planning decisions "Bind group
+// `src/render/wgsl.generated.ts` (M09 Planning decisions "Bind group
 // layout": "WGSL lives in `.wgsl` files; `scripts/embed-wgsl.mjs` writes a checked-in
 // `wgsl.generated.ts`, and a unit test fails when it is stale"). `generate()` is imported directly by
 // `src/render/wgsl.generated.test.ts` so the freshness check never shells out to this script.

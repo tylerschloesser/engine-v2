@@ -1,4 +1,4 @@
-//! `worldgen_golden` (docs/plan/20-reference-game-v0.md Tests added): raw tile bytes of 16
+//! `worldgen_golden` (M20 Tests added): raw tile bytes of 16
 //! chunks near the origin plus pairs straddling `+-2^18` (0007 §9's own fingerprint chunk list,
 //! reused here for the same "near the origin and far away" coverage). Native-only byte golden
 //! (0002 §3's kind, distinct from the cross-runtime `pnpm golden` scenario kind this crate has no

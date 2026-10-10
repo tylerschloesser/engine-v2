@@ -1,4 +1,4 @@
-// `reference: status walks every event` (docs/plan/37-robustness-events.md step 6): every engine-to-game
+// `reference: status walks every event` (M37 step 6): every engine-to-game
 // event the audit lists (`packages/engine/src/engine-events.test.ts`) has a distinct, visible state in
 // `ui/status.ts`, on one page (`/test.html?persist=...&flags=...`) driven by `TestFlags`, `engine/test`
 // helpers and the page's manual clock -- no real waiting. Real engine events: the not-durable storage

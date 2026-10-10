@@ -33,7 +33,7 @@ pub trait WorldRead<G: Game> {
     fn tick(&self) -> Tick;
     fn tile(&self, p: TilePos) -> Result<Tile, Unknown>;
     /// OR of the tile's traits and the occupant's traits (0007 §6). Occupancy is not tracked until
-    /// M21 (docs/plan/12b-world-access-and-sim-driver.md Non-scope): until then `entity_at` never
+    /// M21 (M12b Non-scope): until then `entity_at` never
     /// returns an occupant, so this is the tile term alone.
     fn traits_at(&self, p: TilePos) -> Result<TraitSet, Unknown>;
     fn entity_at(&self, p: TilePos) -> Result<Option<EntityId>, Unknown>;
@@ -46,7 +46,7 @@ pub trait WorldRead<G: Game> {
     fn roster(&self, _f: &mut dyn FnMut(PlayerId, bool)) {}
     /// Every entity whose footprint intersects `rect`, ascending `EntityId`, visited once (0007
     /// §5, M21). A replica answers `Err(Unknown)` *before calling `f` at all* if `rect` touches a
-    /// chunk it does not hold (docs/plan/21-entities-and-timers.md Scope); the host is always
+    /// chunk it does not hold (M21 Scope); the host is always
     /// total. M25 adds the prediction overlay's merge on top of this.
     fn entities_in(
         &self,
@@ -95,10 +95,10 @@ pub struct View<'a, G: Game> {
     registry: &'a Registry,
     tick: Tick,
     held: &'a dyn Fn(ChunkCoord) -> bool,
-    /// `None` until [`View::with_overlay`] attaches one (docs/plan/25-prediction-core.md Scope:
+    /// `None` until [`View::with_overlay`] attaches one (M25 Scope:
     /// "`View<'_, G>` reads overlay-then-replica (it read the replica only until now)"). Kept as a
     /// separate builder step, not a `new`/`total` parameter, so every existing caller of either
-    /// constructor keeps its exact prior behaviour and hashes (docs/plan/25-prediction-core.md:
+    /// constructor keeps its exact prior behaviour and hashes (M25:
     /// "must not change any existing hash").
     overlay: Option<&'a Overlay<G>>,
     /// Reused across `entities_in` calls (`.claude/rules/hot-paths.md`): a `RefCell` since
@@ -147,7 +147,7 @@ impl<'a, G: Game> View<'a, G> {
     }
 
     /// Attaches a prediction overlay: every read below now checks it before falling back to
-    /// `store` (docs/plan/25-prediction-core.md Scope). `entities_in` is unaffected (M25 step 8's
+    /// `store` (M25 Scope). `entities_in` is unaffected (M25 step 8's
     /// own cut line, the overlay merge for range reads).
     pub fn with_overlay(mut self, overlay: &'a Overlay<G>) -> Self {
         self.overlay = Some(overlay);

@@ -1,4 +1,4 @@
-// `pnpm device:walk --auto`'s lifecycle and choreography checks of delegation 3 (docs/plan/39f-device-auto-
+// `pnpm device:walk --auto`'s lifecycle and choreography checks of delegation 3 (M39f
 // runner.md steps 7-8) end to end in headless Chromium and WebKit: a fake phone (`fake-phone.mjs`) is the
 // person, the fixture pages are served by `device-serve --walk` (`support/walk-rig.ts`). What a headless
 // engine cannot do is simulated and said so in the test: the app switch and the lock screen are a

@@ -1,4 +1,4 @@
-// M34c step 2 (docs/plan/34c-reference-scripted-multiplayer.md Scope, "Races"): the three rejection
+// M34c step 2 (M34c Scope, "Races"): the three rejection
 // races `0003` Consequences leaves to scripted tests, each at 0, 60 and 250 ms one-way latency and in
 // both arrival orders. The order is made by the virtual clock, not by sleeping: the player who should
 // lose gets a link 100 ms slower, so the host hears the other one first (swap the two links and the

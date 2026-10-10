@@ -1,4 +1,4 @@
-// M34c step 4 (docs/plan/34c-reference-scripted-multiplayer.md Scope): late join, the disconnect
+// M34c step 4 (M34c Scope): late join, the disconnect
 // grace, a pending action across a drop, a returning player (session supersede) and the idle pause.
 
 import { serverInternals, worldServerTestHandle } from 'engine/test'

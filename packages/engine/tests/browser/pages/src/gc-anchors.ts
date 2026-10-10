@@ -1,4 +1,4 @@
-// `anchors` zero-GC page (docs/plan/18-picking-and-overlay.md step 8, Tests added: "page id
+// `anchors` zero-GC page (M18 step 8, Tests added: "page id
 // `anchors` through `zeroGcSuite`; strict pages unchanged"; Planning decisions "Overlay string
 // constant"): a real, unconnected `fx-overlay` client (`gc-input.ts`'s own topology -- no dispatch/
 // sim needed, `ClientSide::frame`/`extract` run every client-worker frame regardless of a net link),
@@ -176,7 +176,7 @@ installGcPage(harness, {
     renderer.writeFrameUniform(renderer.frameUniform)
     renderer.draw(target)
     client.overlay.update()
-    // docs/plan/18-picking-and-overlay.md steps 4-6 Deviations: no existing zero-GC page folds a
+    // M18 steps 4-6 Deviations: no existing zero-GC page folds a
     // `client.input.emit` call into its own measured window -- this one, folded here, is that
     // coverage (`code`/`a`/`b` vary with `frame` only so the call is real work, not a constant).
     emitA = (emitA + 1) & 0xff

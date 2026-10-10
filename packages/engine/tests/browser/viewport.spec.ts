@@ -1,4 +1,4 @@
-// Canvas lifecycle: resize/DPR/render-scale (docs/plan/09b-terrain-art-and-lifecycle.md, steps 4-5)
+// Canvas lifecycle: resize/DPR/render-scale (M09b, steps 4-5)
 // and backgrounding (`FrameLoop.pause()`/`resume()`, `CB_FLAGS.REBASE`). Every test drives size/DPR
 // through `engine/test.setViewport` (headless Chromium cannot really resize a window or change
 // display DPI) and visibility through `engine/test.setVisibility` (`document.hidden` cannot be

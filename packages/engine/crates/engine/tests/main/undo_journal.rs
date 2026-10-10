@@ -1,4 +1,4 @@
-//! `journal_rolls_back_store_indexes_wakes_counts` (docs/plan/21b-timers-wakeups-and-tickcx.md
+//! `journal_rolls_back_store_indexes_wakes_counts` (M21b
 //! Tests added): the undo-journal experiment's own rollback, driven directly against `Authority`
 //! (bypassing `Sim::step`'s panic-vs-adopt branch through `Authority::{begin_apply_journal_for_
 //! test, rollback_apply_journal_for_test}`, feature `testing`) so this test is independent of

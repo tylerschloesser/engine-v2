@@ -1,4 +1,4 @@
-//! `fx-busy-field`'s two loads, measured (docs/plan/31-rates-and-integrity.md step 2): the steady
+//! `fx-busy-field`'s two loads, measured (M31 step 2): the steady
 //! field puts at 0010's "200 active machines, twice per 5 s = 80 puts/s", and one filled chunk costs
 //! about 0010's "dense chunk ~4 KB" on the wire.
 

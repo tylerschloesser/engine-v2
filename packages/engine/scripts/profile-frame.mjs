@@ -3,7 +3,7 @@
 // engine + fixtures + browser-suite pages, serves them, launches Chromium with the same
 // `--disable-frame-rate-limit --disable-gpu-vsync` flags `frame-bench.spec.ts`'s own Playwright
 // project uses, and runs the identical park/install/resume/start/warm-up/timed-window sequence
-// against `frame-bench.html` (docs/plan/17b, Deviations: a worker blocked in its normal
+// against `frame-bench.html` (M17b, Deviations: a worker blocked in its normal
 // `Atomics.wait` loop never processes a CDP `Runtime.evaluate`, so the client worker's own `call1`
 // wrapper is installed while every worker is parked, before the real rAF loop ever starts) -- but
 // adds a CPU profile (`Profiler.start`/`stop`) on both isolates over the same window, so it can

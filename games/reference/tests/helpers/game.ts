@@ -1,4 +1,4 @@
-// `tests/helpers/game.ts::openGame(page, opts)` (docs/plan/20-reference-game-v0.md Provides):
+// `tests/helpers/game.ts::openGame(page, opts)` (M20 Provides):
 // the reference game's own page contract, mirroring `packages/engine/tests/browser/support/
 // page.ts::openPage` (navigate, assert cross-origin isolation, fail the test on any page error or
 // console error) -- duplicated in full rather than imported across the package boundary (this
@@ -283,7 +283,7 @@ export const RESOURCE_TILE = {
 export const COLLECT_TICKS = 41
 
 /**
- * `collectN(page, resource, n)` (docs/plan/32-reference-crafting.md Provides): pans to the
+ * `collectN(page, resource, n)` (M32 Provides): pans to the
  * resource's known tile, then `n` times clicks collect and steps ticks (never real time) until the
  * collect lands. Returns the last `Ui`. The page must be `/test.html` with the `Ui` primed
  * (`uiState` called once), as `panTo` needs.
@@ -363,7 +363,7 @@ export async function frame(page: Page, dtMs = 16): Promise<void> {
   await page.evaluate((d) => window.__stepFrame?.(d), dtMs)
 }
 
-/** `craftFurnace(page)` (docs/plan/33-reference-furnace.md Provides): five stone and one craft,
+/** `craftFurnace(page)` (M33 Provides): five stone and one craft,
  * stepped ticks only; returns the `Ui` holding one furnace. Needs `/test.html` with the `Ui` primed. */
 export async function craftFurnace(page: Page): Promise<RefUiState | null> {
   await collectN(page, 'stone', 5)
@@ -390,7 +390,7 @@ export async function placeFurnace(
   return pumpUntil(page, (ui) => (ui?.inventory[ITEM.furnace] ?? before) < before)
 }
 
-/** `openFurnace(page, tile)` (docs/plan/33b-reference-furnace-operation.md Provides): a real mouse tap
+/** `openFurnace(page, tile)` (M33b Provides): a real mouse tap
  * on the furnace anchored at `tile`, then steps until `Ui.furnace` names it. Returns that `Ui`. */
 export async function openFurnace(
   page: Page,

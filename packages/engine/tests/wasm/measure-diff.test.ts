@@ -1,4 +1,4 @@
-// `measure-diff` compiles out (docs/plan/36b-suite-audit-and-measurements.md, `.claude/rules/hot-paths.md`):
+// `measure-diff` compiles out (M36b, `.claude/rules/hot-paths.md`):
 // the engine's cargo feature adds the byte-mask counters of `host/measure_diff.rs`, and a build
 // without the feature carries none of that code. Read from the `release-names` profile (names kept,
 // like `ts-rs zero bytes`): the feature build is the positive control that the symbol is findable at

@@ -4,7 +4,7 @@
 //! the current `Tick`, that M12's `Store` deliberately does not hold (docs/plan/
 //! 12-store-and-game-trait.md Deviations). `TickCx` (0003: "`Authority` plus iteration over active
 //! entities") is built here too, since it delegates every `WorldRead`/`WorldWrite` method straight
-//! to one; docs/plan/21b-timers-wakeups-and-tickcx.md gives it its final shape (wake/timer/active-
+//! to one; M21b gives it its final shape (wake/timer/active-
 //! list methods) and adds the undo-journal experiment at the bottom of this file.
 
 use std::cell::RefCell;
@@ -39,7 +39,7 @@ pub enum Scope {
 }
 
 /// Up to 8 scopes for one write. 0007 §5 bounds one footprint at 4 overlapped chunks; a moved
-/// entity (M21, docs/plan/21-entities-and-timers.md Scope: "every chunk under the old and new
+/// entity (M21, M21 Scope: "every chunk under the old and new
 /// footprint, <= 4 each") can therefore touch up to 4 old-footprint chunks plus 4 new-footprint
 /// ones, deduplicated -- 8 is the true worst case, not 4 (widened from M12b's original 4-slot
 /// array, which only ever needed to hold a single-tile write's one chunk or a move's old/new
@@ -123,7 +123,7 @@ impl<G: Game> ChangeLog<G> {
         self.changes.clear();
     }
 
-    /// The undo journal's own rollback (docs/plan/21b-timers-wakeups-and-tickcx.md): drops every
+    /// The undo journal's own rollback (M21b: drops every
     /// entry recorded since `len`, so a rolled-back `apply`'s writes never reach a client as
     /// deltas.
     pub(crate) fn truncate(&mut self, len: usize) {
@@ -170,15 +170,15 @@ pub struct Authority<G: Game> {
     max_action_growth: u32,
     /// 0023 "Honesty is audited, not trusted": bumped by the release-mode half of the growth
     /// audit (`crate::budget`) whenever an action added more than it declared -- debug/test
-    /// builds panic instead (docs/plan/21-entities-and-timers.md Tests added: `under_declared_
+    /// builds panic instead (M21 Tests added: `under_declared_
     /// growth_counts_in_release`/`_panics_in_debug`).
     growth_violations: u64,
-    /// Diagnostic counter (Budgets: "the tick time row"; docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// Diagnostic counter (Budgets: "the tick time row"; M21b
     /// Provides): every id `TickCx::next_woken`/`next_due`/`active_at` actually yields this tick.
     /// Reset by [`Authority::begin_tick`]. Proves tick cost is O(active entities): a world of
     /// sleeping machines with none due must read `0` here.
     entities_visited_per_tick: u64,
-    /// 0023 "apply, measure, roll back" alternative (docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// 0023 "apply, measure, roll back" alternative (M21b
     /// Planning decisions): bumped by the release-mode half of the undo-journal rollback, if
     /// adopted (below).
     apply_rollbacks: u64,
@@ -188,7 +188,7 @@ pub struct Authority<G: Game> {
     /// Test-only bench knob (`Authority::set_journal_disabled_for_test`).
     #[cfg(any(test, feature = "testing"))]
     journal_disabled_for_test: bool,
-    /// docs/plan/22-persistence-log-and-snapshots.md steps 4-6, Planning decisions 7 ("dirty means
+    /// M22 steps 4-6, Planning decisions 7 ("dirty means
     /// a put happened or a record was logged since the last snapshot"): set by [`Authority::write`]
     /// (every `WorldWrite` put funnels through it) and by [`Authority::record_ack`] (every admitted
     /// action reaches it, applied or rejected -- 0004's own "a record was logged" case); reset by
@@ -204,7 +204,7 @@ impl<G: Game> Authority<G> {
     /// the `Game` trait, so `Sim::genesis` -- the only production caller -- supplies one through a
     /// local `where G::Global: Default` bound instead; see docs/plan/
     /// 12b-world-access-and-sim-driver.md Deviations). `Game::register` runs once, inside
-    /// `Store::new` (M21, docs/plan/21-entities-and-timers.md Deviations: moved from here into
+    /// `Store::new` (M21, M21 Deviations: moved from here into
     /// `Store` so `Store::apply` can consult footprints for `ChunkIndex` maintenance) -- `Authority`
     /// no longer holds its own `Registry` copy, reading `self.store.registry()` instead.
     pub fn new(terrain: TerrainStore, global: G::Global, seed: u64) -> Self {
@@ -228,7 +228,7 @@ impl<G: Game> Authority<G> {
         }
     }
 
-    /// Sets the state budget (M21, docs/plan/21-entities-and-timers.md): called once by
+    /// Sets the state budget (M21, M21: called once by
     /// `Sim::genesis` right after construction, from `WorldParams<G>` (0009's `WorldConfig.params`,
     /// already carried there since M13/M15 but unread until this milestone).
     pub(crate) fn set_budget(
@@ -264,7 +264,7 @@ impl<G: Game> Authority<G> {
         self.growth_violations += 1;
     }
 
-    /// docs/plan/21b-timers-wakeups-and-tickcx.md Provides.
+    /// M21b Provides.
     pub fn entities_visited_per_tick(&self) -> u64 {
         self.entities_visited_per_tick
     }
@@ -284,7 +284,7 @@ impl<G: Game> Authority<G> {
 
     /// A copy of the host driver's own `SimRng` state (`SimRng` is `Copy`): M22's snapshot writer
     /// needs it alongside `Store::encode`'s bytes, since `Store` itself holds neither `tick` nor
-    /// `SimRng` (docs/plan/12-store-and-game-trait.md Deviations). Was gated `#[cfg(any(test,
+    /// `SimRng` (M12 Deviations). Was gated `#[cfg(any(test,
     /// feature = "testing"))]` through steps 1-3 (native-test-only callers: `testing::replay`/
     /// `heavy`, this module's own tests); steps 4-6 un-gate it, since `Host::sim_snapshot_begin`
     /// (the real ABI export) is now a genuine production caller.
@@ -299,12 +299,12 @@ impl<G: Game> Authority<G> {
     }
 
     /// Called once a snapshot has captured the state [`Authority::dirty`] described
-    /// (`Host::sim_snapshot_begin`, docs/plan/22-persistence-log-and-snapshots.md steps 4-6).
+    /// (`Host::sim_snapshot_begin`, M22 steps 4-6).
     pub fn clear_dirty(&mut self) {
         self.dirty = false;
     }
 
-    /// Fix round 1, gap 2 (docs/plan/22-persistence-log-and-snapshots.md): `Host::sim_seal_frame`'s
+    /// Fix round 1, gap 2 (M22: `Host::sim_seal_frame`'s
     /// own setter, for the "or a record was logged" half of Planning decisions 7 that neither
     /// [`Authority::write`] nor [`Authority::record_ack`] reaches on its own (a reconnect's bare
     /// `Record::Player{Connected}`, no state write and no admitted action).
@@ -313,13 +313,13 @@ impl<G: Game> Authority<G> {
     }
 
     /// The read side of [`Authority::rng`]/[`Authority::from_snapshot`]: rebuilds an `Authority`
-    /// from a decoded snapshot's pieces (M22, docs/plan/22-persistence-log-and-snapshots.md
+    /// from a decoded snapshot's pieces (M22, M22
     /// Non-scope: "loading a stored world ... M22b" -- this is the container-level piece only;
     /// nothing here touches `Storage`, a manifest, or identity validation). Budgets fall back to
     /// [`Authority::new`]'s own defaults, exactly as a fresh `Authority` would have, since a
     /// snapshot's container carries no budget fields of its own (0005 Formats) -- a caller that
     /// needs the original world's budgets calls [`Authority::set_budget`] afterward, the same way
-    /// `Sim::genesis` does. Plain `pub` since docs/plan/22b-persistence-load-and-fs.md: `host::
+    /// `Sim::genesis` does. Plain `pub` since M22b: `host::
     /// Host::sim_restore_end` is now a genuine production caller (previously only `testing::replay`/
     /// `testing::heavy` and this module's own tests, behind the `testing` feature).
     pub fn from_snapshot(store: Store<G>, rng: SimRng, tick: Tick) -> Self {
@@ -348,7 +348,7 @@ impl<G: Game> Authority<G> {
     /// individual `Sim::step` calls; `crate::migrate`'s own driver (M24b) is now a second,
     /// production caller, for the engine-owned carry-over (timer wheel, wake queue, active lists,
     /// id counter, player `last_seq`/`online`) that bypasses `Game::migrate` entirely (Planning
-    /// decisions 3 of docs/plan/24b-upgrade-and-migration.md). `pub(crate)`, not `pub`: still not
+    /// decisions 3 of M24b. `pub(crate)`, not `pub`: still not
     /// part of the game-facing surface.
     pub(crate) fn store_mut(&mut self) -> &mut Store<G> {
         &mut self.store
@@ -379,7 +379,7 @@ impl<G: Game> Authority<G> {
         self.tick = self.tick.add(Ticks(1));
     }
 
-    /// The fixed point at the start of `G::tick` (0007 §7; docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// The fixed point at the start of `G::tick` (0007 §7; M21b
     /// Scope "Wake queue"): swaps the wake queue's `next` into `now`, so this tick's `next_woken`
     /// serves exactly what was queued since the previous fixed point. Also compacts every active
     /// list's tombstones from the *previous* tick's `deactivate` calls (Scope "Active lists":
@@ -442,7 +442,7 @@ impl<G: Game> Authority<G> {
         self.journal_disabled_for_test = disabled;
     }
 
-    /// Test-only direct control of the undo journal (docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// Test-only direct control of the undo journal (M21b
     /// Tests added: `journal_rolls_back_store_indexes_wakes_counts`): starts recording without
     /// going through `Sim::step`, so a test can drive `Authority`'s `WorldWrite` methods directly
     /// and then roll them back.
@@ -451,7 +451,7 @@ impl<G: Game> Authority<G> {
         self.begin_apply_journal();
     }
 
-    /// Test-only direct control of the undo journal (docs/plan/21b-timers-wakeups-and-tickcx.md
+    /// Test-only direct control of the undo journal (M21b
     /// Tests added: `journal_rolls_back_store_indexes_wakes_counts`), bypassing the debug/release
     /// branch in [`Authority::handle_rejected_apply_write`] so the rollback mechanism itself can be
     /// exercised under `cfg(test)` independent of [`UNDO_JOURNAL_ADOPTED`].
@@ -462,7 +462,7 @@ impl<G: Game> Authority<G> {
         self.apply_rollbacks += 1;
     }
 
-    /// Test-only, `TickCx`-free setup (docs/plan/21b-timers-wakeups-and-tickcx.md fix round 1):
+    /// Test-only, `TickCx`-free setup (M21b fix round 1):
     /// schedules `id`'s timer directly against `Authority`, for building a pre-apply baseline whose
     /// later despawn (inside a misbehaving, journaled `apply`) has a real timer to cancel and a
     /// rollback has to restore. `TickCx::wake_at` is the production path; this is a shortcut only a
@@ -514,7 +514,7 @@ impl<G: Game> Authority<G> {
         self.dirty = true;
     }
 
-    /// [`WorldWrite::spawn`]'s real body (docs/plan/21b-timers-wakeups-and-tickcx.md Scope: "every
+    /// [`WorldWrite::spawn`]'s real body (M21b Scope: "every
     /// `EntityPut` made through `Authority` outside `G::tick` ... pushes the id to `woken_next`");
     /// `wake` is `true` from `Authority`'s own `WorldWrite` impl (apply/on_player/genesis) and
     /// `false` from `TickCx`'s (Planning decisions: "puts made through `TickCx` do not auto-wake").
@@ -564,7 +564,7 @@ impl<G: Game> Authority<G> {
     }
 
     /// Every chunk under the entity's old footprint (if it already existed) and its new one (if
-    /// this write gives it one), deduplicated (docs/plan/21-entities-and-timers.md Scope: "every
+    /// this write gives it one), deduplicated (M21 Scope: "every
     /// chunk under the old and new footprint (Scopes, <= 4 each)"). Widened from M12b's own
     /// anchor-chunk-only derivation: `encode_chunk_snapshot`'s entity filter and M15's frame
     /// builder widen together with this (M14/M15 Deviations "Entities in a chunk snapshot"/
@@ -637,7 +637,7 @@ impl<G: Game> WorldRead<G> for Authority<G> {
 impl<G: Game> Authority<G> {
     /// `crate::migrate`'s own insertion path (M24b, Planning decisions 4): identical to
     /// `WorldWrite::spawn` except it never auto-wakes -- mirrors `TickCx`'s own puts (Planning
-    /// decisions of docs/plan/21b-timers-wakeups-and-tickcx.md: "puts made through `TickCx` never
+    /// decisions of M21b: "puts made through `TickCx` never
     /// auto-wake"), because `Migrating` restores the wake queue's `next` list itself, from the old
     /// snapshot's own membership (Planning decisions 3) -- an insertion-path auto-wake here would
     /// unconditionally add every migrated entity to it regardless of whether the old entity was
@@ -735,7 +735,7 @@ impl<'a, G: Game> TickCx<'a, G> {
     }
 
     /// Pops the next id the wake queue's fixed point (`Authority::begin_tick`) queued for this
-    /// tick, or `None` once drained (docs/plan/21b-timers-wakeups-and-tickcx.md Provides).
+    /// tick, or `None` once drained (M21b Provides).
     pub fn next_woken(&mut self) -> Option<EntityId> {
         let id = self.authority.store.wake_pop_now();
         if id.is_some() {
@@ -863,7 +863,7 @@ impl<G: Game> WorldWrite<G> for TickCx<'_, G> {
 }
 
 /// One key's pre-image, or the wake-queue push, recorded by [`UndoJournal::capture_pre_image`]/
-/// [`UndoJournal::record_woke`] (docs/plan/21b-timers-wakeups-and-tickcx.md Planning decisions).
+/// [`UndoJournal::record_woke`] (M21b Planning decisions).
 enum UndoEntry<G: Game> {
     Tile {
         pos: TilePos,
@@ -893,7 +893,7 @@ enum UndoEntry<G: Game> {
     },
 }
 
-/// The undo-journal experiment (docs/plan/21b-timers-wakeups-and-tickcx.md Planning decisions:
+/// The undo-journal experiment (M21b Planning decisions:
 /// "Host-side atomicity of `apply` via an undo journal"). Records the previous value (or absence)
 /// of each key touched by one `apply` call, on that key's *first* touch only (a later write to the
 /// same key within the same call must not overwrite the true original pre-image); discarded on

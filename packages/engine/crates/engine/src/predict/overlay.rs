@@ -116,7 +116,7 @@ impl<G: Game> Overlay<G> {
             + usize::from(self.global.is_some())
     }
 
-    /// Read-only, for M26 (the per-frame overlay change list, docs/plan/25-prediction-core.md
+    /// Read-only, for M26 (the per-frame overlay change list, M25
     /// Provides): every tile put in overlay order (last write per position wins if iterated
     /// backwards; forward order is kept here since M26 owns how it diffs this).
     pub fn tiles(&self) -> impl Iterator<Item = (TilePos, Tile)> + '_ {
@@ -294,7 +294,7 @@ pub(crate) fn covers<G: Game>(registry: &Registry, e: &G::Entity, p: TilePos) ->
     footprint_of::<G>(registry, e).contains(p)
 }
 
-/// The overlay merge of `WorldRead::entities_in` (docs/plan/25-prediction-core.md Planning
+/// The overlay merge of `WorldRead::entities_in` (M25 Planning
 /// decisions "Iterating reads", M25 step 8): every id the overlay has an opinion about replaces or
 /// removes (a tombstone) whatever `run_base` visited; every id the overlay covers `rect` with,
 /// even one `run_base` never visits (a provisional spawn, or an entity moved to newly cover

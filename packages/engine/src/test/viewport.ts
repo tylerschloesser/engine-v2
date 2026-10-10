@@ -1,4 +1,4 @@
-// `engine/test`: `setViewport`/`setVisibility` (docs/plan/09b-terrain-art-and-lifecycle.md Seams,
+// `engine/test`: `setViewport`/`setVisibility` (M09b Seams,
 // Provides), driving the real `ViewportController`/`FrameLoop` a page's own production wiring
 // created (`frame-loop.ts`'s `createRealFrameLoop`) -- the same "attach once, look up by client"
 // shape `test/render.ts`'s `attachRenderer`/`clientRenderers` already uses. Never imported by

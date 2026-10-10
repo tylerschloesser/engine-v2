@@ -1,5 +1,5 @@
 // The test-only, parked-only call channel a worker kind with a WASM instance can carry
-// (docs/plan/08b-gen-workers-and-queue.md, orchestrator decision 1 at the step-5 boundary): lets
+// (M08b, orchestrator decision 1 at the step-5 boundary): lets
 // `engine/test`'s `callParked` read a worker's own instance state (an ABI export's return value plus
 // a copy of the first `resultBytes` bytes of its `Result` region) from main, the same way
 // `worker/gc-hook.ts` reads `CB_TEST_CONTROL` instead of a message -- production code cannot import

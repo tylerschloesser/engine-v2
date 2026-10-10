@@ -1,7 +1,7 @@
 // `determinism.html`'s script: runs the cross-engine golden scenario (docs/decisions/0002 §3, 0020
 // §5) for every fixture in `FIXTURES` below, each in the dedicated worker (`determinism-worker.ts`),
 // and shows a PASS/FAIL banner per fixture plus the user agent and `crossOriginIsolated`
-// (docs/plan/03-browser-harness.md, Planning decisions "Determinism on a physical phone"; the
+// (M03, Planning decisions "Determinism on a physical phone"; the
 // manual device check reads this page directly). `determinism.spec.ts` reads each fixture's
 // `golden/golden.json` in Node and only trusts `window.__determinism`'s freshly-computed
 // checkpoints, never this page's own bundled copies of the goldens.

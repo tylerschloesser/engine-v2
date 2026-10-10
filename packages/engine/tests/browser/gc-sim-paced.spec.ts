@@ -1,4 +1,4 @@
-// `sim-paced: zero-GC over the real onFire pacing path` (docs/plan/13b-tick-timing-allocation.md,
+// `sim-paced: zero-GC over the real onFire pacing path` (M13b,
 // Order of work 1): a real `createClient()` local topology over `fx-puts`, `simHost.start()` armed
 // for real (`gc-sim-paced.ts`), so the `sim` isolate's own `AtomicsTimer` (`poll`/`timeoutMs`) is
 // measured for the first time -- distinct from `gc-sim.ts`'s own deterministic `stepSimTickSync`

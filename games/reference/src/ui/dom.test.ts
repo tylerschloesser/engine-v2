@@ -1,4 +1,4 @@
-// `diffKeyed` (docs/plan/20b-reference-player-and-collect-ui.md Provides): pure reconciliation
+// `diffKeyed` (M20b Provides): pure reconciliation
 // logic, tested here with plain objects (never `HTMLElement`, `E` is unconstrained) so this suite
 // needs no DOM environment (`vitest.config.ts`'s `unit` project runs `environment: 'node'`).
 import { expect, test } from 'vitest'

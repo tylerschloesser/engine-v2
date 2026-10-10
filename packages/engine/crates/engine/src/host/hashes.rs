@@ -1,4 +1,4 @@
-//! The per-connection desync-hash schedule (docs/plan/31b-desync-hashes.md, 0013 "Per-chunk desync
+//! The per-connection desync-hash schedule (M31b, 0013 "Per-chunk desync
 //! hashes"): which subscribed chunk's hash rides which frame, when `Global` and `OwnPlayer` are
 //! due, and the two test hooks that live per connection (`sim_skip_delta`, a pending scope resend).
 //!

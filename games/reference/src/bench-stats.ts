@@ -1,5 +1,5 @@
 // The bench meter's rolling statistics, free of the engine and the DOM so a unit test can feed them
-// synthetic samples (docs/plan/39o-large-save-tick-breakdown.md). Diagnostic, outside the zero-GC
+// synthetic samples (M39o. Diagnostic, outside the zero-GC
 // rule (`.claude/rules/hot-paths.md`): runs on the bench page's main thread only.
 
 export const WINDOW_MS = 10_000
@@ -57,7 +57,7 @@ export type PartReadings = {
   frameBuildP95Ms: number
   resyncP95Ms: number
   catchupTicksPer10s: number
-  /** docs/plan/39ag: p50/p95 ms of the whole pass and of each part; `rest` = whole minus the timed parts. */
+  /** M39ag: p50/p95 ms of the whole pass and of each part; `rest` = whole minus the timed parts. */
   parts: Record<string, [number, number]>
 }
 
@@ -103,7 +103,7 @@ export function createPartStats(): {
   }
 }
 
-// docs/plan/39y-wasm-tick-cost.md: `sim_tick` split by phase (`bench_phase.rs`'s `Phase`, bench builds
+// M39y: `sim_tick` split by phase (`bench_phase.rs`'s `Phase`, bench builds
 // only). Ids 1-7 are timed on every tick; 8-12 are a 1-in-`PHASE_SAMPLE_EVERY` sample of the furnaces
 // inside `game_tick`, so their sums are scaled by it. Slot 8 (`skip`) is the unsampled remainder.
 export const PHASE_NAMES: readonly string[] = [
@@ -160,7 +160,7 @@ export function createPhaseStats(): {
   }
 }
 
-// docs/plan/39s-sim-tick-tail.md: the per-tick series. `sim_tick` is timed in the sim worker for
+// M39s: the per-tick series. `sim_tick` is timed in the sim worker for
 // the paced tick of each pass and published through the control block (`CB_SIM_ONETICK_US`); the
 // bench meter reads it once per rAF whenever the tick number moved and keeps the last `TICK_RING`
 // of them here, with their tick numbers (a jump in the number is counted as `missed`).

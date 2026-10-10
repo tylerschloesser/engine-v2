@@ -26,23 +26,23 @@ crate that blesses it (`pnpm golden:bytes`, `../CLAUDE.md` Commands).
   replicated scope (`Paint`/`Spawn` chunk-scoped, `SetNote` player-scoped, `SetMotd` global-scoped),
   `Bump`/`Remove` exercising the reject path, `Roll` exercising `SimRng`, and a `tick` rule that
   changes state on its own (no action) once a simulated second.
-- `drawables` (`fx-drawables`, docs/plan/17-drawlist-and-sprites.md): `ClientSide::extract`/
+- `drawables` (`fx-drawables`, M17: `ClientSide::extract`/
   `FrameView::entities()`/`DrawList` -- three fixed genesis entities, one "small" and skipped by
   `extract` once `FrameView::zoom()` crosses `SMALL_ZOOM_THRESHOLD`. `tests/drawlist_golden.rs`'s
   `drawlist_fixture_hash_golden` drives a real `GameInstance` (sim + client) and pins a hash
   (`assert_golden_hash!`) that `tests/wasm/drawlist.test.ts` also reads, off the real `.wasm` --
   native-vs-`.wasm` parity, `puts_idle_100`'s own shape.
-- `presence` (`fx-presence`, docs/plan/19-presence-channel.md): the presence channel and
+- `presence` (`fx-presence`, M19: the presence channel and
   witness-carrying actions (0001) -- `Presence = { pos, vel }`, `Action::Poke { tile, from }`,
   `admit`'s tolerance check and `apply`'s own deterministic range check. Own `CLAUDE.md`.
-- `machines` (`fx-machines`, docs/plan/21-entities-and-timers.md, docs/plan/
+- `machines` (`fx-machines`, M21, docs/plan/
   21b-timers-wakeups-and-tickcx.md): the 2x2 multi-tile entity, footprint occupancy and the state
   budget (M21); the timer wheel, wake queue and an active-list "Spinner" (M21b) -- `Feed`'s own
   apply-time put auto-wakes into the same tick's `next_woken`, which schedules a `SMELT`-tick
   `wake_at`; due increments `count` then sleeps until fed again; `Action::PlaceSpinner` spawns the
   other kind, which joins the "spinner" active list instead and toggles a field every `SPIN_PERIOD`
   ticks. Goldens `place-border`, `full-world` (M21), `smelt-cycle`, `idle-world-costs-zero` (M21b).
-- `busy-field` (`fx-busy-field`, docs/plan/31-rates-and-integrity.md): the load 0010's bandwidth rows
+- `busy-field` (`fx-busy-field`, M31: the load 0010's bandwidth rows
   are measured against -- 200 timer-driven machines putting whole ~16 B values twice per 5 s
   (80 puts/s), dense chunks (200 dormant entities + 160 modified tiles, ~3.5 KB on the wire natively, 3.9 KB with a big world's 3-byte entity ids) via
   `Action::Fill { cx, cy }` or the native-only bench genesis `BusyField<true>` (121 chunks). A `Fill`

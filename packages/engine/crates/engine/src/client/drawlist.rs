@@ -1,4 +1,4 @@
-//! `Draw`/`DrawList` (docs/decisions/0018-renderer.md §2; docs/plan/17-drawlist-and-sprites.md
+//! `Draw`/`DrawList` (docs/decisions/0018-renderer.md §2; M17
 //! Scope): the engine-owned, preallocated per-frame draw list `ClientSide::extract` fills. Two
 //! lists, one sort (Planning decisions): `extract` appends to a scratch list in the client arena
 //! (`DrawList::{sprite, circle, ring, rect, bar, radial, ghost}`, this module); `sort_into` then
@@ -30,7 +30,7 @@ pub const LAYER_COUNT: usize = 8;
 
 // Header field offsets (Planning decisions "Slot header is 1,024 bytes"). M17 (this module) writes
 // `frame_seq`, `record_count`, `window_origin`, `layer_count`, `dropped`, `frame_time_ms`; steps 4-6
-// of docs/plan/18-picking-and-overlay.md (this cut) add `follow_valid`/`follow` (`cx.follow(..)`,
+// of M18 (this cut) add `follow_valid`/`follow` (`cx.follow(..)`,
 // 0019 §1) and `anchor_mask`/`anchors` (`DrawList::anchor`, 0019 §5). `flags` at offset 52 and the
 // 24-byte gap `104..128` still have no owner (Deviations: left zero). None of these new offsets fall
 // inside `hash_region`'s own `[4, 48)`/`[88, 92)` ranges, so the `fixtures/drawables` DrawList golden
@@ -161,7 +161,7 @@ pub fn snap_window_origin(centre: TilePos) -> TilePos {
 /// `game_instance.rs`'s own follow-up calls, not part of the game-facing surface -- `pub`, not
 /// `pub(crate)`, only because a fixture's own native golden test (a separate crate,
 /// `fixtures/drawables`) needs to drive them directly to prove `sort_into`'s output is a pure
-/// function of replica + camera (docs/plan/17-drawlist-and-sprites.md Deviations).
+/// function of replica + camera (M17 Deviations).
 pub struct DrawList {
     /// Reserved once at `new()` (`.claude/rules/hot-paths.md`), cleared (not reallocated) by
     /// `begin_frame`.

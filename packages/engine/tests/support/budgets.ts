@@ -1,5 +1,5 @@
 // The Node helper that reads `packages/engine/budgets.json` (docs/decisions/0020 §9: the one
-// budgets file; docs/plan/04-zero-gc-harness.md, Seams). Read once, cached: the file only changes
+// budgets file; M04, Seams). Read once, cached: the file only changes
 // between runs, never during one.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -16,7 +16,7 @@ export type IsolateBudget = {
 
 export type SoftwarePage = {
   frames: number
-  /** `formula` is optional (docs/plan/13b-tick-timing-allocation.md): most pages' `main` figure
+  /** `formula` is optional (M13b: most pages' `main` figure
    * here has been `0` since ADR 0029 and needed no derivation; `sim-paced` is the first with a
    * real, measured, non-zero one and carries its own `formula` string per 0020 §9.
    *

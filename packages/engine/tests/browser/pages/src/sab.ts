@@ -1,4 +1,4 @@
-// `sab.html`: `sab.ring_both_directions` (docs/plan/06-sab-primitives-and-workers.md, Tests added).
+// `sab.html`: `sab.ring_both_directions` (M06, Tests added).
 // Main pushes an independently sequenced stream to a worker over one ring (`toWorker`) and drains
 // the worker's own independently sequenced stream over a second ring (`fromWorker`), so both
 // directions are exercised for real -- the spike only measured worker -> main (0015 §2).

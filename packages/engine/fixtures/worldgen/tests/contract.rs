@@ -18,7 +18,7 @@ fn worldgen_contract_fixture() {
     assert_worldgen_contract::<FixtureGen>(seed, &params, dims);
 
     // `abi::arena` shows zero allocation inside `generate` (Tests added of
-    // docs/plan/08-worldgen-and-gen-worker.md): warm up first (the scratch buffer above already
+    // M08: warm up first (the scratch buffer above already
     // exercised every code path), then measure one more call in isolation.
     let mut out = vec![Tile::VOID; dims.area() as usize];
     FixtureGen::generate(seed, &params, ChunkCoord::new(3, -3), &mut out);

@@ -1,4 +1,4 @@
-// Found by the demonstration of the whole round (docs/plan/39f-device-auto-runner.md step 15): checks walked
+// Found by the demonstration of the whole round (M39f step 15): checks walked
 // one after the other in one tab. A helper tab (a Private tab) left open after its check must not walk the
 // next one, and the first tab must not treat the previous check's world page as the page of the next check
 // because the two differ only in a knob a helper tab's link may change (`world=`). Before the fixes the second

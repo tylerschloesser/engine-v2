@@ -9,7 +9,7 @@ import { buildGame } from '../dist/vite.js'
 
 const fixtures = fileURLToPath(new URL('../fixtures/', import.meta.url))
 
-// docs/plan/16-action-round-trip.md step 4: only `fx-puts` has a `#[ts(export)]` type today
+// M16 step 4: only `fx-puts` has a `#[ts(export)]` type today
 // (`Action`/`Reject`/`Pos`, plus `engine::sim::EngineReject` by its own hand-written test) --
 // every other fixture would pay a second native `cargo test` compile for zero matching tests, so
 // the bindings step is opt-in per fixture name rather than run unconditionally.

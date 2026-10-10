@@ -1,4 +1,4 @@
-// docs/plan/22b-persistence-load-and-fs.md, Order of work step 4: `fsStorage` + the same behavioural
+// M22b, Order of work step 4: `fsStorage` + the same behavioural
 // conformance suite `memoryStorage` passes, plus one real-directory crash test (tmpdir, truncate a
 // file by hand). `afterEach` cleans up every tmpdir this file creates (`command rm -f`'s own
 // discipline: `node:fs`, never a shell operation).

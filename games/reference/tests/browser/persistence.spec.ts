@@ -1,4 +1,4 @@
-// The persistence tests of docs/plan/34b-reference-scripted-single-player.md (Scope, "Persistence
+// The persistence tests of M34b (Scope, "Persistence
 // through the game"): `reference_reload_resumes`, `reference_offscreen_furnace_keeps_smelting`,
 // `reference_world_busy_second_tab`, `reference_export_import_roundtrip`. The page is `/test.html`
 // with `?persist`: the same world in OPFS as the production page, driven by the manual clock (stepped
@@ -225,7 +225,7 @@ test('reference_reload_during_load', async ({ page }) => {
   expect(errors).toEqual([])
 })
 
-// R4 (Tyler, 2026-10-10; docs/plan/39ai-tyler-answers.md): Export world is in the normal game UI at
+// R4 (Tyler, 2026-10-10; M39ai: Export world is in the normal game UI at
 // all times, not only on the status screen for a save that cannot be loaded.
 test('reference_export_control_in_game_ui', async ({ page }) => {
   await start(page)

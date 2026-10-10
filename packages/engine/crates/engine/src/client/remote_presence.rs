@@ -1,4 +1,4 @@
-//! `RemotePresences<G>` (docs/plan/19-presence-channel.md Provides: "newest `{ sample,
+//! `RemotePresences<G>` (M19 Provides: "newest `{ sample,
 //! sample_tick, arrived_ms }` per remote player"): the client's own store of the newest presence
 //! sample per remote player, applied from the wire's `Presence` section (`wire::read_presence`,
 //! `client::core::ClientCore::apply`). `FrameView::presences()` is its read side; M30 replaces
@@ -19,7 +19,7 @@ pub struct RemotePresenceEntry<G: Game> {
     /// own `Presence` section field, `wire/CLAUDE.md`) -- not the tick it was relayed on.
     pub sample_tick: Tick,
     /// The client's own wall-clock reading (`CameraBlock::frame_time_ms`, ms) at the first
-    /// `frame(t_ms)` after the frame carrying this sample was decoded (docs/plan/30-interpolation.md
+    /// `frame(t_ms)` after the frame carrying this sample was decoded (M30
     /// Deviations: `on_frame`'s signature is unchanged, so arrival is stamped by
     /// [`RemotePresences::stamp_arrivals`], one client frame late at most). Until stamped
     /// ([`Self::stamped`] false) it holds the tick-derived stand-in M19 used
@@ -45,7 +45,7 @@ impl<G: Game> Copy for RemotePresenceEntry<G> {}
 /// `FrameView::presences()`.
 pub struct RemotePresences<G: Game> {
     entries: BTreeMap<PlayerId, RemotePresenceEntry<G>>,
-    /// docs/plan/30-interpolation.md: every remote player's samples, keyed `InterpKey::Player`;
+    /// M30: every remote player's samples, keyed `InterpKey::Player`;
     /// [`FrameView::presences`](super::frame_view::FrameView::presences) reads interpolated
     /// positions from here. `entries` keeps the newest raw sample (`RemotePresence::sample`).
     buffer: InterpBuffer<InterpKey>,

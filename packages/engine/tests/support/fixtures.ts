@@ -7,7 +7,7 @@ import { loadGame } from '../../src/server-node.js'
 
 const root = fileURLToPath(new URL('../../fixtures/', import.meta.url))
 
-// `games/<name>/sim/`: an in-repo game crate (docs/plan/20-reference-game-v0.md, orchestrator
+// `games/<name>/sim/`: an in-repo game crate (M20, orchestrator
 // ruling: the M02 import-allowlist/target-features test must reach `reference-sim` too). Not
 // merged into `fixtureNames()`/`fixtureBytes()` above (which several *other* tests -- `abi-
 // registry.test.ts` among them -- also iterate): widening those would pull every such test onto
@@ -60,7 +60,7 @@ export function fixtureBytes(name: string): Uint8Array<ArrayBuffer> {
 }
 
 /** `file` is normally `'scenario.json'`/`'golden.json'`, but a fixture may keep a second scenario
- * beside its canonical one (docs/plan/15b-ring-connection-and-replica-rendering.md, Orchestrator
+ * beside its canonical one (M15b, Orchestrator
  * ruling 1: "the connected scenario gets its own new golden ... beside `puts_idle_100`, not a
  * change to it") -- `scripts/golden.mjs`'s own naming convention is `scenario<suffix>.json` /
  * `golden<suffix>.json`, so this stays a plain `string` rather than a literal union that would

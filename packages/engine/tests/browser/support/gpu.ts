@@ -1,7 +1,7 @@
 // Every GPU test's own rule (docs/decisions/0020-testing-strategy.md §6): record `adapter.info` and
 // fail -- never skip -- on a null adapter, and fail on any `uncapturederror`. `expectAdapter`'s name
 // matters beyond this file: M10 finds every GPU test by grepping `expectAdapter|readback`
-// (docs/plan/09-renderer-terrain.md Consumes).
+// (M09 Consumes).
 import { expect, type TestInfo } from '@playwright/test'
 
 export type AdapterInfo = {
