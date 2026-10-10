@@ -77,6 +77,10 @@ pub const UNITS_PER_TILE: u16 = 10;
 /// reference-game.md`); bit 1 on every resource id (`rules::collect::start`'s own check).
 pub const NOT_BUILDABLE: TraitSet = TraitSet(1 << 0);
 pub const COLLECTABLE: TraitSet = TraitSet(1 << 1);
+/// Carried by an entity prototype (the furnace): every tile of its footprint is covered, so a
+/// resource under it cannot be collected (R1, Tyler 2026-10-10). Derived through `traits_at`'s
+/// occupant term, never stored: it follows the furnace through save, load and pick-up for free.
+pub const COVERS_RESOURCE: TraitSet = TraitSet(1 << 2);
 
 /// Collect range (Requirements: "within 3 tiles of a resource ... centre of the player circle to
 /// centre of the resource tile"), in Q24.8 raw units (0007 §2: 256 raw units = 1 tile).
@@ -227,17 +231,18 @@ pub const FURNACE_FOOTPRINT: Footprint = Footprint { w: 2, h: 2 };
 /// the frame is `Draw::param`). Must match `scripts/gen-assets.mjs`'s `SPRITES`.
 pub const SPRITE_FURNACE: u16 = 0;
 
-/// Trait tables + entity prototypes (0007 §6, `Game::register`'s own doc comment): both waters and
-/// every resource id are `NOT_BUILDABLE` (R1 default: no furnace over a resource tile); every
-/// resource id is also `COLLECTABLE`; the furnace prototype is `NOT_BUILDABLE` too, so one furnace
-/// refuses another through the occupant term of `traits_at`, with no entity named in the rule.
+/// Trait tables + entity prototypes (0007 §6, `Game::register`'s own doc comment): both waters are
+/// `NOT_BUILDABLE`; every resource id is `COLLECTABLE` and **not** `NOT_BUILDABLE` (R1: a furnace may
+/// stand on a resource); the furnace prototype is `NOT_BUILDABLE` (so one furnace refuses another
+/// through the occupant term of `traits_at`, with no entity named in the rule) and `COVERS_RESOURCE`
+/// (a covered resource is not collectable until the furnace is picked up).
 pub fn register(r: &mut Registry) {
     r.set_base_traits(DEEP_WATER, NOT_BUILDABLE);
     r.set_base_traits(WATER, NOT_BUILDABLE);
     for &resource in &[IRON, WOOD, STONE, COAL] {
-        r.set_resource_traits(resource, COLLECTABLE.union(NOT_BUILDABLE));
+        r.set_resource_traits(resource, COLLECTABLE);
     }
-    let furnace = r.add_prototype(NOT_BUILDABLE, FURNACE_FOOTPRINT);
+    let furnace = r.add_prototype(NOT_BUILDABLE.union(COVERS_RESOURCE), FURNACE_FOOTPRINT);
     assert_eq!(furnace, FURNACE_PROTO, "the furnace must be prototype 0");
 }
 

@@ -315,7 +315,7 @@ export async function collectN(
 /** Tiles under `TEST_SEED` that the placement specs rely on (`sim/tests/place.rs`,
  * `browser_fixture_tiles_hold`, checks them against worldgen): a free 2x2 of land, the last origin
  * whose footprint is all land on the shore row, the next origin over (one footprint tile is water),
- * and an origin covering the iron resource at (0, 0). */
+ * and an origin covering the iron resource at (0, 0) (buildable since R1). */
 export const PLACE = {
   free: { x: -4, y: -1 },
   shoreOk: { x: 1, y: -1 },

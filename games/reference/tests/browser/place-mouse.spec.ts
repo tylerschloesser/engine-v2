@@ -63,8 +63,8 @@ test('reference_place_mouse', async ({ page }) => {
     valid: true,
   })
   expect(water?.color).toBe(GHOST.invalid)
-  // A resource under the footprint is invalid too (R1 default).
-  expect((await hover(PLACE.overIron))?.color).toBe(GHOST.invalid)
+  // A resource under the footprint is fine (R1, Tyler 2026-10-10): the furnace covers it.
+  expect((await hover(PLACE.overIron))?.color).toBe(GHOST.valid)
   // Back on free land it is valid again.
   expect((await hover(PLACE.free))?.color).toBe(GHOST.valid)
 

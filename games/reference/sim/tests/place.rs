@@ -64,24 +64,6 @@ fn place_on_water_rejected() {
 }
 
 #[test]
-fn place_on_resource_rejected() {
-    // R1 default: a furnace may not cover a resource tile.
-    for resource in [content::IRON, content::WOOD, content::STONE, content::COAL] {
-        let mut s = scenario();
-        s.set_tile(
-            TilePos::new(43, 43),
-            Tile::new(content::GRASS, resource, content::UNITS_PER_TILE),
-        );
-        assert_eq!(
-            s.place(P1, TilePos::new(42, 42)),
-            Err(RefReject::NotBuildable),
-            "resource {resource}"
-        );
-        assert_eq!(s.furnace_count(), 0);
-    }
-}
-
-#[test]
 fn place_overlapping_furnace_rejected() {
     // All nine offsets at which two 2x2 footprints overlap, plus the four nearest non-overlapping
     // ones (the test must be able to fail both ways).
@@ -251,7 +233,7 @@ fn browser_fixture_tiles_hold() {
         ((-4, -1), true), // free
         ((1, -1), true),  // shoreOk
         ((2, -1), false), // shoreWater: (3, 0) is water
-        ((0, -1), false), // overIron: covers (0, 0)
+        ((0, -1), true),  // overIron: covers (0, 0); a furnace may stand on a resource (R1)
     ];
     for ((x, y), ok) in cases {
         let mut s = RefScenario::new();

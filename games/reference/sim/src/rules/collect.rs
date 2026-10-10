@@ -56,6 +56,11 @@ pub fn admit(p: &PresenceTable<RefGame>, who: PlayerId, from: WorldPos) -> Resul
     Ok(())
 }
 
+/// A tile with these traits can be collected: the resource says so and nothing covers it (R1).
+pub fn collectable(traits: engine::world::TraitSet) -> bool {
+    traits.contains(content::COLLECTABLE) && !traits.contains(content::COVERS_RESOURCE)
+}
+
 /// `apply(StartCollect)` (Scope, exact validation order): tile readable, resource present and
 /// `COLLECTABLE`, in range, not already collecting; then `put_player` with `collecting = Some { tile,
 /// done_at }`. Every read up to and including `w.player(who)?` happens before the one write
@@ -71,7 +76,10 @@ pub fn start(
     if t.resource() == 0 {
         return Err(RefReject::NoResource);
     }
-    if !w.traits_at(tile)?.contains(content::COLLECTABLE) {
+    let traits = w.traits_at(tile)?;
+    // R1: a resource under a furnace is not there to collect until the furnace is picked up.
+    // Derived from the footprint through `traits_at`'s occupant term: no stored "covered" flag.
+    if !collectable(traits) {
         return Err(RefReject::NoResource);
     }
     if !in_range(from, tile) {
@@ -141,6 +149,12 @@ pub fn tick(cx: &mut TickCx<'_, RefGame>) {
 fn complete_one(cx: &mut TickCx<'_, RefGame>, next: &mut RefPlayer, collecting: Collecting) {
     next.collecting = None;
     let tile = collecting.tile.tile();
+    // R1: a furnace placed over the tile mid-collect ends it with no item and no depletion.
+    if let Ok(traits) = WorldRead::<RefGame>::traits_at(cx, tile)
+        && !collectable(traits)
+    {
+        return;
+    }
     if let Ok(t) = WorldRead::<RefGame>::tile(cx, tile) {
         let resource = t.resource();
         if resource != 0 {

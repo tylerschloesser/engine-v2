@@ -14,6 +14,8 @@ use reference_sim::{RefClient, RefEntity, RefGame, RefGlobal, RefPlayer};
 /// `(10, 10)` (far outside it), everything else void/grass (no resource).
 struct StubWorld {
     player: RefPlayer,
+    /// A furnace covers the stone tile at `(1, 0)` (R1): its `traits_at` carries `COVERS_RESOURCE`.
+    covered: bool,
 }
 
 impl WorldRead<RefGame> for StubWorld {
@@ -29,7 +31,10 @@ impl WorldRead<RefGame> for StubWorld {
             Ok(Tile::new(0, 0, 0))
         }
     }
-    fn traits_at(&self, _p: TilePos) -> Result<TraitSet, Unknown> {
+    fn traits_at(&self, p: TilePos) -> Result<TraitSet, Unknown> {
+        if self.covered && p == TilePos::new(1, 0) {
+            return Ok(reference_sim::content::COVERS_RESOURCE);
+        }
         Ok(TraitSet(0))
     }
     fn entity_at(&self, _p: TilePos) -> Result<Option<engine::game::EntityId>, Unknown> {
@@ -95,6 +100,7 @@ fn ui_in_range_lists_each_resource_once() {
     let client = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
     let world = StubWorld {
         player: RefPlayer::default(),
+        covered: false,
     };
     let entities = BTreeMap::new();
     let registry = Registry::new();
@@ -120,6 +126,7 @@ fn ui_from_is_within_range_of_its_tile() {
     let client = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
     let world = StubWorld {
         player: RefPlayer::default(),
+        covered: false,
     };
     let entities = BTreeMap::new();
     let registry = Registry::new();
@@ -265,7 +272,10 @@ fn ui_reads_inventory_and_collecting_from_player() {
         tile: reference_sim::TileXY { x: 1, y: 0 },
         done_at: engine::time::Tick(42),
     });
-    let world = StubWorld { player };
+    let world = StubWorld {
+        player,
+        covered: false,
+    };
     let entities = BTreeMap::new();
     let registry = Registry::new();
     let remote = RemotePresences::<RefGame>::new();
@@ -373,5 +383,27 @@ fn ui_button_appears_within_exactly_3_tiles_centre_to_centre() {
         listed(TilePos::new(-3, 0), 0.5 - 6.0),
         1,
         "and the same on the other side"
+    );
+}
+
+#[test]
+fn ui_in_range_hides_a_covered_resource() {
+    // R1: the stone tile at (1, 0) is under a furnace, so it has no collect button; nothing else
+    // is in range.
+    let client = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
+    let world = StubWorld {
+        player: RefPlayer::default(),
+        covered: true,
+    };
+    let entities = BTreeMap::new();
+    let registry = Registry::new();
+    let remote = RemotePresences::<RefGame>::new();
+    let v = view(&world, &entities, &registry, &remote);
+    let mut out = reference_sim::RefUi::default();
+    client.ui(&v, &mut out);
+    assert!(
+        out.in_range.is_empty(),
+        "covered: no entry, {:?}",
+        out.in_range
     );
 }

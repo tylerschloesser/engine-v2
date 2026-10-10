@@ -697,6 +697,11 @@ impl ClientSide<RefGame> for RefClient {
                 if resource == 0 || !in_range(from, tile) {
                     continue;
                 }
+                // R1: a resource under a furnace has no collect button (confirmed state; the raw
+                // replica's `traits_at` includes the occupant's traits).
+                if matches!(world.traits_at(tile), Ok(t) if t.contains(content::COVERS_RESOURCE)) {
+                    continue;
+                }
                 let key = TileXY::from_tile(tile);
                 if let Some(i) = tracked.iter().position(|e| e.tile == key) {
                     tracked[i].resource = resource;

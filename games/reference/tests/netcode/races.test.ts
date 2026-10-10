@@ -230,15 +230,13 @@ test.each(LATENCIES.flatMap((l) => ([0, 1] as const).map((w) => [l, w] as const)
         if (uiOf(h, 0).inventory[INGOT] !== 0) throw new Error(`${tag}: A took early`)
 
         slowDown(r, loser, latency)
-        // Never a partial take on any frame, and never a ghost: a take is not predicted (M33b).
+        // Never a partial take on any frame (`Ui` is the confirmed replica, so the predicted take
+        // shows only as a PREDICTED sprite; R2: a take is predicted like every other action).
         const invariant =
           (who: 0 | 1) => (ui: Ui, draws: Array<{ kind: number; flags: number }>) => {
             const n = ui.inventory[INGOT] ?? -1
             if (![0, 2].includes(n)) throw new Error(`${tag}: client ${who} holds ${n} ingots`)
             if (who === loser && n !== 0) throw new Error(`${tag}: the loser holds ${n} ingots`)
-            if (draws.some((d) => d.kind === 0 && (d.flags & PREDICTED) !== 0)) {
-              throw new Error(`${tag}: a take drew a ghost`)
-            }
           }
         const probes = [0, 1].map((i) => tornStateProbe(h.clients[i]!, invariant(i as 0 | 1)))
         const seen = [0, 1].map((i) => recordResults(r, i))
@@ -251,12 +249,9 @@ test.each(LATENCIES.flatMap((l) => ([0, 1] as const).map((w) => [l, w] as const)
         expect(probes[loser]!.verdicts.get(seqs[loser]!), tag).toEqual({
           Rejected: { Game: 'NothingToTake' },
         })
-        // Both were told `NotPredictable` at dispatch, then the verdict (M33b: a take is not predicted).
-        expect(seen[winner], tag).toEqual(['NotPredictable', 'Confirmed'])
-        expect(seen[loser], tag).toEqual([
-          'NotPredictable',
-          { Rejected: { Game: 'NothingToTake' } },
-        ])
+        // Both predicted the take at dispatch (no `NotPredictable`, R2), then got the verdict.
+        expect(seen[winner], tag).toEqual(['Confirmed'])
+        expect(seen[loser], tag).toEqual([{ Rejected: { Game: 'NothingToTake' } }])
         await h.settle()
         h.assertConverged()
         expect(uiOf(h, winner).inventory[INGOT], `${tag}: the winner has both ingots`).toBe(2)

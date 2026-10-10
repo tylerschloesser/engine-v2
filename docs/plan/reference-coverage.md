@@ -29,7 +29,7 @@ M34b and M34c keep the test columns true (here and in the `reference-game.md` ta
 | Off-screen state keeps simulating (0003 list) | furnace smelts while unsubscribed | scripted | 34b | `reference_offscreen_furnace_keeps_smelting` |
 | Time units, `done_at`, `clock()` (0006) | 2 s / 5 s durations as `const`; CSS progress | play | 20–33b |  |
 | Prediction and rollback of discrete actions; one-frame ghost swap (0012) | every own action; placement most visibly | play | 33 (engine: 25, 26) |  |
-| `Game::predict` opt-out (0012) | `FurnaceTake` | play | 33b |  |
+| `Game::predict` opt-out (0012) | none: the game predicts every action (R2, Tyler 2026-10-10); the engine's fixture tests cover the opt-out | engine fixtures | 25 | `predict_opt_out_declines`, `predict_not_predictable_event` |
 | `Unknown` reads → `NotPredictable` at the subscription edge (0003 list) | scripted far placement | scripted | 34c | `reference_subscription_edge_not_predictable` |
 | Rejection races: last unit, same spot, same ingots (0003 list) | three race tests at three latencies | scripted | 34c | `reference_race_last_unit`, `reference_race_same_spot`, `reference_race_same_ingots` |
 | Provisional ids, tile addressing (ADR 0022) | deposit into a just-placed furnace; panel survives the swap | play + scripted | 33b | `deposit_into_predicted_furnace_before_ack` (`sim/tests/furnace_predict.rs`), `reference_furnace_panel_survives_swap` (browser) |
@@ -81,13 +81,10 @@ Moved: the Requirement → test mapping is the [`reference-game.md` table of `co
 
 ## 4. Questions (for `docs/plan/questions-for-tyler.md`; briefs assume the default)
 
-Answered and removed from this table: Q4 (collect range: 3 tiles, centre to centre; M20, M20b) and R3 ("pick up an empty furnace": added to the Requirements, built in M33b, scripted in M34b and M34c).
+Answered and removed from this table (R1, R2 and R4 on 2026-10-10: a furnace may cover a resource, `FurnaceTake` is predicted, Export is always offered; M39ai): Q4 (collect range: 3 tiles, centre to centre; M20, M20b) and R3 ("pick up an empty furnace": added to the Requirements, built in M33b, scripted in M34b and M34c).
 
 | # | Question | Default assumed | Affects |
 |---|---|---|---|
-| R1 | May a furnace be placed over a resource tile (burying it)? | No: resource ids carry `NOT_BUILDABLE`; a depleted tile becomes buildable | 33 |
-| R2 | `FurnaceTake` is the one unpredicted action (result shows one round trip later) so that the `predict` opt-out has a user. Acceptable feel? | Yes | 33b |
-| R4 | Should the game always offer Export (protection against Safari's 7-day eviction), or only on the `SaveIncompatible` / status screen? | Only on the status screen | 34b, 37 |
 
 ## 5. Gaps found in the ADRs while planning (none blocks a Requirement)
 

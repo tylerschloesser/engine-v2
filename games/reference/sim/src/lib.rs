@@ -119,7 +119,7 @@ pub enum RefReject {
     Unaffordable,
     /// `PlaceFurnace` (M33): the inventory holds no furnace.
     NoFurnace,
-    /// `PlaceFurnace`: some footprint tile is `NOT_BUILDABLE` (water, a resource, another furnace).
+    /// `PlaceFurnace`: some footprint tile is `NOT_BUILDABLE` (water, another furnace).
     NotBuildable,
     /// `FurnaceDeposit`/`FurnaceTake`/`FurnacePickUp` (M33b): no furnace on the addressed tile.
     NoFurnaceHere,
@@ -427,10 +427,12 @@ pub struct RefGame;
 impl Game for RefGame {
     // `test-hooks` (never shipped) reports one version higher: a save of the normal build is then
     // `SaveIncompatible` (M34b).
-    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 6 } else { 5 };
+    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 7 } else { 6 };
     //  3: `Furnace` entity, `PlaceFurnace`, resources `NOT_BUILDABLE` (M33).
     //  4: `FurnaceDeposit`, `FurnaceTake`, `FurnacePickUp` and their rejects (M33b).
     //  5: `RefGlobal { colours }`, written on `Joined` (M34).
+    //  6: resources are buildable (R1); a furnace covers the resources under it: `StartCollect` refuses
+    //     a covered tile and a due collect on one ends with no item (M39ai).
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;
@@ -513,14 +515,16 @@ impl Game for RefGame {
         }
     }
 
-    /// `FurnaceTake` opts out (R2): its result depends on a counter tick rules change on the host.
+    /// Every action is predicted (R2, Tyler 2026-10-10: `FurnaceTake` too; the engine's opt-out keeps
+    /// its fixture-only coverage). A take's local result can differ from the host's when a tick
+    /// rule added an ingot meanwhile; the host's answer replaces the prediction (a hint, 0012).
     fn predict(a: &RefAction) -> bool {
         // `test-hooks` (never shipped): the poison craft is the host's to panic on alone.
         #[cfg(feature = "test-hooks")]
         if matches!(a, RefAction::StartCraft { recipe: 255 }) {
             return false;
         }
-        !matches!(a, RefAction::FurnaceTake { .. })
+        true
     }
 
     fn growth(a: &RefAction) -> Option<Growth> {

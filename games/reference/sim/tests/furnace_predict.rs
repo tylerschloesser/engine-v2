@@ -1,6 +1,6 @@
 //! Furnace actions through the real host <-> client round trip (`Loopback`, M25's testkit),
 //! docs/plan/33b-reference-furnace-operation.md Tests added: prediction of deposit and pick-up, the
-//! `FurnaceTake` opt-out, a rejected predicted pick-up, and the host-side half of a pick-up racing
+//! `FurnaceTake` prediction (R2), a rejected predicted pick-up, and the host-side half of a pick-up racing
 //! another player's panel. The client's `open` panel state is step 3's and is asserted there.
 //!
 //! Players earn their items the honest way (the loopback host offers no direct write): the iron and
@@ -273,10 +273,11 @@ fn deposit_into_predicted_furnace_before_ack() {
     assert_eq!(items(&lb, idx, ItemId::Iron), 0);
 }
 
-/// `Game::predict` says no to `FurnaceTake` and yes to everything else; a take dispatched at a
-/// furnace holding ingots changes nothing locally until the host's answer arrives.
+/// `Game::predict` says yes to every action, `FurnaceTake` included (R2, Tyler 2026-10-10); a take
+/// dispatched at a furnace holding ingots shows its effect at once (`Applied`) and the host's ack
+/// leaves the same state (`Confirmed`).
 #[test]
-fn take_is_not_predicted() {
+fn take_is_predicted() {
     let all = |at| {
         [
             RefAction::StartCollect {
@@ -296,11 +297,7 @@ fn take_is_not_predicted() {
         ]
     };
     for a in all(TileXY { x: 1, y: 1 }) {
-        assert_eq!(
-            RefGame::predict(&a),
-            !matches!(a, RefAction::FurnaceTake { .. }),
-            "{a:?}"
-        );
+        assert_eq!(RefGame::predict(&a), true, "{a:?}");
     }
 
     // Through the real client path: a furnace that has smelted one ingot on the host.
@@ -345,11 +342,14 @@ fn take_is_not_predicted() {
     assert_eq!(seen_furnace(&lb, idx, origin).unwrap().ingots_out, 1);
 
     let (seq, st) = lb.dispatch(idx, RefAction::FurnaceTake { at });
-    assert_eq!(st, Prediction::NotPredictable);
-    assert_eq!(lb.overlay_len(idx), 0, "no overlay entry");
-    assert_eq!(items(&lb, idx, ItemId::Ingot), 0, "no local effect");
-    assert_eq!(seen_furnace(&lb, idx, origin).unwrap().ingots_out, 1);
-    assert_eq!(lb.pending(idx).count(), 1, "still sent and tracked");
+    assert_eq!(st, Prediction::Applied, "predicted like every other action");
+    assert!(
+        lb.overlay_len(idx) > 0,
+        "an overlay entry carries the prediction"
+    );
+    assert_eq!(items(&lb, idx, ItemId::Ingot), 1, "the ingot shows at once");
+    assert_eq!(seen_furnace(&lb, idx, origin).unwrap().ingots_out, 0);
+    assert_eq!(lb.pending(idx).count(), 1, "sent and tracked until the ack");
     let mut acked = false;
     for _ in 0..12 {
         lb.step();
@@ -357,13 +357,19 @@ fn take_is_not_predicted() {
             acked |= s == seq && r.is_ok();
         });
     }
-    assert!(acked, "the host took it");
+    assert!(acked, "the host took it: Confirmed");
+    assert_eq!(
+        lb.overlay_len(idx),
+        0,
+        "the overlay entry is gone after the ack"
+    );
     assert_eq!(
         items(&lb, idx, ItemId::Ingot),
         1,
-        "shows one round trip later"
+        "the same state after the ack"
     );
     assert_eq!(seen_furnace(&lb, idx, origin).unwrap().ingots_out, 0);
+    assert_eq!(host_furnace(&lb, origin).unwrap().ingots_out, 0);
 }
 
 /// The furnace item's sprite records `extract` emits for client `idx`'s prediction-merged view.
@@ -844,4 +850,81 @@ fn furnace_smelts_while_unsubscribed() {
     client.recheck_open(&lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
     assert_eq!(client.open(), Some(origin));
     assert_eq!(ui_of(&lb, idx, &client).furnace.unwrap().ingots_out, 1);
+}
+
+/// R1 through the real client path: a furnace placed over the iron landmark (0, 0) is `Applied`
+/// and confirmed; a `StartCollect` at the covered tile is declined locally (`Rejected`, nothing
+/// sent to wait on) and the host agrees; after the pick-up the same collect is predicted and
+/// confirmed with the tile's units intact.
+#[test]
+fn covered_resource_predicted_and_confirmed() {
+    let (mut lb, idx, _who) = world(3, 1, 1);
+    let origin = TilePos::new(0, -1); // covers (0,-1),(1,-1),(0,0),(1,0): the iron landmark at (0,0)
+    let iron = TilePos::new(0, 0);
+    let units_before = pristine(0, 0).aux().min(host_tile(&lb, iron).aux());
+    let from = stand(&mut lb, idx);
+    let collect_iron = RefAction::StartCollect {
+        tile: TileXY::from_tile(iron),
+        from,
+    };
+
+    let (seq, st) = lb.dispatch(
+        idx,
+        RefAction::PlaceFurnace {
+            origin: TileXY::from_tile(origin),
+        },
+    );
+    assert_eq!(
+        st,
+        Prediction::Applied,
+        "placing over a resource is predicted"
+    );
+    for _ in 0..12 {
+        lb.step();
+        lb.client_mut(idx).drain_results(|_, _| {});
+    }
+    let _ = seq;
+    assert!(
+        host_furnace(&lb, origin).is_some(),
+        "Confirmed: the host placed it"
+    );
+
+    let (_, st) = lb.dispatch(idx, collect_iron.clone());
+    assert_eq!(
+        st,
+        Prediction::Rejected(RefReject::NoResource),
+        "predicted: covered, refused locally"
+    );
+    assert_eq!(
+        dispatch_settled(&mut lb, idx, collect_iron.clone()),
+        Err(RefReject::NoResource),
+        "the host agrees"
+    );
+    assert_eq!(host_tile(&lb, iron).aux(), units_before, "units untouched");
+
+    dispatch_settled(
+        &mut lb,
+        idx,
+        RefAction::FurnacePickUp {
+            at: TileXY::from_tile(origin),
+        },
+    )
+    .expect("an empty furnace is picked up");
+    let (_, st) = lb.dispatch(idx, collect_iron);
+    assert_eq!(st, Prediction::Applied, "collectable again, predicted");
+    lb.run(content::COLLECT.0 + 8);
+    assert_eq!(
+        host_tile(&lb, iron).aux(),
+        units_before - 1,
+        "one unit taken"
+    );
+}
+
+fn host_tile(lb: &Loopback<RefGame>, at: TilePos) -> Tile {
+    lb.host
+        .sim()
+        .expect("genesis ran")
+        .authority()
+        .tile(at)
+        .expect("host reads are total")
 }

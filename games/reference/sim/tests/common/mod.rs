@@ -279,6 +279,58 @@ impl RefScenario {
     pub fn hash(&self) -> u64 {
         self.sim.state_hash()
     }
+
+    /// Writes a snapshot of the host and restores it into a fresh `Sim` (what a saved world does on
+    /// load: the same path `engine::testing::replay::heavy` uses), replacing `self.sim`.
+    pub fn save_and_load(&mut self) {
+        use engine::authority::Authority;
+        use engine::game::Game as _;
+        use engine::persist::{Identity, SnapshotProgress, SnapshotReader, SnapshotWriter};
+        use engine::store::Store;
+        use engine::world::{CacheCapacity, ChunkDims, PristineSource, TerrainStore};
+        use engine::worldgen::{Pristine, Worldgen as _, WorldgenStamp};
+        let identity = Identity {
+            build_hash: [0; 16],
+            engine_version: "0.0.0".to_string(),
+            game_version: "0.0.0".to_string(),
+            schema_version: RefGame::SCHEMA_VERSION,
+            tick_rate_hz: RefGame::TICK_RATE.hz_value(),
+            worldgen: WorldgenStamp {
+                version:
+                    <reference_sim::RefWorldgen as engine::worldgen::Worldgen>::WORLDGEN_VERSION,
+                fingerprint: 0,
+            },
+        };
+        let rng = self.sim.authority().rng();
+        let mut w = SnapshotWriter::begin(
+            self.sim.authority().store(),
+            self.sim.tick(),
+            &rng,
+            0,
+            0,
+            0,
+            &identity,
+        );
+        let mut bytes = vec![0u8; w.total_len()];
+        let n = w.next(&mut bytes);
+        assert_eq!(n, bytes.len());
+        let source: Box<dyn PristineSource> = Box::new(
+            Pristine::<reference_sim::RefWorldgen>::new(TEST_SEED, RefParams::default()),
+        );
+        let terrain = TerrainStore::new(
+            ChunkDims::new(RefGame::CHUNK_BITS),
+            source,
+            CacheCapacity::Chunks(1024),
+        );
+        let shell = Store::new(terrain, Default::default());
+        let mut reader: SnapshotReader<RefGame> = SnapshotReader::new(shell);
+        let info = match reader.push(&bytes) {
+            Ok(SnapshotProgress::Done(info)) => info,
+            _ => panic!("a snapshot this process just wrote must decode"),
+        };
+        let authority = Authority::from_snapshot(reader.into_store(), info.rng, info.tick);
+        self.sim = Sim::from_parts(authority);
+    }
 }
 
 impl Default for RefScenario {
