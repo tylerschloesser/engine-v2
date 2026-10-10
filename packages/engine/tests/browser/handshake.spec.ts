@@ -24,8 +24,9 @@ test('handshake: welcome view clamp limits zoom', async ({ page }) => {
   // `input/wheel.ts`'s own doc comment: positive `deltaY` zooms out), then enough real-shaped
   // frames for `camera/camera.ts`'s own eased convergence to fully catch up -- `e^6 ~= 400x` the
   // starting `tilesAcross`, so 128 is reached and clamped long before the ease finishes.
-  await page.evaluate(() => window.__hvcInjectWheel?.(3000, 400, 300))
+  // M39aj (0061): one burst queues at most one doubling, so keep the gesture going each frame.
   for (let i = 0; i < 40; i++) {
+    await page.evaluate(() => window.__hvcInjectWheel?.(3000, 400, 300))
     await page.evaluate(() => window.__hvcTickCamera?.(16))
   }
 

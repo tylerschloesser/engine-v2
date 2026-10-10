@@ -52,3 +52,18 @@ Browser (quick, or `@slow` if over ~1 s; say which): `wheel over an overlay butt
 After the orchestrator redeploys Fly, Tyler retries pan and zoom on the iPhone and the Mac (part of M39-two-devices and M39-full-game-touch).
 
 ## Deviations
+
+Step 1-3 landed in `10735b2b`, `22bbc9ba`, step 3 and a fix-up commit (`M39aj: ...`).
+
+- **Default zoom** is the engine default: `DEFAULT_TILES_ACROSS = 32` in `camera/state.ts` (0019 §1 makes the engine own the camera; the game would otherwise have to override it on every page).
+- **Cap:** `WHEEL_MAX_PENDING_LOG = Math.LN2` (`input/wheel.ts`), clamped in `recordWheel`. No per-frame rate cap. ADR `docs/decisions/0061-wheel-zoom-bounded-accumulator.md`, indexed in `PLAN.md`.
+- **Listener:** `installWheelListeners(state, canvas, root = canvas.parentElement ?? canvas)` in `input/wheel.ts`; `client.ts` passes `options.overlay?.root`. Canvas-targeted events use `offsetX/Y`; overlay-targeted ones use `clientX/Y` minus a canvas rect cached on `ResizeObserver`, window `resize` and `scroll`. `WHEEL_OWN_ATTRIBUTE = 'data-wheel-own'` opts a scrollable panel out; the reference game's `#linklog` (`overflow:auto`, `ui/status.ts`) is the only scrollable panel and is marked.
+- **Pinch (step 4):** no defect: each frame applies the incremental ratio through `applyZoomTo`, which clamps, so a limit never sticks. No test added.
+- **Tests that changed (all because of 12 -> 32 or the cap; none weakened):**
+  - `camera: zoom clamps and constraints` (`camera.test.ts`): the zoom-out half records the 100000 px wheel each frame (one burst now queues at most ln 2 = 20 -> 40, not 256).
+  - `handshake: welcome view clamp limits zoom`: the 3000 px wheel is injected each frame for the same reason (still ends at 128).
+  - `reference_new_player_spawns_on_land` (`games/reference/tests/browser/spawn.spec.ts`): expects `tilesAcross: 32` (was 12, the old default).
+  - `real-camera.html`, `semantic.html` and `ghost` pages (ghost.mouse_tracks_cursor_tile, ghost.touch_tap_then_confirm, four overlay.* tests, `input: events reach wasm`) assume 12: the three page scripts now `moveTo(0, 0, {tiles: 12, durationMs: 0})` after `createClient` (real-camera and semantic only when `!camera.restored`, so `camera: persisted and restored` still restores). No golden moved.
+- **Brief's `wheel: one notch` starts at 12**, the zoom-in limit, where a zoom-in would clamp; the test starts at 32 (mid-range).
+- **Browser test** `wheel over an overlay button zooms` (`overlay.spec.ts`, real-camera page) is quick (about 1 s, not `@slow`); it zooms out because that page opens at the 12-tile limit. `browser` ran 258 tests in 44 s of 60 s.
+- `[gc] input` (`pnpm test browser -t input`, 11 tests) passes with no budget change; that page drives `recordWheel` directly, so the new DOM listener itself is not in a gc window (it allocates nothing per event: no rect read, no closure, an ancestor walk with `hasAttribute`).
