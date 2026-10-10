@@ -75,7 +75,11 @@ describe('device-walk checks', () => {
   })
 
   test('device-walk checks: a limit quoted from the Pass text is in the Pass text; budget and PRE-PLAN refs are real', () => {
-    const preplan = readFileSync(new URL('../../PRE-PLAN.md', import.meta.url), 'utf8')
+    // PRE-PLAN §7's budget table now lives in ADR 0062 (budgets as measured).
+    const preplan = readFileSync(
+      new URL('../../docs/decisions/0062-budgets-as-measured-at-phase-3-exit.md', import.meta.url),
+      'utf8',
+    )
     for (const it of walked) {
       for (const c of CHECKS[it.id].criteria) {
         expect(c.ref, `${it.id} ${c.name}`).toMatch(
