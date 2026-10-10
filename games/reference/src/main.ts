@@ -25,7 +25,8 @@ const support = await checkSupport()
 if (!support.ok) {
   showCapabilityScreen(document.body, support.failures)
 } else {
-  // `#k=<joinKey>` in the URL: play on the server this page came from (`/ws` on its own origin);
+  // `#k=<joinKey>` in the URL: play on the server this page came from (`/ws` on its own origin), or on
+  // the build's `VITE_SERVER_URL` (`wss://...`) when the client is on a static host apart from the server;
   // otherwise a world of this browser's own. The local world is `world.json` (the seed every native
   // test also uses, so the landmark tiles this package's tests probe are the ones a player sees).
   // `?bench=large-save` (M36): in a bench build only (`vite build --mode bench`); `__BENCH__` is a
@@ -47,7 +48,13 @@ if (!support.ok) {
           test: benchModule.BENCH_TEST_OPTIONS,
           ...onClient,
         }
-      : { canvas, host: selectHost(location, undefined, { persist: true }), ...onClient },
+      : {
+          canvas,
+          host: selectHost(location, import.meta.env.VITE_SERVER_URL || undefined, {
+            persist: true,
+          }),
+          ...onClient,
+        },
   )
   const { client } = game
   const benchApi = bench && meter ? meter.start(game, bench) : undefined

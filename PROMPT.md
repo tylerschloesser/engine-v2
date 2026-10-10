@@ -12,9 +12,7 @@ Work every item below; Tyler's answers are recorded on each. Record technical ch
 
 ## Tyler's items (answered 2026-10-10)
 
-- **Cloudflare:** remove the `reference-server-do` worker (wrangler is logged in). Tyler: yes, and downgrade Workers Paid: check nothing else on the account needs Paid, then tell Tyler to downgrade in the dashboard (billing is not in wrangler).
 - **Desktop criteria:** M16's ten-press Paint HUD in desktop Chrome (`slice.html`); M34's two windows on the invite link plus "Slow 4G" own bars. Automate in Playwright before asking him to look.
-- **COOP/COEP on a real static host is unverified** (ADR 0015 §3 listings, ADR 0067: both headers also on `304`). Tyler: deploy `games/reference`'s `vite build` to **Cloudflare Pages** (`_headers`); then `node games/reference/scripts/check-coi.mjs <url>` and `DEPLOYED_URL=<url> pnpm test:slow -t deployed/` against a server on another origin.
 - **Android** is not run anywhere since late Phase 3. The Pixel 5 is on USB (`adb devices`); drive it from the Mac (Chrome over `adb` / CDP), never ask Tyler to tap.
 - **M29 drops not run:** airplane 15 s (iOS keeps Wi-Fi on in airplane mode on this phone) and Wi-Fi to cellular (no SIM). Tyler: close as not applicable; say why in the `device-check` skill.
 

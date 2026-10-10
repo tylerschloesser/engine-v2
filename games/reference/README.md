@@ -61,11 +61,11 @@ Cross-Origin-Embedder-Policy: require-corp
 
 `engine/vite` sets them in dev and preview. `node scripts/check-coi.mjs <url>` asserts both, exact values, on `/`, the hashed worker script, the `.wasm`, an image and a 404. Limits (0015 Consequences): no GitHub Pages (it cannot set headers), no CORP-less third-party content, no popup-based OAuth; assets are same-origin; a phone-hosted single-player world must fit the sim arena.
 
-**Verified:** only our own handler, `games/reference-server --static <dir>` on a Fly machine ([`../reference-server/README.md`](../reference-server/README.md)); `check-coi.mjs` passes against it and the page reaches `online`.
+**Verified:** our own handler, `games/reference-server --static <dir>` on a Fly machine ([`../reference-server/README.md`](../reference-server/README.md)), and **Cloudflare Pages** with the server on another origin ([0072](../../docs/decisions/0072-static-host-verified-build-time-server-url.md)): `check-coi.mjs` passes against both and the page reaches `online`.
 
-**Per-host listings, from documentation, unverified.** No static host was deployed to (the Cloudflare Pages deploy was not approved). The listings below come from reading each host's docs ([`runtime-and-hosting.md`](../../docs/architecture/runtime-and-hosting.md)); **the claim that they work, and 0015 §3's sentence about a cross-origin `wss`, are UNVERIFIED** and still open. To close it: deploy `vite build` to one host with its listing, run `check-coi.mjs <url>` and `DEPLOYED_URL=<url> pnpm test:slow -t deployed/` with the server on another origin.
+**A static deploy:** `VITE_SERVER_URL=wss://<server>/ws pnpm --filter reference build`, then upload `dist/`. The build's `#k=` page plays on that server (unset: `/ws` on the page's own origin). `assets/_headers` and `assets/404.html` are in every build (`publicDir` is `assets`).
 
-- **Cloudflare Pages / Workers static assets** (unverified): `public/_headers` with `/*` then the two header lines above (indented two spaces).
-- **Netlify** (unverified): the same `_headers` file in `public/`, or `netlify.toml` with `[[headers]] for = "/*"` and `[headers.values]` holding the two headers. Not applied to proxied content or functions.
-- **Vercel** (unverified): `vercel.json` with `"headers": [{ "source": "/(.*)", "headers": [` the two key/value pairs `] }]`.
+- **Cloudflare Pages** (verified): `assets/_headers` (`/*` then the two header lines above, indented two spaces); `wrangler pages deploy dist --project-name <name>` from `games/reference/` (create the project once with `--force`, or wrangler delegates to Workers static assets). Headers also on a `304`.
+- **Netlify** (unverified, from its docs): the same `_headers` file, or `netlify.toml` with `[[headers]] for = "/*"` and `[headers.values]` holding the two headers. Not applied to proxied content or functions.
+- **Vercel** (unverified, from its docs): `vercel.json` with `"headers": [{ "source": "/(.*)", "headers": [` the two key/value pairs `] }]`.
 - **GitHub Pages:** cannot set headers; `coi-serviceworker` is a workaround this repo has not tested.
