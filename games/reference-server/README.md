@@ -66,6 +66,8 @@ node games/reference-server/scripts/stage-image.mjs     # fills .stage/; refuses
 cd games/reference-server && fly deploy --remote-only --config fly.toml --dockerfile Dockerfile
 ```
 
+A build whose save schema changed cannot open the world already on the volume: the machine exits 1 with `WorldLoadError: incompatible (MigrateDeclined)` and Fly stops restarting it. To start a fresh world, move the old one aside with a one-off command, then deploy again (which restores the normal command): `fly machine update <id> -a engine-v2-ref --command "sh -c 'mv /data/worlds /data/worlds-old'" --restart no --yes && fly machine start <id> -a engine-v2-ref` (done 2026-10-10 after M39ai's schema 5 → 6; the old world is at `/data/worlds-schema5-2026-10-02`).
+
 The image runs `--static /app/client --exit-on-idle --stats-every 10`: page and `/ws` share one origin (no CORS or cross-origin `wss`), `--static` sets the two isolation headers on every response (`check-coi.mjs <url>`), and `SIGTERM`/`SIGINT` snapshot the world and exit 0 (0005). Measured on `ord`, 2026-10-02:
 
 - **Idle stop:** about 30 s after the last player leaves the machine is `stopped`; a stopped machine bills only its rootfs and the volume (about $0.16/month computed; the billed figure is in Tyler's Fly dashboard).
