@@ -73,6 +73,7 @@ ADR Sources sections link into `docs/research/`, `spikes/`, `docs/spec/` and `do
 | [0065](0065-phase-3-decisions-persistence.md) | Phase 3 decisions: persistence and recovery | Records persistence and recovery decisions made in Phase 3 that no earlier ADR held. | |
 | [0066](0066-phase-3-decisions-client-renderer-input.md) | Phase 3 decisions: client, renderer and input | Records client, renderer and input decisions made in Phase 3 that no earlier ADR held. | |
 | [0067](0067-phase-3-decisions-runtime-packaging-hosting.md) | Phase 3 decisions: runtime, packaging and hosting | Records runtime, packaging and hosting decisions made in Phase 3 that no earlier ADR held. | |
-| [0068](0068-phase-3-decisions-testing-and-tooling.md) | Phase 3 decisions: testing, CI and tooling | Records testing, CI and tooling decisions made in Phase 3 that no earlier ADR held. | |
+| [0068](0068-phase-3-decisions-testing-and-tooling.md) | Phase 3 decisions: testing, CI and tooling | Records testing, CI and tooling decisions made in Phase 3 that no earlier ADR held. | 0071 |
 | [0069](0069-working-rules-learned-in-phase-3.md) | Working rules learned in Phase 3 | Records the working rules Phase 3 learned for orchestrating sessions and sub-agents. | |
 | [0070](0070-phase-3-tooling-retired.md) | Phase 3 orchestration tooling is retired | The `milestone-implementer` agent, `pnpm gate`, `pnpm handoff`, `pnpm acceptance:check` and the `device:walk` phone-round tool are deleted; device checks are walked by hand from the `device-check` skill. | |
+| [0071](0071-gc-burst-controls-one-ci-worker.md) | Gc burst controls on CI run on one worker | CI runs the `gc` and `gc-reference` projects with one worker each; `gcTimeoutMs` stays 90 s. | |

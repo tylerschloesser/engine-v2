@@ -42,9 +42,10 @@ const cdpPort =
 // WebGPU adapter needs; `libvulkan1`/`mesa-vulkan-drivers` are the matching apt packages (ci.yml).
 // On CI (4 vCPUs, software adapter) the zero-GC pages' per-frame cross-thread rendezvous starves
 // when five workers share the runner: worker-isolate burst controls ran 65-90 s against the 90 s
-// `gcTimeoutMs` and timed out three times (runs 36968222365, 37062270078, 37219559331). Two gc
-// workers on CI instead of a longer timeout; locally nothing changes (M39 Deviations, ledger).
-const gcWorkers = process.env.ENGINE_GPU === 'swiftshader' ? { workers: 2 } : {}
+// `gcTimeoutMs` and timed out three times (runs 36968222365, 37062270078, 37219559331). Fewer gc
+// workers on CI instead of a longer timeout; locally nothing changes. One, not two: with two the
+// `neg burst sim` controls still timed out on 5 of 6 runs of 2026-10-10 (ADR 0071).
+const gcWorkers = process.env.ENGINE_GPU === 'swiftshader' ? { workers: 1 } : {}
 const swiftshaderArgs =
   process.env.ENGINE_GPU === 'swiftshader'
     ? [
