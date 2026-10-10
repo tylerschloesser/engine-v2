@@ -1,0 +1,4 @@
+{"t":"2026-10-10T15:36:19.187Z","type":"start","only":["M38-hosted-boot","M39-two-devices"]}
+{"t":"2026-10-10T15:36:19.188Z","type":"device","phone":"iPhone 12 (Safari Private tab)","ios":"18.7","mac":"Chrome Incognito"}
+{"t":"2026-10-10T15:36:19.188Z","type":"result","id":"M38-hosted-boot","result":"pass","notes":"Tyler, in session: https://engine-v2-ref.fly.dev loads and plays on the iPhone and the Mac (deploy of f335a460, after a stopped machine woke); deployed/coi-and-online green the same hour","numbers":""}
+{"t":"2026-10-10T15:36:19.188Z","type":"result","id":"M39-two-devices","result":"pass","notes":"Tyler, in session: iPhone + Mac on https://engine-v2-ref.fly.dev/#k= see each other’s circles move and the roster follows (Tyler: \"that works\"); the furnace part was offered as optional and not confirmed: automated by reference_shared_world; the bare URL without #k= is single-player by design, which first looked like a failure","numbers":""}
