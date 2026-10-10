@@ -1310,7 +1310,9 @@ export function createClient(options: ClientOptions): Client {
   const cameraInputDisposers: Array<() => void> = []
   if (typeof window !== 'undefined') {
     cameraInputDisposers.push(installPointerListeners(cameraBundle.pointers, options.canvas))
-    cameraInputDisposers.push(installWheelListeners(cameraBundle.wheel, options.canvas))
+    cameraInputDisposers.push(
+      installWheelListeners(cameraBundle.wheel, options.canvas, options.overlay?.root),
+    )
     cameraInputDisposers.push(installKeyListeners(cameraBundle.keys, window))
     cameraInputDisposers.push(installBlurAndVisibilityReset(cameraBundle, window, document))
   }

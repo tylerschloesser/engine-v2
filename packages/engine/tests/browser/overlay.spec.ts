@@ -273,3 +273,27 @@ test('overlay.widget_click_not_a_tap', async ({ page }) => {
   const tapCount = await page.evaluate(() => window.__rcCount?.('tap'))
   expect(tapCount ?? 0).toBe(0)
 })
+
+// M39aj (docs/decisions/0061 §2): the wheel zooms wherever the cursor is over the game, including
+// over a `pointer-events: auto` overlay element (the canvas-only listener never saw those events),
+// and `preventDefault` keeps the page from scrolling. Quick: no GPU, two evaluates and one wheel.
+test('wheel over an overlay button zooms', async ({ page }) => {
+  await createReal(page)
+  await page.evaluate(() => {
+    document.body.style.height = '3000px' // a scrollable page: an unprevented wheel would scroll it
+    window.__rcOverlayAnchor?.('btn', 0, 0, 'center')
+    const el = document.getElementById('btn')
+    if (el) el.style.cssText += ';pointer-events:auto;width:80px;height:40px;background:#888'
+    window.__rcOverlayUpdate?.()
+  })
+  const box = requireBox(await page.locator('#btn').boundingBox())
+  const before = (await page.evaluate(() => window.__rcRead?.()))?.tilesAcross ?? 0
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  await page.mouse.wheel(0, 100)
+  await page.evaluate(() => {
+    for (let i = 0; i < 40; i++) window.__rcTick?.(16)
+  })
+  const after = (await page.evaluate(() => window.__rcRead?.()))?.tilesAcross ?? 0
+  expect(after).toBeGreaterThan(before) // positive deltaY zooms out (the page opens at the 12-tile limit)
+  expect(await page.evaluate(() => window.scrollY)).toBe(0)
+})

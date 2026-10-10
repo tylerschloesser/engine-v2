@@ -48,16 +48,61 @@ export function recordWheel(
   state.hasPending = true
 }
 
-/** Canvas-only, non-passive (0019 §3: "non-passive `wheel` ... listener on the canvas calling
- * `preventDefault()`" -- a `window`-level wheel listener is passive by default in Chrome, per that
- * same paragraph). `offsetX`/`offsetY`, not `getBoundingClientRect()`: see `input/pointers.ts`'s own
- * doc comment for why (no per-event `DOMRect` allocation on a path that runs during ordinary play).
- * Returns a disposer. */
-export function installWheelListeners(state: WheelState, canvas: HTMLElement): () => void {
-  function onWheel(e: WheelEvent): void {
-    e.preventDefault()
-    recordWheel(state, e.deltaY, e.deltaMode, e.offsetX, e.offsetY, e.ctrlKey)
+/** An element (or an ancestor below the listener root) carrying this attribute keeps its own wheel
+ * scroll: the listener neither zooms nor calls `preventDefault` (docs/decisions/0061 §3). */
+export const WHEEL_OWN_ATTRIBUTE = 'data-wheel-own'
+
+/** Non-passive (0019 §3: "non-passive `wheel` ... listener ... calling `preventDefault()`" -- a
+ * `window`-level wheel listener is passive by default in Chrome, per that same paragraph). Listens on
+ * `root` (default: the canvas's parent, the overlay's default root), so events over the canvas and
+ * over every anchored overlay element bubble into it (docs/decisions/0061 §2; before M39aj the
+ * listener sat on the canvas and a `pointer-events: auto` overlay element swallowed the wheel).
+ *
+ * Cursor position: an event aimed at the canvas uses `offsetX`/`offsetY` (see `input/pointers.ts`'s
+ * doc comment: no per-event `DOMRect`); an event aimed at an overlay element uses
+ * `clientX/clientY` minus a canvas rect cached on resize, window resize and scroll. Returns a
+ * disposer. */
+export function installWheelListeners(
+  state: WheelState,
+  canvas: HTMLElement,
+  root: HTMLElement = canvas.parentElement ?? canvas,
+): () => void {
+  let rectLeft = 0
+  let rectTop = 0
+  function refreshRect(): void {
+    const r = canvas.getBoundingClientRect()
+    rectLeft = r.left
+    rectTop = r.top
   }
-  canvas.addEventListener('wheel', onWheel, { passive: false })
-  return () => canvas.removeEventListener('wheel', onWheel)
+  refreshRect()
+  function onWheel(e: WheelEvent): void {
+    const target = e.target
+    if (target === canvas) {
+      e.preventDefault()
+      recordWheel(state, e.deltaY, e.deltaMode, e.offsetX, e.offsetY, e.ctrlKey)
+      return
+    }
+    let el = target as Element | null
+    while (el && el !== root) {
+      if (el.hasAttribute(WHEEL_OWN_ATTRIBUTE)) return
+      el = el.parentElement
+    }
+    e.preventDefault()
+    recordWheel(state, e.deltaY, e.deltaMode, e.clientX - rectLeft, e.clientY - rectTop, e.ctrlKey)
+  }
+  root.addEventListener('wheel', onWheel, { passive: false })
+  let observer: ResizeObserver | undefined
+  if (typeof ResizeObserver !== 'undefined') {
+    observer = new ResizeObserver(refreshRect)
+    observer.observe(canvas)
+  }
+  const win = typeof window !== 'undefined' ? window : undefined
+  win?.addEventListener('resize', refreshRect)
+  win?.addEventListener('scroll', refreshRect, { passive: true, capture: true })
+  return () => {
+    root.removeEventListener('wheel', onWheel)
+    observer?.disconnect()
+    win?.removeEventListener('resize', refreshRect)
+    win?.removeEventListener('scroll', refreshRect, { capture: true })
+  }
 }

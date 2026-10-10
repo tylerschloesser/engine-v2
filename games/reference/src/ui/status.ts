@@ -67,6 +67,8 @@ export function createLinkLog(
 ): { onLink(e: { state: LinkState }): void; rows(): string[] } {
   const pre = doc.createElement('pre')
   pre.id = 'linklog'
+  // Scrollable (`overflow:auto`): keeps its own wheel scroll instead of zooming the camera (0061 §3).
+  pre.setAttribute('data-wheel-own', '')
   pre.style.cssText =
     'position:fixed;left:8px;top:8px;margin:0;max-width:95vw;max-height:60vh;overflow:auto;' +
     'padding:4px 8px;font:11px monospace;background:rgba(0,0,0,0.7);color:#cfc;z-index:40'
