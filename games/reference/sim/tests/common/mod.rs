@@ -288,7 +288,7 @@ impl RefScenario {
         use engine::persist::{Identity, SnapshotProgress, SnapshotReader, SnapshotWriter};
         use engine::store::Store;
         use engine::world::{CacheCapacity, ChunkDims, PristineSource, TerrainStore};
-        use engine::worldgen::{Pristine, Worldgen as _, WorldgenStamp};
+        use engine::worldgen::{Pristine, WorldgenStamp};
         let identity = Identity {
             build_hash: [0; 16],
             engine_version: "0.0.0".to_string(),

@@ -130,6 +130,25 @@ export type WorldOps = {
   afterDelete?: () => void
 }
 
+/**
+ * Exports the world and starts a browser download of `<worldId>.world`; resolves with its size.
+ * The one export path: the refused-start screen below and the game UI's always-on control
+ * (`ui/export.ts`) both call it.
+ */
+export async function exportWorldFile(
+  doc: Document,
+  ops: Pick<WorldOps, 'worldId' | 'exportWorld'>,
+): Promise<number> {
+  const blob = await ops.exportWorld()
+  const url = URL.createObjectURL(blob)
+  const a = doc.createElement('a')
+  a.href = url
+  a.download = `${ops.worldId}.world`
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  return blob.size
+}
+
 export type StatusOptions = {
   /** Times the `resyncing` notice; the page's injected `Scheduler` under test. */
   scheduler?: Scheduler
@@ -153,7 +172,7 @@ export type StatusUi = {
   onDesync(r: DesyncReport): void
   /**
    * The screen for a refused start (M23 `'world-busy'`, M24b `'save-incompatible'`): a message, and
-   * for `save-incompatible` only Export and Delete (M23's default, Q9; nowhere else, R4's default).
+   * for `save-incompatible` only Export and Delete (M23's default, Q9); the game UI also offers Export at all times (R4, `ui/export.ts`).
    * Returns false for a failure this screen does not handle (the caller rethrows).
    */
   showStartFailure(failure: StartFailure, ops: WorldOps): boolean
@@ -239,16 +258,9 @@ export function createStatusUi(
       exportButton.textContent = 'Export world'
       exportButton.addEventListener('click', () => {
         exportButton.disabled = true
-        ops
-          .exportWorld()
-          .then((blob) => {
-            const url = URL.createObjectURL(blob)
-            const a = doc.createElement('a')
-            a.href = url
-            a.download = `${ops.worldId}.world`
-            a.click()
-            setTimeout(() => URL.revokeObjectURL(url), 1000)
-            note.textContent = `Exported ${blob.size} bytes.`
+        exportWorldFile(doc, ops)
+          .then((size) => {
+            note.textContent = `Exported ${size} bytes.`
             note.dataset.state = 'exported'
           })
           .catch((err: unknown) => {

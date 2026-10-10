@@ -518,10 +518,10 @@ impl Game for RefGame {
     /// Every action is predicted (R2, Tyler 2026-10-10: `FurnaceTake` too; the engine's opt-out keeps
     /// its fixture-only coverage). A take's local result can differ from the host's when a tick
     /// rule added an ingot meanwhile; the host's answer replaces the prediction (a hint, 0012).
-    fn predict(a: &RefAction) -> bool {
+    fn predict(_a: &RefAction) -> bool {
         // `test-hooks` (never shipped): the poison craft is the host's to panic on alone.
         #[cfg(feature = "test-hooks")]
-        if matches!(a, RefAction::StartCraft { recipe: 255 }) {
+        if matches!(_a, RefAction::StartCraft { recipe: 255 }) {
             return false;
         }
         true

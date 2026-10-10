@@ -27,6 +27,7 @@ import { poseOf, shouldMoveToSpawn } from './spawn.js'
 import { createBuildUi } from './ui/build.js'
 import { createCollectUi } from './ui/collect.js'
 import { createCraftUi } from './ui/craft.js'
+import { createExportUi } from './ui/export.js'
 import { createFurnaceUi } from './ui/furnace.js'
 import { createInventoryUi } from './ui/inventory.js'
 import { createRosterUi } from './ui/roster.js'
@@ -117,6 +118,19 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
   client.onFatal((e) => statusUi.onFatal(e))
   client.onDesync((r) => statusUi.onDesync(r))
   if (opts.host.kind === 'remote') statusUi.onLink({ state: 'connecting' }) // `onLink` starts at the first change
+  // R4: "Export world" is always in the game UI of a local world (the refused-start screen has its
+  // own); shown once the start succeeded, so a refused start (its screen offers it for
+  // `save-incompatible` only) never also carries this button. Click-time code only, nothing per frame.
+  if (opts.host.kind === 'local') {
+    const exportUi = createExportUi(document.body, {
+      worldId: opts.host.world.worldId,
+      exportWorld: () => client.exportWorld(),
+    })
+    client.ready.then(
+      () => exportUi.show(),
+      () => {},
+    )
+  }
   // M38: `?linklog=1` adds the on-page link log (off unless the parameter is present).
   if (opts.host.kind === 'remote' && new URL(location.href).searchParams.get('linklog') === '1') {
     const linkLog = createLinkLog(document.body, document)

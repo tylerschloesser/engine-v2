@@ -297,7 +297,7 @@ fn take_is_predicted() {
         ]
     };
     for a in all(TileXY { x: 1, y: 1 }) {
-        assert_eq!(RefGame::predict(&a), true, "{a:?}");
+        assert!(RefGame::predict(&a), "{a:?}");
     }
 
     // Through the real client path: a furnace that has smelted one ingot on the host.
@@ -889,14 +889,14 @@ fn covered_resource_predicted_and_confirmed() {
         "Confirmed: the host placed it"
     );
 
-    let (_, st) = lb.dispatch(idx, collect_iron.clone());
+    let (_, st) = lb.dispatch(idx, collect_iron);
     assert_eq!(
         st,
         Prediction::Rejected(RefReject::NoResource),
         "predicted: covered, refused locally"
     );
     assert_eq!(
-        dispatch_settled(&mut lb, idx, collect_iron.clone()),
+        dispatch_settled(&mut lb, idx, collect_iron),
         Err(RefReject::NoResource),
         "the host agrees"
     );

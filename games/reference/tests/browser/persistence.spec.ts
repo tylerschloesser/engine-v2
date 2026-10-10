@@ -224,3 +224,19 @@ test('reference_reload_during_load', async ({ page }) => {
   expect((await readUi(page)).inventory[ITEM.stone]).toBe(1)
   expect(errors).toEqual([])
 })
+
+// R4 (Tyler, 2026-10-10; docs/plan/39ai-tyler-answers.md): Export world is in the normal game UI at
+// all times, not only on the status screen for a save that cannot be loaded.
+test('reference_export_control_in_game_ui', async ({ page }) => {
+  await start(page)
+  const control = page.locator('[data-game-export]')
+  await expect(control).toBeVisible()
+  expect(
+    await page.locator('.start-failure').count(),
+    'a running game, not the status screen',
+  ).toBe(0)
+  const download = page.waitForEvent('download')
+  await control.click()
+  expect((await download).suggestedFilename()).toBe('reference.world')
+  await expect(control).toHaveAttribute('data-state', 'exported')
+})
