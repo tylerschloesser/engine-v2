@@ -1,34 +1,26 @@
 # engine-v2
 
-Multiplayer web game engine (Rust→WASM + TypeScript, custom WebGPU renderer) for top-down, tile-based, tick-simulated automation games, plus one reference game. The repo is at the last step of a phased bootstrap: Phase 3 (build) is complete (tag `phase-3-complete`); Phase 4 removes the planning scaffolding and re-architects the docs around the code.
+Multiplayer web game engine (Rust→WASM + TypeScript, custom WebGPU renderer) for top-down, tile-based, tick-simulated automation games, plus one reference game. Start at `docs/architecture/README.md` (goal, engine/game split, glossary, index of the subsystem docs).
 
-**The main session starts at `PROMPT.md`.** It holds the Phase 4 work list, its exit criteria and the open items. A sub-agent's entry point is its delegation prompt, not `PROMPT.md`.
+**Phase 4 (clean-up) is still in progress: the main session starts at `PROMPT.md`.** (This line goes with it.)
 
-**Commands:** `pnpm setup:tools` (once per machine) · `pnpm test [suite] [-t pattern]` · `pnpm test:slow` · `pnpm lint` · `pnpm format` · `pnpm golden [fixture]` (the only writer of golden hashes). Both checks are quiet: one line per suite or check, details only on failure, logs under `test-results/`.
+**Commands:** `pnpm setup:tools` (once per machine) · `pnpm test [suite] [-t pattern]` · `pnpm test:slow` · `pnpm lint` · `pnpm format` · `pnpm golden [fixture]` (the only writer of golden hashes) · `pnpm device:serve` (pages for a phone). Both checks are quiet: one line per suite or check, details only on failure, logs under `test-results/`. How to run and read them: the `run-tests` skill.
 
 ## Context map
 
-Read only what the task needs. A sub-agent should be briefable with `docs/spec/overview.md` plus one or two other files.
+Read only what the task needs. A sub-agent is briefed with files: its goal, one or two docs below, the file to write, the size of its report (ADR 0021 §3).
 
-| Path | What it holds | Lifetime |
-|---|---|---|
-| `PROMPT.md` | Phase 4: status block, work list, exit criteria, open items carried from Phase 3 | Deleted at the end of Phase 4 |
-| `packages/engine/` | The engine package (TypeScript in `src/`) and, in `crates/engine/`, the Rust crate; each has a nested `CLAUDE.md` with its commands and test placement | Permanent |
-| `scripts/` | `pnpm test` / `lint` / `setup:tools` runners (plain Node `.mjs`); `scripts/suites.mjs` is where suites and build steps are registered | Permanent |
-| `.claude/` | `settings.json` (allowlist, commit gate running `hooks/pre-commit-check.sh`: Biome + rustfmt), `skills/` (procedures: `write-adr`, `run-tests`, `gc-test`, `device-check` (the manual device checklist), ...), `rules/` (the invariants below), `agents/` (`milestone-implementer`, Phase 3 only) | Permanent (`agents/` decided in Phase 4) |
-| `docs/process.md` | The four phases; rules common to every session | Until Phase 4 |
-| `docs/context-architecture.md` | How context is split and why (nested `CLAUDE.md`, `.claude/rules/`, skills, sub-agent briefs); target layout after bootstrap | Permanent |
-| `docs/spec/overview.md` | Goal, engine/game split, fixed decisions, scale, non-goals, glossary | Folded into architecture docs in Phase 4 |
-| `docs/spec/<domain>.md` | Tyler's requirements + open questions for one domain: `world`, `simulation`, `sync`, `runtime-and-packaging`, `client`, `testing`, `reference-game` | Same |
-| `docs/research/<topic>.md` | Phase 1 findings, one file per spec domain plus `context-architecture` (evidence, not decisions) | Deleted in Phase 4 |
-| `spikes/<name>/RESULT.md` | Result of each Phase 1 feasibility spike; the code beside it is throwaway | Deleted in Phase 4 |
-| `docs/decisions/NNNN-<slug>.md` | ADRs 0001–0070 (index: `docs/decisions/README.md`; 0062 budgets as measured, 0063–0069 the Phase 3 capture): what was chosen and the *why* that can't be inferred from code | Permanent; supersede, don't rewrite |
-| `docs/archive/` | Tyler's original brain dump, superseded by `docs/spec/`; not a source | Deleted in Phase 4 |
-| `PRE-PLAN.md` | Phase 1 output: architecture, budgets, index of ADRs | Deleted in Phase 4 |
-| `PLAN.md` | Phase 2 output: milestone index in execution order, dependencies, progress checkboxes | Deleted in Phase 4 |
-| `docs/plan/<NN>-<slug>.md` | One brief per milestone: the whole instruction set for one implementer sub-agent (format: `docs/plan/README.md`) | Deleted in Phase 4 |
-| `docs/plan/*.md` (unnumbered) | `questions-for-tyler`, `device-checks` (Tyler-run), `deferred-ledger`, `coverage`, `coverage-adrs`, `reference-coverage` | Deleted in Phase 4 |
-| `scripts/device-walk.mjs`, `.claude/skills/device-round/` | Tyler's device-check walkthrough (`pnpm device:walk`): serves pages, shows QR codes, records rounds in `docs/plan/device-rounds/`; the skill is how to start, read and apply one | Until Phase 4 |
+| Path | What it holds |
+|---|---|
+| `docs/architecture/<subsystem>.md` | How each subsystem works now: world and worldgen, simulation, sync and netcode, persistence, threads and the JS/WASM boundary, renderer, camera/input/overlay, client API, runtime and hosting, testing and tooling |
+| `docs/decisions/NNNN-<slug>.md` | ADRs 0001–0070 (index: `docs/decisions/README.md`): what was chosen and the *why* that can't be read from code. Supersede, don't rewrite |
+| `packages/engine/` | The engine package: TypeScript in `src/`, the Rust crate in `crates/engine/`, fixture games in `fixtures/`, suites in `tests/`; nested `CLAUDE.md` files hold commands, layout and test placement |
+| `games/reference/`, `games/reference-server/` | The reference game (its rules: `games/reference/README.md`) and its dedicated server; each has a `CLAUDE.md` |
+| `scripts/` | `pnpm test` / `lint` / `setup:tools` runners (plain Node `.mjs`); `scripts/suites.mjs` registers suites and build steps |
+| `.claude/` | `settings.json` (allowlist; commit gate `hooks/pre-commit-check.sh`: Biome + rustfmt), `rules/` (the invariants below), `skills/` (`run-tests`, `add-action-type`, `write-adr`, `gc-test`, `profile-frame`, `device-check`) |
+| `docs/context-architecture.md` | How context is split (root and nested `CLAUDE.md`, rules, skills, sub-agent briefs) and why |
+
+Comments cite Phase 3 milestones as `M13`, `M24b steps 4-6`, ...: those briefs are under `docs/plan/` at tag `phase-3-complete` (`git show phase-3-complete:docs/plan/...`). ADR Sources links into deleted paths resolve the same way.
 
 ## Invariants
 
@@ -37,11 +29,12 @@ Each has a path-scoped rule file that loads when you read a matching file; read 
 - **Determinism:** sim, worldgen and `apply` code must produce the same bits natively and as `.wasm` in every runtime: `.claude/rules/determinism.md`.
 - **Hot paths:** no allocation per frame or per tick in the JS around a WASM instance: `.claude/rules/hot-paths.md`.
 - **Prediction:** validate first and write after, `?` on every read, a provisional id is never encoded, and a predicted status is a hint until the host acks it: `.claude/rules/prediction.md`.
+- **Test budget:** each fast-tier suite has a time budget in `scripts/suites.mjs` (warn over it, fail at 1.5×); a new test fits inside it, or the commit says why the budget moves (`docs/architecture/testing-and-tooling.md`).
 
 ## Rules
 
-- Tyler owns the **Requirements** sections in `docs/spec/`. Edit them only to record something Tyler said. Resolve **Open questions** by writing a decision in `docs/decisions/` and replacing the question with a link.
-- Every fact lives in exactly one file. Link, don't copy.
-- This file is a map, not content. Keep it under ~60 lines and never `@import` large files into it.
-- Commit early and often, on `main`; no branches (tags: ADR 0025 §4). The commit gate needs a formatted tree: run `pnpm format` first.
+- Tyler owns the requirements: the fixed decisions in `docs/architecture/README.md` and the game rules in `games/reference/README.md`, with his dated answers. Change them only to record what Tyler said. Scope, taste and cost are his to decide (ask, batched); technical questions are yours, recorded with the `write-adr` skill.
+- Every fact lives in exactly one file. Link, don't copy. A change that makes an architecture doc wrong fixes the doc in the same commit.
+- This file is a map, not content. Keep it under 60 lines (a `unit` test enforces it) and never `@import` large files into it.
+- Commit early and often, on `main`; no branches. The commit gate needs a formatted tree: run `pnpm format` first.
 - On Tyler's machine `cp`, `mv` and `rm` are aliased to their `-i` forms and hang a Bash call: use `command cp -f`, `command mv -f`, `command rm -f`. Scripts use `node:fs`, never shell file operations.
