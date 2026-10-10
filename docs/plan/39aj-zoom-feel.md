@@ -1,6 +1,6 @@
 # M39aj: zoom feel (start mid-range, bounded wheel zoom, wheel over overlays)
 
-Status: open · After: 39ai · Tyler-dependent: no
+Status: done (2026-10-10) · After: 39ai · Tyler-dependent: no
 
 ## Goal
 On 2026-10-10 Tyler played the deployed reference game (Fly, built at `ce6c25b0`) on the iPhone and in Chrome on the Mac and reported: "it zooms in super close instantly and then is stuck". (His other report, pan reversing on release, is a sign error that `b2d7c03c` (M39i) already fixed on `main`; only the deploy is stale.) A read-only diagnosis on 2026-10-10 reproduced it in headed Chromium against the deployed bundle and found three causes, all still on `main`:
@@ -38,12 +38,12 @@ Unit (`camera.test.ts` / a wheel test), each with an inject-fail-revert red past
 Browser (quick, or `@slow` if over ~1 s; say which): `wheel over an overlay button zooms`: a wheel event dispatched on a `pointer-events: auto` overlay element changes `tilesAcross`, and the page does not scroll.
 
 ## Exit criteria
-- [ ] A fresh camera opens at 32 tiles across (test named).
-- [ ] The wheel accumulator is bounded; the burst and ctrl-stream tests fail without the bound (reds pasted).
-- [ ] The wheel zooms over overlays (browser test named, red pasted with the listener on the canvas only).
-- [ ] `[gc] input` and the other gc pages unchanged (pasted); no zero-GC budget changed.
-- [ ] ADR amending 0019 §3 written and indexed.
-- [ ] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
+- [x] A fresh camera opens at 32 tiles across (test named).
+- [x] The wheel accumulator is bounded; the burst and ctrl-stream tests fail without the bound (reds pasted).
+- [x] The wheel zooms over overlays (browser test named, red pasted with the listener on the canvas only).
+- [x] `[gc] input` and the other gc pages unchanged (pasted); no zero-GC budget changed.
+- [x] ADR amending 0019 §3 written and indexed.
+- [x] `pnpm test` and `pnpm lint` are green (run by the orchestrator).
 
 ## Verification commands
 `pnpm test unit -t wheel`, `pnpm test unit -t camera`, `pnpm test browser -t "<name>"`, `pnpm test browser -t "\[gc\] input"`. Foreground, bounded; `uptime` first.
@@ -67,3 +67,4 @@ Step 1-3 landed in `10735b2b`, `22bbc9ba`, step 3 and a fix-up commit (`M39aj: .
 - **Brief's `wheel: one notch` starts at 12**, the zoom-in limit, where a zoom-in would clamp; the test starts at 32 (mid-range).
 - **Browser test** `wheel over an overlay button zooms` (`overlay.spec.ts`, real-camera page) is quick (about 1 s, not `@slow`); it zooms out because that page opens at the 12-tile limit. `browser` ran 258 tests in 44 s of 60 s.
 - `[gc] input` (`pnpm test browser -t input`, 11 tests) passes with no budget change; that page drives `recordWheel` directly, so the new DOM listener itself is not in a gc window (it allocates nothing per event: no rect read, no closure, an ancestor walk with `hasAttribute`).
+- **Gate (orchestrator):** accepted. `pnpm gate e06f7e33`: 14 files, no goldens, no markers, no budget change. `pnpm test` green at load 11 (rust 812, unit 413, tools 285, wasm 172, netcode 147, browser 258 in 47 s); `pnpm lint` green. Test pages that assumed the old 12-tile default `moveTo` 12 explicitly (not a mask: they test overlay/ghost geometry at a fixed zoom, and the default itself is pinned by `camera: fresh camera opens mid-range`).
