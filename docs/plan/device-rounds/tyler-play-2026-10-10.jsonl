@@ -1,0 +1,4 @@
+{"t":"2026-10-10T15:44:47.695Z","type":"start","only":["M39-full-game-touch","M39-sign-off"]}
+{"t":"2026-10-10T15:44:47.696Z","type":"device","phone":"iPhone 12","ios":"18.7","mac":"Chrome"}
+{"t":"2026-10-10T15:44:47.696Z","type":"result","id":"M39-full-game-touch","result":"pass","notes":"Tyler, in session (\"all that looks good\"): the 34b script by touch on https://engine-v2-ref.fly.dev (single-player, deploy of f335a460 with M39aj zoom fixes)","numbers":""}
+{"t":"2026-10-10T15:44:47.696Z","type":"result","id":"M39-sign-off","result":"pass","notes":"Tyler signs off (2026-10-10): single-player and with a second player on the #k= link. Declined making the bare hosted URL join the shared world (keep: no #k= means a local world)","numbers":""}
