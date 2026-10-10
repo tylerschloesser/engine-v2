@@ -5,8 +5,8 @@ description: Add a new game action end to end -- the Rust variant, its handling,
 
 # Add an action type
 
-An **action** is a serialized message expressing player intent (`docs/spec/overview.md`
-glossary) -- the only way a page changes the sim. This skill adds one, end to end, for a game
+An **action** is a serialized message expressing player intent (glossary in
+`docs/architecture/README.md`) -- the only way a page changes the sim. This skill adds one, end to end, for a game
 crate under `packages/engine/fixtures/<game>/` (e.g. `puts`) whose `Game` implementation you are
 extending. It assumes the round trip itself already exists (`client.dispatch` -> the sim -> the
 result callback); you are only ever adding one new *kind* of message to it.
@@ -271,8 +271,7 @@ have its timer rewritten on every replay and its bar would crawl backwards. `Gam
 (n)`/`.millis(n)` (0006) is how `COLLECT_TICKS`-style constants are authored, never a raw tick
 count.
 
-**Rendering the bar** reads `FrameView::clocks()` (a `Clocks`, docs/plan/
-26-prediction-rendering-and-clocks.md) and picks one of two methods, never the raw tick
+**Rendering the bar** reads `FrameView::clocks()` (a `Clocks`, M26) and picks one of two methods, never the raw tick
 subtraction:
 
 ```rust

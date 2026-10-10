@@ -24,7 +24,7 @@ directly with an injected clock), `tests/presence_host.rs` (`oversize_dropped` -
 exceeds 16 B and cannot exercise the 32-byte gate on its own; `well_formed_undersize_presence_is_
 recorded`; `world_cap_check_accepts_representable_extremes`, step 3, gate round 1 rename -- see that
 file's own doc comment: the world-cap check is structurally unreachable for any `WorldPos`-encoded
-sample, 0007 §2, flagged in the milestone's own Deviations), `tests/presence_relay.rs`
+sample, 0007 §2, recorded in the milestone), `tests/presence_relay.rs`
 (`relay_recipients`, `relay_recipients_newest_after_stall`, `rerelay_and_gone`, steps 4-6: drives
 `Host<Presence>` directly and decodes `Host::build_frame`'s own bytes through the real wire readers,
 so these exercise the exact bytes a client would decode).

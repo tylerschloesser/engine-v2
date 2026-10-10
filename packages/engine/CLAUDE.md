@@ -1,6 +1,6 @@
 # packages/engine (TypeScript side)
 
-The one publishable package (working name `engine`, private for now). Layout and package fields: `docs/decisions/0017-packaging-and-build.md` §1–§2. Deeper files: `crates/engine/`, `src/`, `src/host/`, `src/storage/`, `fixtures/`, `tests/netcode/`. Module detail: each module's doc comment, which names its brief.
+The one publishable package (working name `engine`, private for now). Layout and package fields: `docs/decisions/0017-packaging-and-build.md` §1–§2. Deeper files: `crates/engine/`, `src/`, `src/host/`, `src/storage/`, `fixtures/`, `tests/netcode/`. Module detail: each module's doc comment; architecture: `docs/architecture/`.
 
 ## Layout
 
@@ -22,7 +22,7 @@ Rust `engine::worldgen`/`engine::noise` (0008 §1); cross-runtime proof: `tests/
 
 ## Rendering, camera and input
 
-Rules in force; the rest: briefs 09, 09b, 11, 17b, 18, `docs/plan/device-checks.md`.
+Rules in force; the rest: `docs/architecture/renderer.md`, `docs/architecture/camera-input-overlay.md`, the `device-check` skill.
 - WGSL is edited in `src/render/wgsl/*.wgsl`, then `node scripts/embed-wgsl.mjs` regenerates the checked-in `wgsl.generated.ts` (a unit test fails when stale; `crates/engine/tests/main/wgsl.rs` runs `naga`).
 - Probe, never screenshot (0020 §6): render into an offscreen `rgba8unorm` target with `engine/test`'s `renderTo`/`readPixels`/`expectPixel`. `tests/browser/support/gpu.ts`'s `expectAdapter` fails, never skips, on a null adapter. Keep "readback" in a GPU spec's file name (M10 greps `expectAdapter|readback`). A probe grid that never leaves texel centres cannot see a magnified-sampling bug (the one point both formulas agree; `terrain.seam_matches_reference` probes art texel (2.4, 0.5)): every shader feature needs a fixture above tolerance, and sprite sampling reuses the seam formula. A visual criterion needs a pixel readback on the production page; a DrawList read proves nothing is on screen. The draw list is window-local: `check.ts` `world()` adds the window origin, and `analyseMotion` must never strip multiple-of-64 jumps (a real 64.000 jump is a renderer defect). Tests inject input with `engine/test`'s `injectPointer`/`injectWheel`/`injectKey` (after `attachCameraInputTestHooks`), never DOM dispatch. `tests/browser/pages/device.html` is the one page on real rAF and the production clock: Tyler's manual checks, `pnpm device:serve --tunnel`; parameters and HUD in `pages/src/device.ts`.
 - **Listeners record, rAF integrates**: listeners only write fixed slots (a press and release inside one rAF gap, e.g. macOS tap-to-click, is a `quickTap` latch; tests use plain `page.mouse.click()`, not a helper forcing a 50 ms gap); every pan/zoom decision is made once per frame in `camera.ts`'s `integrate()`. A full `inputRing` drops and counts, never blocks or retries. `overlay/anchors.ts` never reads layout.
@@ -41,7 +41,7 @@ Rules in force; the rest: briefs 09, 09b, 11, 17b, 18, `docs/plan/device-checks.
 
 ## Conventions
 
-- Zero runtime dependencies, no devDependencies here: tools are pinned in the root `package.json`. Add an `exports` subpath only together with the file that backs it. The client defaults quoted in `docs/spec/client.md` Requirements (subscription cap, zoom range) change only on Tyler's answer (0059). Final map: 0017 §2; M35 audits it.
+- Zero runtime dependencies, no devDependencies here: tools are pinned in the root `package.json`. Add an `exports` subpath only together with the file that backs it. The client defaults (subscription cap, zoom range; `docs/architecture/README.md`) change only on Tyler's answer (0059). Final map: 0017 §2; M35 audits it.
 - `tsconfig.build.json` excludes `*.test.ts` from `dist/`. Base options: root `tsconfig.base.json` (`types: []`: opt in to Node types). Erasable TypeScript (`erasableSyntaxOnly`): no enums, namespaces or parameter properties. Relative imports end in `.js`.
 - No ambient time or randomness in `src/` outside `src/test/`: only `src/clock.ts` may name `Date`, `performance`, `setTimeout`/`setInterval`, `requestAnimationFrame` (Biome `noRestrictedGlobals`); `Math.random`/`getRandomValues`/`randomUUID` fail `-t no_ambient_random`. Inject a `Clock`/`Scheduler` (0020 §8).
 - `src/sab/` (0015 §2): ring = reliable ordered stream, seqlock = small latest-wins record, triple buffer = large latest-wins frame. A `DrawListSlot` reader starts on slot 2 (the initial `front`), not 0, and renderer and picker share one reader (`drawlist.picker_matches_renderer_frame_seq`).

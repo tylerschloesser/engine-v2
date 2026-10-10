@@ -12,20 +12,17 @@ every checked-in golden this module blesses (`persist_frame_golden_bytes`,
 review the diff like any other golden change. The `Store` canonical shape has a second reader: `migrate.rs`'s `OldStore::decode` re-implements `Store::write_canonical`'s reader side byte for byte (new code cannot name old types), so change `write_canonical`/`decode` and `OldStore::decode` together or old saves silently misparse.
 
 **Never iterate an unordered container here** (`.claude/rules/determinism.md`): every writer reads
-`Store`'s own ordered accessors; a new section goes only where 0005 (or this module's own recorded
-Deviation) places it.
+`Store`'s own ordered accessors; a new section goes only where 0005 (or a later ADR) places it.
 
 Untrusted bytes (anything read back from storage) go through `decode_canonical`
 (`persist::read_sized`), never plain `decode`.
 
 The upgrade path's own mismatch matrix (`Same`/`Direct`/`NeedsMigrate`/`Incompatible`) lives in
 `Identity::compare` (`identity.rs`), not here or in `crate::migrate`. `SaveIncompatible` performs
-no write at all (0005): every stored byte stays untouched on that path (docs/plan/
-24b-upgrade-and-migration.md Planning decisions 7).
+no write at all (0005): every stored byte stays untouched on that path (M24b).
 
 Restore/replay drivers (`host::Host::sim_restore_*`/`sim_replay_*`/`sim_replay_scan_*`/
-`sim_log_skip`, M22b, docs/plan/
-24-recovery-and-migration.md) live in `host/mod.rs`, not here: this module stays the container
+`sim_log_skip`, M22b) live in `host/mod.rs`, not here: this module stays the container
 level. Replay is two-pass (M24: `sim_replay_scan_begin/push/
 end` decode a segment tail once, purely to collect `Skip { segment, offset }` targets (a `Skip`'s
 own target typically lives in an *earlier* frame than the `Skip` record itself), before

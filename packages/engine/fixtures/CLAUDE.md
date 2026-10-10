@@ -21,8 +21,7 @@ crate that blesses it (`pnpm golden:bytes`, `../CLAUDE.md` Commands).
 - `worldgen` (`fx-worldgen`): a real, non-trivial `Worldgen` impl (`docs/decisions/0008`) --
   height/moisture noise, a `hash2` resource scatter -- for the gen-worker and client pristine-cache
   paths, plus its own cache-invisibility and zero-allocation coverage.
-- `puts` (`fx-puts`): `WorldRead`/`WorldWrite`/`Authority`/`Sim` (docs/plan/
-  12b-world-access-and-sim-driver.md) against a real, non-trivial `Game` -- one handler per
+- `puts` (`fx-puts`): `WorldRead`/`WorldWrite`/`Authority`/`Sim` (M12b) against a real, non-trivial `Game` -- one handler per
   replicated scope (`Paint`/`Spawn` chunk-scoped, `SetNote` player-scoped, `SetMotd` global-scoped),
   `Bump`/`Remove` exercising the reject path, `Roll` exercising `SimRng`, and a `tick` rule that
   changes state on its own (no action) once a simulated second.
@@ -35,8 +34,7 @@ crate that blesses it (`pnpm golden:bytes`, `../CLAUDE.md` Commands).
 - `presence` (`fx-presence`, M19: the presence channel and
   witness-carrying actions (0001) -- `Presence = { pos, vel }`, `Action::Poke { tile, from }`,
   `admit`'s tolerance check and `apply`'s own deterministic range check. Own `CLAUDE.md`.
-- `machines` (`fx-machines`, M21, docs/plan/
-  21b-timers-wakeups-and-tickcx.md): the 2x2 multi-tile entity, footprint occupancy and the state
+- `machines` (`fx-machines`, M21): the 2x2 multi-tile entity, footprint occupancy and the state
   budget (M21); the timer wheel, wake queue and an active-list "Spinner" (M21b) -- `Feed`'s own
   apply-time put auto-wakes into the same tick's `next_woken`, which schedules a `SMELT`-tick
   `wake_at`; due increments `count` then sleeps until fed again; `Action::PlaceSpinner` spawns the

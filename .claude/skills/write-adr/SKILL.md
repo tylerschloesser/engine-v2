@@ -1,23 +1,23 @@
 ---
 name: write-adr
-description: Write, amend or supersede an architecture decision record in docs/decisions/. Use when a milestone changes an accepted decision, settles a deferred item or an open question, adds an engine-crate dependency, or proposes a custom sub-agent; also to decide whether a change needs an ADR at all or only a Deviations note.
+description: Write, amend or supersede an architecture decision record in docs/decisions/. Use when a milestone changes an accepted decision, settles a deferred item or an open question, adds an engine-crate dependency, or proposes a custom sub-agent; also to decide whether a change needs an ADR at all or only a doc fix.
 ---
 
 # Write an ADR
 
 ADRs live in `docs/decisions/NNNN-<slug>.md`. They record what was chosen and the *why* that cannot be read from code. The existing files are the template: open a recent short one (`0022`, `0023`) for the shape, and `0024` for an ADR that amends several others.
 
-## ADR or Deviations note?
+## ADR or doc fix?
 
 Write an ADR when:
 - a decision in an accepted ADR changes, or two ADRs turn out to contradict each other;
-- an item marked deferred to Phase 3 (`PRE-PLAN.md` §10, `docs/plan/deferred-ledger.md`) or an Open question in `docs/spec/` gets settled;
+- an item an ADR marked deferred, or an open question, gets settled (find the trigger in that ADR's Consequences);
 - the engine crate gains a runtime dependency (the evidence `docs/decisions/0017-packaging-and-build.md` §7 demands goes in the ADR);
-- a custom sub-agent is proposed beyond `milestone-implementer` (trigger: `docs/decisions/0021-context-architecture.md` §5; the first one and its reasoning: `docs/decisions/0025-phase-3-orchestration.md` §2).
+- a custom sub-agent is proposed (trigger: `docs/decisions/0021-context-architecture.md` §5).
 
-Who writes it: in Phase 3 the orchestrating session decides that an ADR is needed and what it decides, a Sonnet sub-agent drafts it with this skill, and the orchestrator reviews the draft before it is committed (0025 §1). A milestone implementer writes one only when its brief's Scope or Exit criteria name it.
+Who writes it: the session that makes the change drafts the ADR with this skill. Tyler reviews it before it is relied on.
 
-A small correction that changes no decision (a wrong file name, a flag, a step order, a split milestone) goes in the brief's **Deviations** section instead; fix any later brief it affects. Scope, taste, cost, or a change to a spec Requirements section is Tyler's call: batch it in `docs/plan/questions-for-tyler.md` with a recommended default.
+A small correction that changes no decision (a wrong file name, a flag, a step order) is a fix to the doc that holds the fact, not an ADR. Scope, taste, cost, or a change that would alter what Tyler asked for is Tyler's call: ask, with a recommended default.
 
 ## Steps
 
@@ -28,15 +28,13 @@ A small correction that changes no decision (a wrong file name, a flag, a step o
    - `## Decision`: numbered bold points (`**1. Name.** …`), so others can cite `NNNN §n`.
    - `## Alternatives rejected`: one bullet each, with the reason.
    - `## Consequences`: including what is deferred, and the trigger to revisit.
-   - `## Sources`: spikes, research files, URLs, each with the date checked.
+   - `## Sources`: measurements, URLs, each with the date checked.
 3. **House rules.** Every fact has one owner: cite `NNNN §n` instead of copying a number or list from another ADR. Verify, don't recall: check current docs for any tool or browser behaviour and list the source. Link ADRs relatively (`[0017](0017-packaging-and-build.md)`). Keep it as short as the decision allows.
 4. **Never rewrite an accepted ADR.**
    - Superseding: write the new ADR; in the old one change only the `Status:` line to `Superseded by [NNNN](…)`.
    - Amending part of one: the new ADR says which section it amends; the old one gets `Amended by [NNNN](…) §n.` appended to its `Status:` line, nothing else.
 5. **Bookkeeping, in the same commit:**
-   - the ADR index table in `PRE-PLAN.md` §1;
-   - a line under "Plan-level decisions" in `PLAN.md`;
-   - if it settles a spec Open question, replace the question in `docs/spec/<domain>.md` with a link to the ADR (never touch a Requirements section);
+   - the ADR index in `docs/decisions/README.md`;
    - the ADR range in the `docs/decisions/` row of the root `CLAUDE.md` context map;
-   - `grep -rn "<old fact>" docs/plan/` and update every brief that relied on the changed decision.
+   - `grep -rn "<old fact>" docs/architecture/ docs/decisions/` and the nested `CLAUDE.md` files, and update every doc that relied on the changed decision.
 6. **Check.** `pnpm lint` does not cover `docs/`, so re-read the links by eye; commit with a message naming the ADR number.

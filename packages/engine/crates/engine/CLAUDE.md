@@ -18,7 +18,7 @@ This crate's `Cargo.toml` inherits `version`, `edition`, `publish` and `lints` f
 
 ## Layout
 
-One line per module; each module's `//!` doc comment has the detail and names its milestone brief.
+One line per module; each module's `//!` doc comment has the detail and names its milestone.
 
 - `abi/` (0014): the JS↔WASM boundary. `registry.rs` is the single owner of the ABI, every export and its status, and `ABI_VERSION`. Use `panic::fatal`, not `panic!`, anywhere the allocator may be the failure (std formats the message into a `String` first).
 - `game.rs` (0003): the `Game` trait, ids, `Unknown`, `PlayerEvent`, and re-exports so callers import `WorldRead`/`WorldWrite`/`TickCx`/`FrameCx`/`Presence`/... from `crate::game`.

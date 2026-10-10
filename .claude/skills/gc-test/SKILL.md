@@ -76,7 +76,7 @@ outside `test-results/`.
 - Interpreter-tier boxing in code that lives blocked in `Atomics.wait` and may never tier up: a
   property read of `Number.POSITIVE_INFINITY`, a `Float64Array` element read, or a
   `TypedArray.prototype.byteLength` getter each box a fresh `HeapNumber` on a normal pass
-  (`M06b`, Deviations "fix round 2, second pass"). Fingerprint by the
+  (`M06b`, fix round 2, second pass). Fingerprint by the
   method, not just the shape: `bytesPerFrame × frames ÷ wakes ≈ 12-16 B` means one
   `HeapNumber` per pass (fix the boxing site); a fixed delta once per window (e.g. 136 B) means a
   one-off such as lazy-feedback allocation (see "Warm-up is 8 passes" below), not a per-pass box.
@@ -151,8 +151,7 @@ of the M03/M04 harness. Two differences from a harness page:
   `Shell.observeWake`, `src/worker/shell.ts`). If this comes back, suspect another publish-then-read
   ordering before blaming the machine.
 - **A `parkWorkers`/`resumeWorkers`/`untilQuiescent` timeout, or a `stepFrame`/`stepSimTickSync`/
-  `asHarness.stepTick` ack-spin timeout, now names the worker (M16e, docs/plan/
-  16e-park-timeout-diagnosis.md).** Every one of these waits rejects/throws with the same shape:
+  `asHarness.stepTick` ack-spin timeout, now names the worker (M16e).** Every one of these waits rejects/throws with the same shape:
   `<what>: timed out after <limitMs> ms (turns=<n>, elapsedMs=<n>, longestGapMs=<n>)
   workers=[{"isolate":"client","W_YIELD":0|1,"W_PARKED":0|1,"W_WAKE":<n>,"W_ACK":<n>,"dead":
   false|true}, ...]` -- one entry per spawned worker, `dead` meaning `W_READY === Ready.Dead`
@@ -199,7 +198,7 @@ of the M03/M04 harness. Two differences from a harness page:
   always recovers on its own -- `Atomics.wait`'s own check-then-sleep is atomic, so if the word
   already differs from what it is told to wait for, it returns immediately instead of blocking -- so
   a plain "was the notify missed" theory does not hold up (an earlier round of this milestone
-  guessed exactly that, and reverted it: see its brief's own Deviations, "fix round 1 -- superseded").
+  guessed exactly that, and reverted it: M06b fix round 1, superseded).
   The real gap: `runBlockingLoop` used to check `W_YIELD` only *after* a wait returned, never before
   its own first one. `Shell.resume()` builds its `seen`/`last` baseline (`observeWake()`) *before*
   calling `runBlockingLoop`; if a park request's own `W_YIELD = 1` store and wake both land in that
@@ -292,7 +291,7 @@ of the M03/M04 harness. Two differences from a harness page:
   raise a *different* isolate's own `bytesPerFrame` (reproduces at `--workers 1`, one test, no
   external contention) -- the workers are separate OS threads sharing one renderer process, so this
   is not a per-frame allocation site in this milestone's own code; as of M06b it is an open,
-  unresolved finding (M06b, Deviations "fix round 2"), not something to
+  unresolved finding (M06b, fix round 2), not something to
   paper over with a wider budget without saying so.
 
 ### A real-time-timer-driven isolate (`net`, M29 step 5)
