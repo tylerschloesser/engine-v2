@@ -4,7 +4,7 @@ Multiplayer web game engine (Rust→WASM + TypeScript, custom WebGPU renderer) f
 
 **The main session starts at `PROMPT.md`.** It holds the Phase 4 work list, its exit criteria and the open items. A sub-agent's entry point is its delegation prompt, not `PROMPT.md`.
 
-**Commands:** `pnpm setup:tools` (once per machine) · `pnpm test [suite] [-t pattern]` · `pnpm test:slow` · `pnpm lint` · `pnpm format` · `pnpm golden [fixture]` (the only writer of golden hashes) · `pnpm gate <base-sha>` (what a milestone changed, for the orchestrator). Both checks are quiet: one line per suite or check, details only on failure, logs under `test-results/`.
+**Commands:** `pnpm setup:tools` (once per machine) · `pnpm test [suite] [-t pattern]` · `pnpm test:slow` · `pnpm lint` · `pnpm format` · `pnpm golden [fixture]` (the only writer of golden hashes). Both checks are quiet: one line per suite or check, details only on failure, logs under `test-results/`.
 
 ## Context map
 
