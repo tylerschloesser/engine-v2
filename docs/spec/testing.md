@@ -6,7 +6,7 @@
 - Avoid mocking unless it's necessary. Unit test pure functions.
 - Research the latest LLM-optimized automated browser testing.
 - Low-level browser behavior must be testable, e.g. deterministically run the game and assert that no garbage collection occurred.
-- Tests must be fast; parallelization is fine. Budget: **under 1 minute for all tests**. If that's exceeded, Tyler will want to split into a fast suite and a slower, more comprehensive one.
+- Tests must be fast; parallelization is fine. Budget: **under 1 minute for all tests**; the fast tier may take about 70 s (Tyler, 2026-10-10, Q16: the `browser` suite's budget raised to 60 s on top of a ~10 s build). If that's exceeded, Tyler will want to split into a fast suite and a slower, more comprehensive one.
 
 - The 1-minute budget assumes warm build caches. Separately, an incremental rebuild after a one-line Rust edit should take 45 seconds or less (Tyler, 2026-10-01: raised from 30 s rather than split the engine crate; [0049](../decisions/0049-compile-budget-45s.md)).
 - "I would prefer to delegate optimal test execution to Claude as much as possible." (Tyler, 2026-09-25.)

@@ -27,7 +27,7 @@ A deliberately small game that exercises every engine feature, in single-player 
 ### Crafting and building
 
 - Once a player has mined 5 stone, they unlock the furnace recipe and a crafting menu appears. A furnace costs 5 stone and takes 5 seconds to craft.
-- With a furnace in their inventory, the player can open a construction UI and place it. A furnace occupies 2x2 tiles and can't be placed on water or on other buildings. With a mouse, the placement ghost follows the cursor and a click places it; on touch, a tap positions the ghost and a DOM confirm button places it.
+- With a furnace in their inventory, the player can open a construction UI and place it. A furnace occupies 2x2 tiles and can't be placed on water or on other buildings. It may be placed over resource tiles; a covered resource can't be collected until the furnace is picked up (Tyler, 2026-10-10, R1). With a mouse, the placement ghost follows the cursor and a click places it; on touch, a tap positions the ghost and a DOM confirm button places it.
 - The rule must not be written as "can't build on water". Water expresses that it can't be built on, and placement asks the tiles (see trait question in `world.md`).
 
 ### Furnace
@@ -35,12 +35,13 @@ A deliberately small game that exercises every engine feature, in single-player 
 - Clicking a furnace opens a UI for depositing items from the inventory: iron, plus coal or wood as fuel.
 - A furnace smelts one ingot in 5 seconds.
 - One coal fuels 10 ingots. One wood fuels 2.
-- Any player can use any furnace. Output ingots can be taken back out (take-all); ore and fuel stay in.
+- Any player can use any furnace. Output ingots can be taken back out (take-all); ore and fuel stay in. Taking is predicted like every other action (Tyler, 2026-10-10, R2).
 - An empty furnace (no ore, fuel or ingots inside) can be picked up by any player: it disappears from the world and returns to that player's inventory. (Added by Tyler, 2026-09-19, so the game exercises entity removal.)
 
 ### UI
 
 - Framework-free TypeScript. The engine must not care either way.
+- "Export world" (download the save) is always offered in the game UI, not only on the screen for a save that cannot be loaded (Tyler, 2026-10-10, R4).
 
 ## Notes
 

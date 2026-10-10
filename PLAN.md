@@ -129,6 +129,7 @@ Phase 2 output. The index of Phase 3: milestone order, dependencies and progress
 | [x] | 39ae | `39ae-large-save-tick-under-10ms.md` | the large-save tick misses 10 ms on the iPhone (11.82 ms p95, `m39ad-iphone-driven`; Q18 (a) makes the iPhone the bar): M39y's remaining candidates (`by_entity`, `chunk_versions`, `put_entity` path), state-neutral, stop at -20 % paced or report | 39ad | |
 | [x] | 39ag | `39ag-large-save-pass-margin.md` | after M39ae the iPhone's large-save pass is 10.32 ms p95 (sim_tick 7.08 p50; the criterion times the whole pass): account for the whole pass, cut frame build / `chunk_versions` / `put_entity` path, -10 % or report | 39ae | |
 | [x] | 39ah | `39ah-gc-sim-neg-object-main-trip.md` | `[gc] sim neg object sim` trips `main` on CI (3rd time; 56 B attributed under `drive`, software budget 0): name the allocation, remedy by cause, never widen | 39ag | |
+| [ ] | 39ai | `39ai-tyler-answers.md` | Tyler's 2026-10-10 answers: subscription cap 144 (Q15), `browser` budget 60 s (Q16), furnace over a resource that hides it (R1), `FurnaceTake` predicted (R2), Export world always offered (R4) | 39ah | |
 | [ ] | 39 | `39-acceptance.md` | coverage + budget audit, full device checklist, Phase 3 exit | all above | D |
 | [ ] | 39b | `39b-phase-4-handoff.md` | capture what code cannot say in ADRs, `PROMPT.md` for Phase 4. **Phase 3 complete.** | 39 | |
 
