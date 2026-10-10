@@ -1,6 +1,6 @@
 # games/reference
 
-The reference game (`docs/spec/reference-game.md`): a private Vite app plus `sim/`, a game crate on the engine's `Game` trait (`docs/decisions/0003-game-facing-api.md`). Rules: `docs/plan/20-reference-game-v0.md` (world, collect), `20b-reference-player-and-collect-ui.md` (players, overlay), `32-reference-crafting.md` (craft), `33-reference-furnace.md` (furnace, placement).
+The reference game (rules and scope: `README.md` "The game"): a private Vite app plus `sim/`, a game crate on the engine's `Game` trait (`docs/decisions/0003-game-facing-api.md`).
 
 ## Commands
 
@@ -28,15 +28,14 @@ The reference game (`docs/spec/reference-game.md`): a private Vite app plus `sim
 
 `Ui` changes at state-change rate, never per frame: `in_range`'s `from` is cached at tile-entry time (`tracked_range`: a real position within `RANGE` of its tile, `2 x RANGE` of the presence, far inside `admit`'s 16 tiles; a `ClientSide` stamping hook or a TS anchor-slot read (f32) were rejected); `spawn` never changes. A per-frame value never belongs in `Ui` (0003).
 
-Framework-free (Requirements). `dom.ts`: `el()`, `diffKeyed()` (generic keyed-list reconciler, reused
+Framework-free (README). `dom.ts`: `el()`, `diffKeyed()` (generic keyed-list reconciler, reused
 by M32-M34). `collect.ts`: one `<button data-collect-tile="x,y">` per `Ui.in_range` entry, anchored
 with `client.overlay.anchor`; one CSS fill animation; `CancelCollect` on pan-out; a rejected
 `StartCollect` adds a `reject-<reason>` class. `inventory.ts`: a fixed, non-anchored readout. Both
 wired in `game.ts`'s `startGame` (the device/renderer/art/client/camera/UI wiring shared by `main.ts`,
 `test-entry.ts` and `gc-entry.ts`), which also calls `client.camera.moveTo` to `Ui.spawn` once, only
 when `shouldMoveToSpawn` (`src/spawn.ts`) allows it. **`Ui.in_range`/`world.tile()` need a real sim tick**, not
-just `stepFrame` (`engine/test.stepTick`, docs/plan/20c-client-ack-freeze-under-untilquiescent.md:
-safe on every topology, `gc-entry.ts`'s own connected one included -- `untilQuiescent` no longer
+just `stepFrame` (`engine/test.stepTick`, safe on every topology, `gc-entry.ts`'s own connected one included -- `untilQuiescent` no longer
 waits on `uploadRing`, a page's own job to drain). `tests/helpers/game.ts`'s
 `panTo`/`uiState`/`clickCollect`/`pumpUntil` poll a real `uiState` condition, never a fixed count.
 
