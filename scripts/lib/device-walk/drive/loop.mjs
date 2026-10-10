@@ -143,11 +143,13 @@ export function startDrive(o) {
   async function onPrompt(p, events) {
     const key = `${p.id}:${p.n}:${p.kind}:${p.text}`
     if (handled.has(key)) return
-    handled.add(key)
     // A prompt an earlier process of this round already answered (a resumed round finds it still open in the log):
     // not answered again. A judge sheet's screenshot is taken once, while the sheet is on the phone; a second
     // one on resume would be of whatever page the phone shows then (the runner, in `m39j-full-android`).
+    // Not marked handled here: the page can show a re-posted prompt before its `prompt` event reaches the log,
+    // and the next poll must see that event (tyler-m29: a resumed round never answered a re-posted drop).
     if (answeredInLog(events, p)) return
+    handled.add(key)
     const out = await person.answer(p)
     // A handler that sent the page away on purpose (app switch, background, airplane) has it silent for as long as
     // it ran: the idle clock starts when it returns, so a 300 s absence never trips the watchdog (M39y, Pixel).
@@ -242,6 +244,10 @@ export function startDrive(o) {
   // The end marker can wake the quiet wait (`onWindow`) before its row is in the log, so the next read still
   // shows the window open: remember the one handled, or it is detached and quieted twice (M39x gate).
   let lastWindow = null
+  // Only act prompts this process's page posts are answered: a prompt left open in the log by an earlier process
+  // (a resumed round) is acted on at start otherwise, before the page has loaded (tyler-m29: Home was pressed
+  // while mp.html loaded, so it loaded hidden and never connected). The page re-posts its open prompt itself.
+  const fromIdx = readEvents(file).length
   const finished = (async () => {
     await ready
     while (!stopped && !isDone()) {
@@ -280,7 +286,13 @@ export function startDrive(o) {
       await watchdog()
       settle() // a `--judge` from another process is a row in the log: let the round move on
       events = readEvents(file)
-      for (const p of openPrompts(events, ids)) {
+      const posted = (p) =>
+        p.kind !== 'act' ||
+        !events.some((e) => e.type === 'env') || // no real page in the log (the unit tests' hand-written logs)
+        events.some(
+          (e, i) => i >= fromIdx && e.type === 'prompt' && e.id === p.id && e.text === p.text,
+        )
+      for (const p of openPrompts(events, ids).filter(posted)) {
         if (stopped) break
         await onPrompt(p, events).catch((e) =>
           log(

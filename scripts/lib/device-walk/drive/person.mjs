@@ -329,11 +329,18 @@ export const HANDLERS = [
   // What a phone cannot be made to do. Each is a reason, not a failure.
   {
     name: 'lock',
-    match: /Lock the screen for/,
-    run: () => {
-      throw new NotDrivable(
-        'the screen is never turned off or locked on these phones (Tyler); a lock needs the passcode',
-      )
+    match: /Lock the screen for ([\d.]+) seconds/,
+    // iPhone only: WDA locks and unlocks (no passcode on the test phone); the driver unlocks it itself, so the
+    // screen is never left locked. The Pixel is never locked (Tyler).
+    run: async ({ backend, m, ctx }) => {
+      if (!backend.lock) throw new NotDrivable('the Pixel is never locked (Tyler)')
+      await ctx.sleep(300)
+      await backend.lock()
+      try {
+        await leaveFor(backend, Number(m[1]) * 1000, ctx)
+      } finally {
+        await backend.unlock()
+      }
     },
   },
   {
@@ -402,8 +409,7 @@ export const ACT_COVERAGE = {
   'M16-background': [
     {
       act: 'leave the app for 30 s and return; lock the screen for 60 s and return',
-      handlers: ['leave-app'],
-      notDrivable: [{ match: /Lock the screen for/, reason: 'the screen is never locked' }],
+      handlers: ['leave-app', 'lock'],
     },
   ],
   'M16-low-power': [
@@ -467,9 +473,8 @@ export const ACT_COVERAGE = {
   'M29-socket-resume': [
     {
       act: 'do each drop for the stated time',
-      handlers: ['leave-app', 'airplane'],
+      handlers: ['leave-app', 'airplane', 'lock'],
       notDrivable: [
-        { match: /Lock the screen for/, reason: 'the screen is never locked' },
         {
           match: /^Turn Wi-Fi off so the phone moves to cellular/,
           reason: 'adb reverse: Wi-Fi is not the link',

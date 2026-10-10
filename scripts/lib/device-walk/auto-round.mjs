@@ -148,9 +148,19 @@ export function readingsOf(events, id, n) {
  */
 export function mpProgress(events, id, n, plan, opts = {}) {
   const each = opts.runsEach ?? plan.runsEach
+  // A `resumable` plan keeps its runs across attempts and processes, and shares them with the check that
+  // `reuse`s it (tyler-m29: a drop is a drop, whichever attempt or item recorded it; walking all 18 again
+  // after a stopped round cost Tyler's phone 25 minutes each time). `opts.skipScenarios`: scenarios this
+  // phone cannot do (`--skip-scenarios wifi-cellular` on a phone with no SIM), left out of the round.
+  const ids = new Set([id, plan.reuse].filter(Boolean))
   const runs = events
-    .filter((e) => e.type === 'reading' && e.id === id && e.n === n && e.key === 'run')
+    .filter(
+      (e) =>
+        e.type === 'reading' && ids.has(e.id) && (plan.resumable || e.n === n) && e.key === 'run',
+    )
     .map((e) => e.data)
+  const skip = new Set(opts.skipScenarios ?? [])
+  plan = { ...plan, scenarios: plan.scenarios.filter((x) => !skip.has(x.key)) }
   const accepted = []
   let lastRejected = null
   const per = {}
@@ -255,6 +265,7 @@ export function createAutoRound({
     ...(entry.plan.warmupMs !== undefined ? { warmupMs: entry.plan.warmupMs } : {}),
     ...(params.windowMs ? { windowMs: params.windowMs } : {}),
     ...(params.warmupMs !== undefined ? { warmupMs: params.warmupMs } : {}),
+    ...(params.skipScenarios ? { skipScenarios: params.skipScenarios } : {}),
   })
 
   /** A judge sheet the device person deferred: not the current check, not a result either. */

@@ -161,6 +161,7 @@ export function createIosBackend(o = {}) {
     cal: new Map(), // `${w}x${h}` -> { offX, offY }
     lowPower: false,
     airplane: false,
+    locked: false,
     orientation: 'PORTRAIT',
     autolock: null, // the Auto-Lock label found before the round, set back by cleanup
   }
@@ -686,6 +687,18 @@ export function createIosBackend(o = {}) {
       await activate(SAFARI)
       await wait(800)
     },
+    /** Lock the screen (the page goes hidden); `unlock` brings it back to the browser. No passcode is set. */
+    async lock() {
+      await native()
+      st.locked = true
+      await exec('mobile: lock')
+    },
+    async unlock() {
+      await native()
+      await exec('mobile: unlock')
+      st.locked = false
+      await api.returnToBrowser()
+    },
     async relaunchBrowser(url) {
       await native()
       await exec('mobile: terminateApp', { bundleId: SAFARI })
@@ -737,6 +750,7 @@ export function createIosBackend(o = {}) {
       abortAll()
       const step = (name, p, ms = 4000) => bestEffort(p, ms, `ios cleanup (${name})`, log)
       if (st.sid) {
+        if (st.locked) await step('unlock', api.unlock(), 8000)
         if (st.lowPower) await step('low power', api.setLowPower(false), SETTINGS_WALK_MS)
         if (st.airplane) await step('airplane', api.setAirplane(false), SETTINGS_WALK_MS)
         if (st.orientation !== 'PORTRAIT') await step('rotation', api.rotate('portrait'), 3000)
