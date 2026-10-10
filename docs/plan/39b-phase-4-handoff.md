@@ -1,6 +1,6 @@
 # M39b: Hand-off to Phase 4
 
-Status: not started · After: 39 · Tyler-dependent: no (it carries forward, without waiting on, whatever M39 listed as unanswered)
+Status: in progress (2026-10-10) · After: 39 · Tyler-dependent: no (it carries forward, without waiting on, whatever M39 listed as unanswered)
 
 Split out of M39 (one session each: M39 audits and may block on Tyler; this one sweeps roughly seventy soon-to-be-deleted files and writes the last ADRs and the Phase 4 prompt).
 
