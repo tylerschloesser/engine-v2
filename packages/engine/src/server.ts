@@ -1497,7 +1497,10 @@ export function createSimHostFromInstance(
         sessionMutationChain = new Promise((resolve) => {
           resolveMyTurn = resolve
         })
-        const settle = (async () => {
+        // M39ak: the body below can reject (`hashSecretHex`, `sessions.save()`); `settleBody`'s
+        // wrapper turns that into a released turn, a removed slot and a closed connection, so one
+        // bad handshake never blocks `sessionMutationChain` or `attachQueue` for everyone after it.
+        const settleBody = async (): Promise<void> => {
           const hashHex = await hashSecretHex(parsed.playerSecret)
           await myTurn
           // Synchronous from here to `sessions.create` (Deviations: no `await` in between, and now
@@ -1556,7 +1559,22 @@ export function createSimHostFromInstance(
             presence,
             helloTail: parsed.helloTail,
           }
-        })()
+        }
+        const settle = settleBody().catch((e: unknown) => {
+          resolveMyTurn() // idempotent: a no-op when the body already released its turn
+          const at = attachQueue.indexOf(slot)
+          if (at >= 0) attachQueue.splice(at, 1)
+          if (host.handshakeTrace) {
+            host.handshakeTrace(
+              `hello settle failed conn=${conn}: ${e instanceof Error ? e.message : String(e)}`,
+            )
+          }
+          if (handshakeState.get(conn) === state && conns[conn] === connection) {
+            // `ProtocolError` is the one handshake code the client treats as transient (link.ts),
+            // so the player simply redials.
+            closeHandshake(conn, connection, CloseCode.ProtocolError)
+          }
+        })
         inFlightHandshakes.add(settle)
         settle.finally(() => inFlightHandshakes.delete(settle))
       }

@@ -499,4 +499,115 @@ describe('handshake', () => {
       await harness.dispose()
     }
   })
+
+  // M39ak (docs/plan/39ak-hello-settle-rejection.md): a rejected `settle` (a failing
+  // `sessions.save()` or digest) used to leave `sessionMutationChain` unresolved and its slot in
+  // `attachQueue`, so no later `Hello` was ever admitted.
+  async function settleRejectionScenario(
+    fail: 'save' | 'digest',
+    worldId: string,
+  ): Promise<{ firstClosed: number[]; secondMessages: Uint8Array[]; admitted: boolean }> {
+    const { wasm, buildHash } = await putsFixture()
+    const cfg: WorldConfig = { worldId, buildHash, params: { seed: '79', worldgen: null } }
+    const tick: { fire: (() => void) | null } = { fire: null }
+    const storage = memoryStorage()
+    const server = createWorldServer(cfg, {
+      wasm,
+      storage,
+      clock: { now: () => 0 },
+      timer: {
+        every: (_ms: number, cb: () => void) => {
+          tick.fire = cb
+          return () => {
+            tick.fire = null
+          }
+        },
+      },
+    })
+    await server.ready
+    const hello = (fill: number) =>
+      buildHelloBytes(wasm, {
+        secret: fixedSecret(fill),
+        joinKey: '',
+        buildHash: hexDecode(buildHash),
+      })
+    const firstClosed: number[] = []
+    const secondMessages: Uint8Array[] = []
+    const first: Connection = {
+      datagrams: false,
+      onMessage: null,
+      onClose: null,
+      send: () => {},
+      close: (code?: number) => {
+        firstClosed.push(code ?? -1)
+      },
+    }
+    const second: Connection = {
+      datagrams: false,
+      onMessage: null,
+      onClose: null,
+      send: (_cls: MsgClass, bytes: Uint8Array, len?: number) => {
+        secondMessages.push(bytes.slice(0, len))
+      },
+      close: () => {},
+    }
+    const realWrite = storage.write.bind(storage)
+    const realDigest = globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle)
+    let armed = true
+    if (fail === 'save') {
+      storage.write = (key, bytes) => {
+        if (armed && key === worldKeys(worldId).sessions) {
+          armed = false
+          return Promise.reject(new Error('injected: sessions.save failure'))
+        }
+        return realWrite(key, bytes)
+      }
+    } else {
+      globalThis.crypto.subtle.digest = ((...a: Parameters<typeof realDigest>) => {
+        if (armed) {
+          armed = false
+          return Promise.reject(new Error('injected: digest failure'))
+        }
+        return realDigest(...a)
+      }) as typeof realDigest
+    }
+    try {
+      server.accept(first)
+      first.onMessage?.(hello(0x21))
+      server.accept(second)
+      second.onMessage?.(hello(0x22))
+      // Bounded: with the fix removed the second `Hello` waits forever on `myTurn`.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const settled = await Promise.race([
+        serverInternals(server)
+          .handshakesSettled()
+          .then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), 2000)
+        }),
+      ])
+      clearTimeout(timer)
+      if (settled) tick.fire?.()
+      return { firstClosed, secondMessages, admitted: settled && secondMessages.length >= 1 }
+    } finally {
+      storage.write = realWrite
+      globalThis.crypto.subtle.digest = realDigest
+      // `stop()` would await the hung settle in the red case; the world is abandoned instead.
+      tick.fire = null
+    }
+  }
+
+  test('hello settle rejection does not stall later hellos', async () => {
+    const r = await settleRejectionScenario('save', 'w-settle-rejection-save')
+    expect(r.firstClosed).toEqual([CloseCode.ProtocolError])
+    expect(r.admitted).toBe(true)
+    expect(parseWelcomePlayerId(r.secondMessages[0] as Uint8Array)).toBeGreaterThanOrEqual(1)
+  })
+
+  test('hello settle rejection (digest) does not stall later hellos', async () => {
+    const r = await settleRejectionScenario('digest', 'w-settle-rejection-digest')
+    expect(r.firstClosed).toEqual([CloseCode.ProtocolError])
+    expect(r.admitted).toBe(true)
+    expect(parseWelcomePlayerId(r.secondMessages[0] as Uint8Array)).toBeGreaterThanOrEqual(1)
+  })
 })

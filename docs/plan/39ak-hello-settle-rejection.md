@@ -43,3 +43,9 @@ Retrying the save; changing the session-table format; anything outside the `Hell
 None.
 
 ## Deviations
+
+- Close code: `CloseCode.ProtocolError` (4005). No server-failure code exists; `src/net/link.ts` treats it as transient, so the client simply redials. No code added.
+- Error surfacing: `host.handshakeTrace` (`hello settle failed conn=N: <message>`) only; `server.ts` has no other non-fatal log path, and `onFatal` would stop the world. Silent when no trace is set (as every other handshake trace).
+- Shape: the body is now `settleBody()` and `settle = settleBody().catch(...)`; the catch calls `resolveMyTurn()` again (idempotent), splices `slot`, traces, and closes if the connection is still this arrival's.
+- Not undone: a new secret whose `save()` rejected stays in the in-memory session table (no remove API; table format is non-scope). A redial with that secret is admitted from memory and persisted by the next successful save.
+- Tests: `handshake.test.ts` `hello settle rejection does not stall later hellos` (save) and `... (digest) ...`. Red with the `resolveMyTurn()` in the catch removed: `AssertionError: expected false to be true` at handshake.test.ts:603 and :610 (bounded 2 s race, 4.8 s run).
