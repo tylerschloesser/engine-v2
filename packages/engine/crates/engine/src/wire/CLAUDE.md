@@ -10,11 +10,11 @@ Welcome · 0x04 ResyncChunk · 0x05 Bye · 0x06 FrameBundle`; `0x07..=0x7F` free
 **Section ids** (ascending, each once, empty omitted, unknown malformed): `1 ActionResults ·
 2 Global · 3 OwnPlayer · 4 ChunkEnterPristine · 5 ChunkSnapshots · 6 ChunkLeaves · 7 ChunkDeltas ·
 8 Presence · 9 Hashes · 10 ChunkTiles (reserved, unbuilt) · 11 ChunkKeeps`.
-**Frame**: `[type u8][flags u8][tick u32][ack_seq u32]` (10 B, flags always 0); no sections =
+**Frame**: `[type u8][flags u8][tick u32][ack_seq u32]` (10 B, flags reserved-zero: nonzero is `Malformed`, since strict build equality makes forward compatibility pointless); no sections =
 heartbeat. **FrameBundle** (`bundle.rs`): `[0x06][n varint]` then `n` x `[len varint][whole frame]`. **Coord list**: sorted `(cy,cx)`, first entry absolute zigzag pair, rest zigzag deltas.
 **Overlay runs**: `n_runs varint`, per run `gap varint`, `head=len<<1|repeat`, then `repeat?1:len`
 tiles (`u32` LE); `>=2` equal consecutive tiles -> one repeat run. **Chunk snapshot entry**: coord
-(written by `SnapshotWriter`, not `encode_chunk_snapshot`) · `version u32` · overlay runs ·
+(written by `SnapshotWriter`, not `encode_chunk_snapshot`: those bytes are also the canonical per-chunk form the desync check hashes, so they must not depend on a neighbour's delta-coded coordinate; membership is anchor-chunk equality, not footprint overlap, matching live deltas) · `version u32` · overlay runs ·
 `n varint` x `(EntityId varint, Codec entity)`. **ChunkDeltas**: tile groups (`n_chunks`, per
 chunk coord + `n varint` x `(index-gap varint, tile u32)`), then a flat entity-op list to the
 section's end (`op u8`: `0 Put id value`, `1 Gone id`). **ActionResults**: `n varint` x
@@ -32,7 +32,7 @@ on disconnect, to every connection that had previously been relayed that player.
 u8)` · `Codec G::Global`. **OwnPlayer**: `PlayerId varint · Codec G::Player`. **Uplink**: `type ·
 flags u8 (bit0 camera, bit1 presence) · last_received_tick u32 · n varint x (seq varint, len
 varint, Codec action) · CameraReport (16 B) · presence (len varint + bytes)`. `CameraReport`:
-`{center_x/y: i32, half_w/h: u16, vel_x/y: i16}`.
+`{center_x/y: i32, half_w/h: u16, vel_x/y: i16}`. Uplink flag bits 2-7 stay free for a typed stream record for continuous actions: not built; the trigger is the first game sending an action every tick (own ADR).
 
 A `FrameWriter::section` body runs twice (measure, then write): build any stateful writer (a
 coordinate cursor) *inside* the closure, never capture one by `&mut` from outside it.

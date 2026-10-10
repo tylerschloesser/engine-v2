@@ -9,7 +9,7 @@ restore-side/`sim_seal_frame`/`sim_snapshot_*` ABI wiring: `docs/plan/22b-...md`
 every checked-in golden this module blesses (`persist_frame_golden_bytes`,
 `persist_snapshot_golden_bytes`, `fx-persist`'s recorded log + checkpoints) and bumps
 `container_version` (`snapshot.rs`); regenerate only by the explicit `GOLDEN_BLESS=1` command and
-review the diff like any other golden change.
+review the diff like any other golden change. The `Store` canonical shape has a second reader: `migrate.rs`'s `OldStore::decode` re-implements `Store::write_canonical`'s reader side byte for byte (new code cannot name old types), so change `write_canonical`/`decode` and `OldStore::decode` together or old saves silently misparse.
 
 **Never iterate an unordered container here** (`.claude/rules/determinism.md`): every writer reads
 `Store`'s own ordered accessors; a new section goes only where 0005 (or this module's own recorded

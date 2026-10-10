@@ -395,6 +395,10 @@ runs; below), take the observed max, add whatever margin `gc-loop`'s own entries
 re-derive it. A control that doesn't separate from clean by that margin on both sides means the page
 needs fixing, not the budget (0016 §1 discussion).
 
+Never widen a budget to clear a red: fix the allocation (M15d, M15f). Read every new budget against the ADR cell it cites, measure `strict` before accepting `budgeted`, scan inert fields (`"software": null` throws under CI's `GC_MODE=software`), and edit `budgets.json` as text. The WebGPU wrapper floor (~104-118 B/frame, budget 110) is browser-owned and measured in desktop Chromium only: a Chrome update that moves the clean number past 110, or worker CDP sessions that fail to attach after a Playwright/Chromium bump, are expected events. Respond by re-measuring and amending the budget by ADR, or fixing the CDP attach; never loosen silently (negative controls turn the suite red rather than blind).
+
+**Instrument limits.** A 256 KiB/frame leak in the ghost path trips `reference clean` but a 4 KiB/frame leak passes (wasm arena headroom). An alloc-then-free inside the window passes `*_allocates_nothing` (`thread_high_water_bytes` is already far above it), so the Rust check covers retained bytes only, and Rust-side transient allocation is invisible to the page, which counts JS allocation plus wasm memory growth.
+
 ## `pnpm gc [software|flat|reliability] [-t pattern]`
 
 Local-only invocations of the `gc` project (`scripts/gc.mjs`), never run by `pnpm test`:

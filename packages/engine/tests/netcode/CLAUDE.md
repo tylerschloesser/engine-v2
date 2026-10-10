@@ -33,10 +33,10 @@ try {
 - **`harness.link(i)`**: the `ConditionedLink` for client `i` (`.set()`/`.stall()`/`.disconnect()`).
   `harness.counters(i)`: bytes/messages up/down per-tick, plus `reconnectBytesUp/Down` (step 5:
   `Hello` through the first frame after its `Welcome`, the `reconnect/cost` budget). `harness.
-  trace()`: the whole run's released-message log as one `Uint8Array` (`Array.from` to compare runs).
+  trace()`: the whole run's released-message log as one `Uint8Array` (`Array.from` to compare runs). The `ws` harness releases arrivals sorted by a global send sequence (sockets deliver in OS-poll order) after polling for nothing in flight (counts messages and close frames: a 4002 close must be seen); `ws/reconnect-resume`, `ws/trace-identical` are `@slow` (the subset cost ~10 s).
 - **Server and identity hooks** (`restartServer`, `link(i).reconnect()`, `panicServer()`, `connectRaw()`,
   `secrets`/`addClient(secret?)`, each client's `PlayerId` from `Welcome`): see their doc comments in
-  `src/test/net-harness.ts` (`serverInternals` in `src/server.ts`); `support.ts`'s `buildHelloBytes` builds a raw `Hello`.
+  `src/test/net-harness.ts` (`serverInternals` in `src/server.ts`); `support.ts`'s `buildHelloBytes` builds a raw `Hello`. `crypto.subtle.digest` finishes in unseeded order, so joiners are serialised by `sessionMutationChain` in `Hello`-arrival order and the harness awaits `handshakesSettled()` each tick. `Reject` only follows a parseable `Hello`; garbage counts to 8, then `ProtocolError` (5 s with no `Hello` too).
 
 ## Byte counters and `assertBudget` (docs/plan/31-rates-and-integrity.md)
 

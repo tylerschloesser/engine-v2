@@ -46,3 +46,10 @@ Verified by `fixtures/predict`'s own `loopback`/`alloc` suites (`pnpm test rust 
 replay loop's own zero-allocation property is `predict_alloc`, proven failable per file of
 `crates/engine/src/predict/` by an inject-fail-revert (a temporary allocation that the test then
 catches, reverted before commit).
+
+Gotchas the tests cannot see or that make them vacuous:
+
+- Swallowing `Unknown` in `can_place` (`unwrap_or_default` on `traits_at`) still yields `NotPredictable` at the subscription edge, because the engine declines any spawn touching an unheld chunk: the `?` rule is enforced by the engine and review, not a test. Likewise `client.input.setMode('tool')` while placing passes the drag test (the engine pans on a one-pointer drag in either mode), so the no-`setMode` rule is review-enforced.
+- A re-stage of a resident chunk must never pass through the non-resident state: `Replica::apply_snapshot_overlay` -> `replace_overlay` evicts the cached slab, and a host `ChunkSnapshots` for an already-rendered chunk staged `INDIR_NONE` for one frame (a grey `NEUTRAL` flash that looked like a prediction bug). Materialise synchronously on replace and cancel an `Evicted`-then-`Loaded` pair for one slot in one drain.
+- Prediction scenarios need a second client sending `SetGlobal` every tick from before warm-up (`warm_up_with_noise`), else the first non-empty frame also carries the ack, the replay loop never runs and `frozen_predicted_tick` passes vacuously. `predict_alloc` compares `high_water_bytes` with a mark taken before the first replay call, warm-up included. A game whose `apply` panics (`fx-panicky`) opts out with `Game::predict -> false`, because `ClientCore` runs `apply` client-side for every game.
+- Open: prediction runs `G::apply` in the client `.wasm`, so a panicking `apply` traps the client instance; M24 recovery covers only the sim worker and `fx-panicky` hides it. Undecided: report `NotPredictable` or re-instantiate the client (0050 covers only the generic client-trap re-`Hello`).

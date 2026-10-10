@@ -33,16 +33,16 @@ write side of 0005 Persistence. One instance per world.
   (`healManifest`, private).
 - `Persistence.loadLatest(storage, keys, manifest, newInstance)`: a `static` helper, not an instance
   method (no live `Persistence` exists yet when `open` calls it) -- "the snapshot + tail step on its
-  own", reusable by M24 after a trap. Checks the running identity first (`sim_segment_header(0,
-  GENESIS_BASE_TICK)`, no genesis needed) against `manifest.created`, throwing `WorldLoadError` on a
-  mismatch (reported, not handled: M24b's own migrate path). Then tries every `snap/` key newest
+  own", reusable by M24 after a trap. Each snapshot candidate's own decoded identity is compared with the running one
+  by `sim_upgrade_*`, never `manifest.created` (the original identity: it would re-trigger the upgrade
+  every reload); `SaveIncompatible` throws `WorldLoadError('incompatible')`, no fallback. Then tries every `snap/` key newest
   first through `sim_restore_begin/push/end`, each candidate on a fresh `newInstance()`: a bad CRC/
   container version, or a `logOffset` beyond its own segment's stored bytes (0005: "kept until the
   new one verifies"), falls back to the next-older one, then to a genesis replay of segment 0 if
   none verify. Either way, `sim_replay_begin/push/end` replays the chosen tail; a torn frame is
   truncated with `storage.write` (`Storage` has no `truncate`) and reported in `truncatedBytes`.
   `outcome` is `'recovered'` iff anything was skipped or truncated, else `'loaded'`.
-- `WorldLoadError { kind: 'identity' | 'corrupt' | 'container', running, stored? }`: thrown, not
+- `WorldLoadError { kind: 'corrupt' | 'container' | 'incompatible' (`'identity'` is dead), running, stored? }`: thrown, not
   returned -- storage is left untouched.
 - Segment rolling (step 3, Planning decisions 2): `snapshotNow`'s own `rollSegmentIfNeeded` seals
   the open segment and opens a new one when its byte length reaches `segmentRollBytes` (`4 MiB`,
