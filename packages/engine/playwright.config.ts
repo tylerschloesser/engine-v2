@@ -40,16 +40,11 @@ const cdpPort =
 // `channel: 'chromium'` gives a real Metal adapter headless and `--enable-unsafe-webgpu` alone is
 // enough. CI (`ubuntu-latest`) sets `ENGINE_GPU=swiftshader`, which adds the flags a software
 // WebGPU adapter needs; `libvulkan1`/`mesa-vulkan-drivers` are the matching apt packages (ci.yml).
-// M39f's device-walk specs (`walk-*.spec.ts`) test a Mac + iPhone tool: real-time choreography,
-// a bot partner and per-frame collectors that a software adapter on a 4-vCPU runner cannot carry
-// (9 failed on CI run 37217591461, all pass locally). They run in the local slow tier only; the
-// tool's unit and netcode tests still run on CI (M39f Deviations, orchestrator gate).
 // On CI (4 vCPUs, software adapter) the zero-GC pages' per-frame cross-thread rendezvous starves
 // when five workers share the runner: worker-isolate burst controls ran 65-90 s against the 90 s
 // `gcTimeoutMs` and timed out three times (runs 36968222365, 37062270078, 37219559331). Two gc
 // workers on CI instead of a longer timeout; locally nothing changes (M39 Deviations, ledger).
 const gcWorkers = process.env.ENGINE_GPU === 'swiftshader' ? { workers: 2 } : {}
-const walkIgnore = process.env.ENGINE_GPU === 'swiftshader' ? ['**/walk-*.spec.ts'] : []
 const swiftshaderArgs =
   process.env.ENGINE_GPU === 'swiftshader'
     ? [
@@ -129,12 +124,7 @@ export default defineConfig({
       // `--disable-frame-rate-limit --disable-gpu-vsync`): otherwise this project's own slow-tier
       // grep (`(?=.*@slow)`) would also pick up `bench.frame_worstcase @slow` and run it a second
       // time, without those flags, under real (capped) rAF pacing.
-      testIgnore: [
-        '**/gc-*.spec.ts',
-        '**/frame-bench*.spec.ts',
-        '**/packaging/*.spec.ts',
-        ...walkIgnore,
-      ],
+      testIgnore: ['**/gc-*.spec.ts', '**/frame-bench*.spec.ts', '**/packaging/*.spec.ts'],
     },
     {
       // `tarball-install` and `dev-reload` (all `@slow`): a package install and a cargo build each, the
@@ -163,7 +153,7 @@ export default defineConfig({
       name: 'webkit',
       use: { ...devices['Desktop Safari'] },
       grep: webkitGrep,
-      testIgnore: ['**/gc-*.spec.ts', ...walkIgnore],
+      testIgnore: ['**/gc-*.spec.ts'],
     },
     {
       name: 'firefox',

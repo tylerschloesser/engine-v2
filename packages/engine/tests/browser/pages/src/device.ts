@@ -14,7 +14,7 @@
 // production code.
 //
 // M39f (steps 5-6): `window.__check` (`check.ts`) reports the HUD's own
-// numbers as numbers, so `pnpm device:walk --auto` reads them instead of Tyler copying them down:
+// numbers as numbers, so a script can read them instead of Tyler copying them down:
 // `readings()` per mode below, `ready` set with `__pageReady`. `?probeS=<seconds>` shortens the memory
 // probe's two sessions for the automated run of that check (unset: the 2 minutes of the checklist).
 //

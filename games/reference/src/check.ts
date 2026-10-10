@@ -4,7 +4,7 @@
 // (`check-reporter-absent`), and `reference_bench_feature_identical` shows the bench cargo feature leaves a
 // normal world bit-identical, which is why the one bench build can also be the check build.
 //
-// What `pnpm device:walk` reads here and the release build has no hook for: the bench HUD as numbers
+// What the phone-round tool read here (deleted in Phase 4, ADR 0070; a page or test may still read it) and the release build has no hook for: the bench HUD as numbers
 // (`?bench=large-save`, M39-large-save and M39-frame-shares), the link, the roster, the remote circles and
 // furnaces of the newest DrawList (M34), the own collect bar timed from tap to result (M34-own-timer-bar),
 // and a per-frame record of the remote circles (M34-remote-motion). Diagnostic, like the bench HUD: it

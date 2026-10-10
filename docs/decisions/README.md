@@ -59,7 +59,7 @@ ADR Sources sections link into `docs/research/`, `spikes/`, `docs/spec/` and `do
 | [0051](0051-durable-objects-no-go.md) | Durable Objects: no-go | Durable Objects are not a hosting target. | |
 | [0052](0052-zero-gc-warmup-4000-frames.md) | Zero-GC warm-up is 4000 frames in 8 passes | Zero-GC warm-up runs 4000 frames in 8 passes. | |
 | [0053](0053-connection-slots-and-full-admission.md) | Sixteen connection slots; `Full` counts attached players | The host has sixteen connection slots, and `Full` counts only attached players. | |
-| [0054](0054-tools-suite.md) | A `tools` suite for the device-walk tool's tests | The device-walk tool's tests get their own `tools` suite. | |
+| [0054](0054-tools-suite.md) | A `tools` suite for the device-walk tool's tests | The device-walk tool's tests get their own `tools` suite. | 0070 |
 | [0055](0055-bench-only-phase-import.md) | A bench-only wasm import for per-phase tick timing | A bench-only third wasm import reports per-phase tick timing. | |
 | [0056](0056-ios-pacing-and-tick-bar.md) | What M09b asserts on iOS, and which phone is the large-save tick bar | M09b's iOS assertions are set, and the iPhone 12 at p95 is the large-save tick bar. | 0057 |
 | [0057](0057-ios-m09b-portrait-only.md) | M09b-fill-rate measures portrait only on iOS | On iOS, M09b-fill-rate measures portrait only. | |

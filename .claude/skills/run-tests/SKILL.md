@@ -21,7 +21,7 @@ playwright.config.ts`). Ids come from `scripts/suites.mjs`; that file is the reg
 a new suite, nowhere else.
 
 Run one test by name: `pnpm test <suite> -t "<substring>"`, e.g. `pnpm test wasm -t "import
-allowlist"`, `pnpm test browser -t determinism`, `pnpm test unit -t "manual clock"`. The device-walk tool's tests (`scripts/lib/device-walk*.test.mjs`) are their own `tools` suite: `pnpm test tools -t device-walk` (ADR 0054). `-t` is a plain
+allowlist"`, `pnpm test browser -t determinism`, `pnpm test unit -t "manual clock"`. `-t` is a plain
 substring match, not a regex.
 
 Reference game (M34b): `pnpm test browser -t reference_` (its `reference` Playwright project), `pnpm test wasm -t reference_`
@@ -126,7 +126,7 @@ it on an existing fixture just because a test disagrees with the checkpoint.
 
 ## Test-writing and flake gotchas
 
-**Tests that cannot fail** are this repo's signature defect (M09b, M10, M14, M15, M16): ask what a passing test would still pass without, and do one inject-fail-revert per new file or branch; a fix proven only inert is not proven. A green gate is a claim: "lint green" must include `tsc`, and a red `pnpm test` for an unrelated reason still needs `pnpm lint` run alone. A test that reads a live tracked doc breaks on the next real edit of it (seven `tools` tests copied `device-checks.md` and assumed unticked rows): give it a pristine copy (`test-checks.mjs`).
+**Tests that cannot fail** are this repo's signature defect (M09b, M10, M14, M15, M16): ask what a passing test would still pass without, and do one inject-fail-revert per new file or branch; a fix proven only inert is not proven. A green gate is a claim: "lint green" must include `tsc`, and a red `pnpm test` for an unrelated reason still needs `pnpm lint` run alone. A test that reads a live tracked doc breaks on the next real edit of it (seven tests of the retired phone-round tool copied its checklist and assumed unticked rows): give it a pristine copy.
 
 **Vitest:** never pass an `EngineInstance` (live views over WASM memory) to `expect()`, and never `expect(promise).rejects.<matcher>` on a promise that might resolve with one. Vitest pretty-prints both operands even on a passing `not.toBe`, climbs past 4 GB and dies with `SIGABRT` / "Reached heap limit" and no assertion message, which looks like an infinite loop in product code. Compare with `===` or convert the settlement to a plain value first (`expectIncompatible` in `upgrade.test.ts`).
 

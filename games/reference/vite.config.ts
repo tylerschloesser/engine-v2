@@ -3,7 +3,7 @@
 import { fileURLToPath } from 'node:url'
 import { engine } from 'engine/vite'
 import { defineConfig } from 'vite'
-import { servePreview, walkProxy } from '../../packages/engine/scripts/walk-preview-plugin.ts'
+import { previewHeaders } from '../../packages/engine/scripts/preview-headers.ts'
 
 // M29 Scope: `pnpm device:serve --app reference`
 // serves this app (instead of the fixture app) on the same port/tunnel/proxy shape `packages/
@@ -34,12 +34,11 @@ export default defineConfig(({ mode }) => {
 })
 
 function config(bench: boolean) {
-  // `/ws` for `device-serve --ws` and `/__walk` for `device:walk` (M39f); empty (no `preview.proxy`) otherwise.
+  // `/ws` for `device-serve --ws`; empty (no `preview.proxy`) otherwise.
   const proxy = {
     ...(process.env.ENGINE_WS_PROXY_PORT
       ? { '/ws': { target: `ws://127.0.0.1:${process.env.ENGINE_WS_PROXY_PORT}`, ws: true } }
       : {}),
-    ...walkProxy(),
   }
   return {
     publicDir: 'assets',
@@ -56,9 +55,9 @@ function config(bench: boolean) {
         bindings: { dir: '../src/bindings' },
         ...(bench ? { features: ['bench'] } : {}),
       }),
-      // `vite preview` only: COOP/COEP + no-store on every response (a bare 304 lacks them), and under
-      // `pnpm device:walk` (`ENGINE_WALK_PORT`) the agent tag. Never in `vite build` output.
-      ...servePreview(),
+      // `vite preview` only: COOP/COEP + no-store on every response (a bare 304 lacks them).
+      // Never in `vite build` output.
+      ...previewHeaders(),
     ],
     // Three entries: `index.html` (production), `test.html` (step 0: `ClientOptions.test` and every
     // diagnostic `window.__*` hook), `gc.html` (step 6's own zero-allocation exit criterion: a

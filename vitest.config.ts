@@ -19,16 +19,6 @@ export default defineConfig({
             'games/*/src/**/*.test.ts',
             'games/*/scripts/**/*.test.mjs',
           ],
-          // M39x: the device-walk tool's tests run in the `tools` project below.
-          exclude: ['**/node_modules/**', 'scripts/lib/device-walk*.test.mjs'],
-        },
-      },
-      {
-        // M39x (ADR 0054): Mac-side tooling tests kept out of the first, fast `unit` suite.
-        test: {
-          name: 'tools',
-          environment: 'node',
-          include: ['scripts/lib/device-walk*.test.mjs'],
         },
       },
       {

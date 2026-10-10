@@ -15,11 +15,11 @@ A failed check does not block unrelated work. It becomes a fix or a plan change;
 - **Android:** a Pixel 5 (Android 10, Chrome) on USB, driven from the Mac. It is evidence about Android, not a gate: the iPhone is the pass/fail device. Every `-android` row below is "not run: no device" unless a Pixel round is actually done; record a Pixel result as a note, never as the item's pass.
 - **Mac:** desktop Safari and Firefox, for items that name them. Desktop Chrome is covered by the automated suites, not here.
 
-## Automation (optional)
+## Automation
 
-`pnpm device:walk` (the `device-round` skill) walks many of these items: Tyler scans one QR code and the phone runs the round, or `--drive ios|android` / `--open ios` does it from the USB phone. `scripts/device-walk.mjs` and the `device-round` skill may be removed, so every entry below must be walkable by hand from this file alone. Items that stay a person's even with the tool: `M11-pinch-desktop-safari`, `M17b-harness-desktop-*`, the hosted/human rows (`M38-*`, `M39-full-game-touch`, `M39-two-devices`, `M39-sign-off`, `M39-rerun`).
+There is no automated runner: the phone-round tool (`pnpm device:walk`) was deleted in Phase 4 ([ADR 0070](../../../docs/decisions/0070-phase-3-tooling-retired.md); its code is at tag `phase-3-complete`, its last round log, `tyler-m29`, at commit `ce78cfac`). Every item below is walked by hand from this file. The Mac can still drive the USB phones directly (WDA through Appium on the iPhone, `adb` on the Pixel) for a one-off.
 
-**iOS frame pacing is judged from driverless runs only (ADR 0056).** A live driver session (WDA, Web Inspector attached) degrades WebKit's frame delivery. A driven iOS attempt of `M09b-fill-rate`, `M16-coexist`, `M29-net-heap` or `M34-remote-motion` records its rAF and hitch numbers as notes with no verdict on them (other criteria are judged as usual). The pass comes from a run with no driver: Tyler's QR round or a plain Safari session.
+**iOS frame pacing is judged from driverless runs only (ADR 0056).** A live driver session (WDA, Web Inspector attached) degrades WebKit's frame delivery. A driven iOS attempt of `M09b-fill-rate`, `M16-coexist`, `M29-net-heap` or `M34-remote-motion` records its rAF and hitch numbers as notes with no verdict on them (other criteria are judged as usual). The pass comes from a run with no driver: a plain Safari session.
 
 ## How to serve a page to the phone
 
@@ -124,7 +124,7 @@ Closes the deferred OPFS latency item of ADR 0005 Consequences; it tunes only th
 
 ## M29: Net worker and reconnect
 
-Closes the iOS worker-socket resume item (ADR 0013 Consequences); it tunes only the dead timeout and the probe deadline of ADR 0013. Last results: `M29-net-heap` pass 2026-10-08 (driverless); `M29-socket-resume` and `M29-play-through-drop` pass 2026-10-10 on the iPhone 12 (round `tyler-m29`: 12 drops, app-5s and app-30s by hand, app-5min and lock-60s driven over USB): `visible` to `Welcome` median 0 ms, max 111 ms (a 0 is a link that had already reconnected while hidden), interactive and no dialog in every run. **Not run:** Wi-Fi to cellular (no SIM) and airplane 15 s (iOS keeps Wi-Fi on in airplane mode on this phone, so the socket only resets; a real outage needs Wi-Fi off too). The link log lists rows newest first. Android is not run anywhere (every `-android` row).
+Closes the iOS worker-socket resume item (ADR 0013 Consequences); it tunes only the dead timeout and the probe deadline of ADR 0013. Last results: `M29-net-heap` pass 2026-10-08 (driverless); `M29-socket-resume` and `M29-play-through-drop` pass 2026-10-10 on the iPhone 12 (12 drops, app-5s and app-30s by hand, app-5min and lock-60s driven over USB): `visible` to `Welcome` median 0 ms, max 111 ms (a 0 is a link that had already reconnected while hidden), interactive and no dialog in every run. **Not run:** Wi-Fi to cellular (no SIM) and airplane 15 s (iOS keeps Wi-Fi on in airplane mode on this phone, so the socket only resets; a real outage needs Wi-Fi off too). The link log lists rows newest first. Android is not run anywhere (every `-android` row).
 
 **Open:** on the Mac `pnpm device:serve --tunnel --ws puts` (starts the real-time server and proxies `/ws`); on the phone `mp.html?linklog=1` on the printed URL.
 

@@ -1,10 +1,9 @@
-// `window.__check`: the reporter `pnpm device:walk --auto` reads (M39f,
-// "The check reporter contract"). Fixture pages only: this file is imported by pages under
+// `window.__check`: the reporter the phone-round tool read (M39f, "The check reporter contract"; the
+// tool was deleted in Phase 4, ADR 0070). Fixture pages only: this file is imported by pages under
 // `tests/browser/pages/`, never by `src/` or a game, so no release build contains `__check` (the netcode
-// test `walk-preview: no production output contains the check reporter` reads the built output).
+// test `check-reporter-absent` reads the built output).
 //
-// The service decides pass or fail from `scripts/lib/device-walk/checks.mjs`; a page only reports
-// numbers. `readings()` is flat and JSON-safe, called at most once a second by a human-rate caller, so it
+// A page only reports numbers; the reader decides pass or fail. `readings()` is flat and JSON-safe, called at most once a second by a human-rate caller, so it
 // may allocate: a diagnostic page is outside `.claude/rules/hot-paths.md`, as `device.ts`'s header says.
 export type CheckReading = number | string | boolean | null | string[]
 

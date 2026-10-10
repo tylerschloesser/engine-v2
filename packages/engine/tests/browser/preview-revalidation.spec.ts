@@ -2,7 +2,7 @@
 // script of a page it loaded a second time ("Worker load was blocked by Cross-Origin-Embedder-Policy"; found
 // by `walk-auto` on `worldgen-bench.html`, reproduced by a plain `page.reload()` with no agent at all).
 // The browser project's own `webServer` is a plain `vite preview` of the fixture app, no `--walk`: this is
-// what `pnpm device:serve` serves a phone. `walk-preview.test.ts` (`netcode`) covers both apps' headers.
+// what `pnpm device:serve` serves a phone. `preview-headers.test.ts` (`netcode`) covers both apps' headers.
 import { expect, test } from '@playwright/test'
 import { openPage } from './support/page.js'
 

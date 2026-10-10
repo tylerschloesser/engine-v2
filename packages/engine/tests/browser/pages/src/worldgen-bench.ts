@@ -1,7 +1,7 @@
 // `worldgen-bench.html`'s script: median ms/chunk, the golden match, the user agent and
 // `navigator.hardwareConcurrency` (docs/decisions/0008-chunk-generation.md §6's deferred "ms per
-// chunk on real devices" item, closed by [device-checks.md, M08: Worldgen ms per
-// chunk](../../../../../../the `device-check` skill)). Runs the same
+// chunk on real devices" item, closed by the `device-check` skill's M08 item, Worldgen ms per
+// chunk). Runs the same
 // loop as the Node slow test (`tests/wasm/worldgen-bench.test.ts`) via
 // `tests/support/bench-worldgen.ts`, in a dedicated worker.
 import benchGolden from '../../../../fixtures/worldgen/golden/bench.json' with { type: 'json' }

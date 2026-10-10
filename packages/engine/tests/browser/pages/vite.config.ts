@@ -5,19 +5,18 @@
 import { readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
-import { servePreview, walkProxy } from '../../../scripts/walk-preview-plugin.ts'
+import { previewHeaders } from '../../../scripts/preview-headers.ts'
 import { engine } from '../../../src/vite.ts'
 import { fixturesPlugin } from './fixtures-plugin.ts'
 
 const root = import.meta.dirname
 const port = Number(process.env.ENGINE_TEST_PORT ?? 4517)
 
-// `/ws` for `device-serve --ws` and `/__walk` for `device:walk` (M39f); empty (no `preview.proxy`) otherwise.
+// `/ws` for `device-serve --ws`; empty (no `preview.proxy`) otherwise.
 const proxy = {
   ...(process.env.ENGINE_WS_PROXY_PORT
     ? { '/ws': { target: `ws://127.0.0.1:${process.env.ENGINE_WS_PROXY_PORT}`, ws: true } }
     : {}),
-  ...walkProxy(),
 }
 
 const input = Object.fromEntries(
@@ -31,9 +30,9 @@ export default defineConfig({
   plugins: [
     engine({ crate: '../../../fixtures/hash', profile: 'dev' }),
     fixturesPlugin(),
-    // `vite preview` only: COOP/COEP + no-store on every response (a bare 304 lacks them), and under
-    // `pnpm device:walk` (`ENGINE_WALK_PORT`) the agent tag. Never in `vite build` output.
-    ...servePreview(),
+    // `vite preview` only: COOP/COEP + no-store on every response (a bare 304 lacks them).
+    // Never in `vite build` output.
+    ...previewHeaders(),
   ],
   build: {
     target: 'es2022',

@@ -1,7 +1,7 @@
 // `reference_bench_feature_identical @slow` (M39f step 11, "decide by
 // measurement"): does cargo feature `bench` leave a *normal* world (no `{ bench }` marker, so
 // `RefParams.bench == 0`) bit-identical? If so the bench build (`vite build --mode bench`) can also be
-// the reference game's check build (it carries `window.__check`) for `pnpm device:walk`, instead of a
+// the reference game's check build (it carries `window.__check`), instead of a
 // third build mode. Two legs, both against the release `+bench` module the phone would load:
 //   1. the full-game golden (`games/reference/tests/golden/full-game.*`, recorded without the feature)
 //      replays to the same hash at every checkpoint;

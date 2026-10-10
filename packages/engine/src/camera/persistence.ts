@@ -20,7 +20,7 @@ import type { CameraState } from './state.js'
 
 export type PersistedCamera = { centreX: number; centreY: number; tilesAcross: number }
 
-/** Every camera key starts with this (the device-walk agent clears them by it: `scripts/lib/device-walk-drive.test.mjs`). */
+/** Every camera key starts with this (a test page can clear them all by it). */
 export const CAMERA_KEY_PREFIX = 'engine:camera:v1:'
 
 export function cameraStorageKey(cameraKey?: string): string {

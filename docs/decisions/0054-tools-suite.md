@@ -1,6 +1,6 @@
 # 0054: A `tools` suite for the device-walk tool's tests
 
-Status: Accepted (2026-10-07). Amends [0020](0020-testing-strategy.md) §3 (the suites-and-budgets table). Implemented by M39x in `vitest.config.ts` and `scripts/suites.mjs`.
+Status: Superseded by [0070](0070-phase-3-tooling-retired.md).
 
 ## Context
 

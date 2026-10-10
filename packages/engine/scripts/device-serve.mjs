@@ -27,10 +27,7 @@
 // game's one check build: no `?bench=` parameter plays the normal world, bit-identical (reference-bench-
 // identical.test.ts).
 //
-// `--walk <port>` (M39f, `pnpm device:walk`): sets `ENGINE_WALK_PORT` for `vite preview`, whose two
-// configs then proxy `/__walk` (http and ws) to the phone API on that loopback port and inject the
-// agent's `<script>` into served HTML (`scripts/walk-preview-plugin.ts`). Serve time only: `vite build`
-// is never given the variable. `--no-build` skips the build and previews what `dist/` (or `dist-bench/`)
+// `--no-build` skips the build and previews what `dist/` (or `dist-bench/`)
 // already holds, for a second server of an app another process has just built.
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
@@ -67,12 +64,6 @@ const appIndex = argv.indexOf('--app')
 const app = appIndex >= 0 ? argv[appIndex + 1] : undefined
 if (app !== undefined && app !== 'reference') {
   console.error(`device-serve: unknown --app '${app}' (only 'reference' is supported)`)
-  process.exit(1)
-}
-const walkIndex = argv.indexOf('--walk')
-const walkPort = walkIndex >= 0 ? argv[walkIndex + 1] : undefined
-if (walkIndex >= 0 && !/^\d+$/.test(walkPort ?? '')) {
-  console.error('device-serve: --walk takes the phone API port')
   process.exit(1)
 }
 const noBuild = argv.includes('--no-build')
@@ -144,7 +135,7 @@ let wsChild
 let wsDataDir
 if (ws) {
   // The server runs the module the page was built with: a `--bench` page (the bench build, which is also the
-  // check build of `pnpm device:walk`) carries cargo feature `bench`, so its server does too (a client and a
+  // reference game's check build) carries cargo feature `bench`, so its server does too (a client and a
   // server with different build hashes refuse each other).
   const gameDir = wsFixture
     ? join(fixturesRoot, wsFixture, 'target', 'engine', 'dev')
@@ -196,7 +187,6 @@ const previewEnv = {
   ENGINE_TEST_PORT: String(port), // both apps' own configs read this for port/allowedHosts (Seams)
   ...(tunnel ? { ENGINE_DEVICE: '1' } : {}),
   ...(ws ? { ENGINE_WS_PROXY_PORT: String(wsPort) } : {}),
-  ...(walkPort ? { ENGINE_WALK_PORT: walkPort } : {}),
 }
 const previewArgs =
   app === 'reference'
@@ -231,7 +221,7 @@ await new Promise((resolve, reject) => {
 // The bench build is the production page alone, so only `index.html` exists in `dist-bench/`.
 const pages = bench ? ['index.html'] : htmlPages(pagesDir)
 console.log(`pages: ${pages.join(', ')}`)
-// Machine-readable lines for `pnpm device:walk` (M39e): the loopback origin, then (with --tunnel) the
+// Machine-readable lines (M39e; a script that starts this server reads them): the loopback origin, then (with --tunnel) the
 // tunnel origin once cloudflared prints it.
 console.log(`DEVICE_SERVE_URL=http://127.0.0.1:${port}`)
 

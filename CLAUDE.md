@@ -2,8 +2,6 @@
 
 Multiplayer web game engine (Rust→WASM + TypeScript, custom WebGPU renderer) for top-down, tile-based, tick-simulated automation games, plus one reference game. Start at `docs/architecture/README.md` (goal, engine/game split, glossary, index of the subsystem docs).
 
-**Phase 4 (clean-up) is still in progress: the main session starts at `PROMPT.md`.** (This line goes with it.)
-
 **Commands:** `pnpm setup:tools` (once per machine) · `pnpm test [suite] [-t pattern]` · `pnpm test:slow` · `pnpm lint` · `pnpm format` · `pnpm golden [fixture]` (the only writer of golden hashes) · `pnpm device:serve` (pages for a phone). Both checks are quiet: one line per suite or check, details only on failure, logs under `test-results/`. How to run and read them: the `run-tests` skill.
 
 ## Context map
