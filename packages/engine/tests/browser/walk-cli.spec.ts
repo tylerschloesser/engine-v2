@@ -5,11 +5,12 @@
 // copy of device-checks.md. What a headless engine cannot do is simulated as in the other walk specs (the
 // phone is a Playwright page). All `@slow @webkit-gpu`.
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, test } from '@playwright/test'
+import { copyPristineChecks } from '../../../../scripts/lib/device-walk/test-checks.mjs'
 import { fake } from './support/walk-rig.js'
 
 const repo = fileURLToPath(new URL('../../../../', import.meta.url))
@@ -36,7 +37,8 @@ type Status = {
 function rig(ids: string[], round: string) {
   const dir = mkdtempSync(join(tmpdir(), 'walk-cli-'))
   const checks = join(dir, 'device-checks.md')
-  copyFileSync(join(repo, 'docs/plan/device-checks.md'), checks)
+  // Pristine (M39ad): live --apply rounds tick rows (M03-determinism among them) this test applies afresh.
+  copyPristineChecks(join(repo, 'docs/plan/device-checks.md'), checks)
   mkdirSync(join(dir, 'rounds'))
   // Bases 100 apart per test; a project's own 5000 up (chromium and webkit run at once).
   const base =

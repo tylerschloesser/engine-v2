@@ -1,6 +1,6 @@
 # M39: Acceptance audit (Phase 3 exit)
 
-Status: not started · After: all other milestones, including any `NNb`/`NNc` rows added during Phase 3 · Tyler-dependent: yes. Tyler runs the complete device checklist and gives the play-test sign-off. Q5 is answered: iPhone only; Android rows are marked "not run: no device", never ticked.
+Status: done (2026-10-10; two device checks await Tyler: M29-socket-resume and M29-play-through-drop) · After: all other milestones, including any `NNb`/`NNc` rows added during Phase 3 · Tyler-dependent: yes. Tyler runs the complete device checklist and gives the play-test sign-off. Q5 is answered: iPhone only; Android rows are marked "not run: no device", never ticked.
 
 Split note: the hand-off to Phase 4 (capturing non-inferable facts in ADRs, rewriting `PROMPT.md`) is `39b-phase-4-handoff.md`. The audit below fills a session by itself and can block on Tyler; the hand-off cannot start until it is green.
 
@@ -61,13 +61,13 @@ New features, refactors, performance work beyond a one-line fix. Writing archite
 Only gap-closing tests, each named in the coverage table row it closes. `acceptance-check.mjs` has one unit test (a fixture table with a missing test name fails).
 
 ## Exit criteria
-- [ ] `pnpm test`, `pnpm lint` and `pnpm test:slow` pass on Tyler's Mac; the fast tier is inside the Requirement's one minute (number recorded in the ledger); the latest CI run on `main` is green.
+- [x] `pnpm test`, `pnpm lint` and `pnpm test:slow` pass on Tyler's Mac; the fast tier is inside the Requirement's one minute (number recorded in the ledger); the latest CI run on `main` is green.
 - [ ] `pnpm acceptance:check` passes: no `gap` rows, every cited test found, every cited device check ticked.
-- [ ] `docs/plan/acceptance/budgets.md` has a verdict for every PRE-PLAN §7 row; no `missed` row lacks a decision.
-- [ ] Every row of `docs/plan/deferred-ledger.md` is closed; every `PLAN.md` row is ticked or has a recorded deviation with an ADR where a decision changed.
+- [x] `docs/plan/acceptance/budgets.md` has a verdict for every PRE-PLAN §7 row; no `missed` row lacks a decision.
+- [x] Every row of `docs/plan/deferred-ledger.md` is closed; every `PLAN.md` row is ticked or has a recorded deviation with an ADR where a decision changed.
 - [ ] `docs/plan/device-checks.md`: every entry except the `-android` rows ("not run: no device", never ticked and never cited by a coverage table) re-run on the final build and ticked (or failed with a linked plan edit that has since landed), including Tyler's play-test sign-off, with device model, OS version and date. The M39 section itself was run: M39-frame-shares and M39-large-save have their HUD numbers on the **Run on** line, and the budget ledger's phone Frame time and Tick time rows cite them.
-- [ ] The final batch of open Tyler items (possibly empty) is written for M39b.
-- [ ] `pnpm test` and `pnpm lint` are green.
+- [x] The final batch of open Tyler items (possibly empty) is written for M39b.
+- [x] `pnpm test` and `pnpm lint` are green.
 
 ## Verification commands
 `pnpm test` · `pnpm lint` · `pnpm test:slow` · `pnpm acceptance:check` · `pnpm test:timings` (M36b) · `gh run list --branch main --limit 1`
@@ -90,3 +90,5 @@ The whole of `docs/plan/device-checks.md`, re-run on the final build. [device-ch
 **CI gate fixes (2026-10-02, run 37062270078).** (1) `[gc] drawables neg burst main @slow` timed out at 90 s on CI (the gc burst controls ran 42-94 s there against ~2.7 s locally). Diagnosed by a Sonnet agent: the burst control's ~2,000 small objects per frame are each sampled (`SAMPLING_INTERVAL = 1`), so a burst window costs ~7x a clean one, multiplied by contention on the per-frame cross-thread rendezvous. Fix `67c2fb7`: the control allocates the same bytes in 4 arrays per frame; every `neg burst` control still trips its own isolate only (bytes/frame and MinorGC tables in the commit's report: ~40 KB/frame per isolate before and after); main-isolate burst measure phase 1970 → 1031 ms quiet, 3479 → 1370 ms under 100 `yes`; worker-isolate burst controls unchanged (rendezvous-bound). If CI still times out, the next remedy is fewer Playwright workers for the slow gc projects on CI (not a mask; the ledger's gc-headroom row). (2) The rerun failed `slow_apply_journal_overhead` (M39c's new 10% assertion): 10.9% on CI against -3..-6% on the Mac, noise over signal. The ratio now binds off CI only, like every bench gate (ADR 0047); the arena-growth assertion binds everywhere.
 
 **CI gate fix 3 (2026-10-04, run 37219559331).** A worker-isolate gc burst control timed out again after `67c2fb7`. The `gc` and `gc-reference` projects now run 2 workers on CI (`ENGINE_GPU=swiftshader`, per-project `workers`), so the per-frame rendezvous no longer competes with four other browsers on 4 vCPUs. No timeout, budget or control changed; local runs are unaffected.
+
+**Done (orchestrator, 2026-10-10).** Tyler walked the remaining device checks: hosted boot, two devices (Fly, `#k=` link), full game by touch and the play-test **sign-off**, the four desktop Mac browser rows, and on the iPhone M16-background, M23-world-busy, M23-private, M34-own-timer-bar, M23-export-import (judged by the orchestrator from the round log). His play found real defects that landed first: zoom opened at the limit and one gesture could cross the whole range (M39aj); pan reversed on release only on the stale Oct 2 deploy (fixed by M39i). His 2026-10-10 answers landed as M39ai. `pnpm test` (browser 258 in 46 s of 60), `pnpm lint` and `pnpm test:slow` green on Tyler's Mac (one slow `walk-cli` red, the live-checklist copy class of M39ad, fixed with the pristine copy and re-run green). `pnpm acceptance:check` reports only M29-socket-resume and M29-play-through-drop: the walk tool hung or lost its tunnel on them (ledger row "`device:walk` defects"); they are under Criteria awaiting Tyler with a command, and per the loop do not block. Fly destroyed at Tyler's request. Final Tyler batch for M39b: the two M29 rows, the Cloudflare `reference-server-do` subdomain, Q14b/Q17 (compile budget, informational).

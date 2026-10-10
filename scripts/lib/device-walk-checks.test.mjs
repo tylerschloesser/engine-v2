@@ -5,8 +5,10 @@ import { describe, expect, test } from 'vitest'
 import { CHECKS, evaluate, passHash, read, valuesAt, walkable } from './device-walk/checks.mjs'
 import { parseChecks } from './device-walk/parse.mjs'
 import { OVERRIDES, servingFor } from './device-walk/serving.mjs'
+import { readPristineChecks } from './device-walk/test-checks.mjs'
 
-const TEXT = readFileSync(new URL('../../docs/plan/device-checks.md', import.meta.url), 'utf8')
+// Pristine (M39ad): a live --apply round ticks rows and adds Run on lines this test must not depend on.
+const TEXT = readPristineChecks(new URL('../../docs/plan/device-checks.md', import.meta.url))
 const { items } = parseChecks(TEXT)
 const walked = items.filter((i) => !i.android && OVERRIDES[i.id]?.device !== 'none')
 const budgets = JSON.parse(

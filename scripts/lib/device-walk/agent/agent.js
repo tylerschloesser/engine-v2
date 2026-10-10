@@ -645,13 +645,15 @@
   let host = null
   let barState = null
   let measuring = false
+  // The bar can cover a page control fixed at the bottom (world.html's Export): "Move bar" flips it to the top.
+  let barTop = false
   function drawBar() {
     if (host) host.remove()
     host = null
     if (measuring || !barState) return
     host = document.createElement('div')
     host.id = 'walk-bar'
-    host.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:2147483647'
+    host.style.cssText = `position:fixed;left:0;right:0;${barTop ? 'top' : 'bottom'}:0;z-index:2147483647`
     const root = host.attachShadow({ mode: 'open' })
     const s = barState
     const btn = (label, fn, cls = '') => {
@@ -664,8 +666,7 @@
       }
       return b
     }
-    root.innerHTML =
-      '<style>.s{font:15px system-ui;background:#111c;color:#fff;padding:12px 14px calc(12px + env(safe-area-inset-bottom));border-top:1px solid #fff4;backdrop-filter:blur(8px)}button{font:inherit;margin:6px 6px 0 0;padding:8px 14px;border-radius:8px;border:1px solid #fff6;background:#334;color:#fff}input{font:inherit;width:100%;box-sizing:border-box;margin-top:6px;padding:6px}.d{opacity:.8;font-size:13px}</style><div class="s"></div>'
+    root.innerHTML = `<style>.s{font:15px system-ui;background:#111c;color:#fff;padding:${barTop ? 'calc(12px + env(safe-area-inset-top)) 14px 12px' : '12px 14px calc(12px + env(safe-area-inset-bottom))'};border-top:1px solid #fff4;backdrop-filter:blur(8px)}button{font:inherit;margin:6px 6px 0 0;padding:8px 14px;border-radius:8px;border:1px solid #fff6;background:#334;color:#fff}input{font:inherit;width:100%;box-sizing:border-box;margin-top:6px;padding:6px}.d{opacity:.8;font-size:13px}</style><div class="s"></div>`
     const box = root.querySelector('.s')
     const p = document.createElement('div')
     p.textContent = s.text
@@ -701,6 +702,10 @@
     box.append(
       btn('Redo previous', () => send('redo', { id: s.id, n: s.n })),
       btn('Pause', () => send('pause', { id: s.id, n: s.n })),
+      btn(barTop ? 'Move bar down' : 'Move bar up', () => {
+        barTop = !barTop
+        drawBar()
+      }),
     )
     document.body.append(host)
   }

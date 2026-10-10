@@ -10,8 +10,10 @@ import { browserOf, createAutoRound } from './device-walk/auto-round.mjs'
 import { CHECKS, evaluate } from './device-walk/checks.mjs'
 import { parseChecks } from './device-walk/parse.mjs'
 import { appendEvent, readEvents, replay } from './device-walk/rounds.mjs'
+import { readPristineChecks } from './device-walk/test-checks.mjs'
 
-const text = readFileSync(new URL('../../docs/plan/device-checks.md', import.meta.url), 'utf8')
+// Pristine (M39ad): a live --apply round ticks rows and adds Run on lines this test must not depend on.
+const text = readPristineChecks(new URL('../../docs/plan/device-checks.md', import.meta.url))
 const { items } = parseChecks(text)
 
 function rig(ids, extra = {}) {
