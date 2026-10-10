@@ -49,7 +49,7 @@ test('reference_new_player_spawns_on_land', async ({ page }) => {
   // still read its own default `(0, 0)` (3 of about 57 full-suite runs at M30). Step one frame per
   // poll until the camera reads the spawn tile instead, bounded by the poll timeout. A missing
   // `moveTo` or a broken spawn search still fails: the camera never reaches `(-0.5, -0.5)`.
-  const expected = { x: ALT_SPAWN_TILE.x + 0.5, y: ALT_SPAWN_TILE.y + 0.5, tilesAcross: 12 }
+  const expected = { x: ALT_SPAWN_TILE.x + 0.5, y: ALT_SPAWN_TILE.y + 0.5, tilesAcross: 32 } // the engine's fresh-camera default (M39aj: was 12, the zoom-in limit)
   await expect
     .poll(
       () =>

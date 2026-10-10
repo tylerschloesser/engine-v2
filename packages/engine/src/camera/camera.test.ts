@@ -559,3 +559,10 @@ test('camera: release applies the movement since the last frame', () => {
   const glide = (0.325 * v * (1 - Math.exp(-16 / 325))) / ppt
   expect(50 - state.centreX).toBeCloseTo(60 / ppt + glide, 3)
 })
+
+test('camera: fresh camera opens mid-range', () => {
+  const state = new CameraState()
+  expect(state.tilesAcross).toBe(32)
+  expect(state.tilesAcross).toBeGreaterThan(DEFAULT_MIN_TILES)
+  expect(state.tilesAcross).toBeLessThan(DEFAULT_MAX_TILES)
+})

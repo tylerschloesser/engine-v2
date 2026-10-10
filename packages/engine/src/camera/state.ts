@@ -4,12 +4,16 @@
 // by convention even though the fields themselves are plain `number`s. Not restricted by
 // `sab.no_alloc_syntax` (only `camera/block.ts` is): this is an ordinary data object, constructed
 // once by its owner and mutated every frame.
+/** A fresh camera's `tilesAcross`: inside `[DEFAULT_MIN_TILES, DEFAULT_MAX_TILES]` (docs/plan/39aj-zoom-feel.md). */
+export const DEFAULT_TILES_ACROSS = 32
+
 export class CameraState {
   centreX = 0
   centreY = 0
   velocityX = 0
   velocityY = 0
-  tilesAcross = 12
+  /** Opens mid-range (M39aj): 12 is `DEFAULT_MIN_TILES`, so a camera at 12 starts at the zoom-in limit. */
+  tilesAcross = DEFAULT_TILES_ACROSS
   zoomRate = 0
   halfExtentTilesX = 0
   halfExtentTilesY = 0

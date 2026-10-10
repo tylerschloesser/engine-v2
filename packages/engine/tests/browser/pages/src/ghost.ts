@@ -98,6 +98,8 @@ const client: Client = createClient({
   genWorkers: 1,
   test: { clock, flags: {} },
 } satisfies ClientOptions)
+// M39aj: the engine's fresh camera opens at 32 tiles across; this page's tests are written for 12.
+client.camera.moveTo(0, 0, { tiles: 12, durationMs: 0 })
 attachCameraInputTestHooks(client, clientTestHandle(client).cameraBundle)
 
 window.__ready = async () => {
