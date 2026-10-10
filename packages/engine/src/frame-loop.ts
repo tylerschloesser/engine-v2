@@ -27,8 +27,7 @@ import {
 import { FLAG_REBASE } from './sab/control.js'
 import { RingConsumer } from './sab/ring.js'
 
-/** Named, in call order (Seams, Provides: "`FrameLoop` phases by name"). docs/plan/
- * 18-picking-and-overlay.md Scope, step 1: `acquire` is the new first phase -- takes the newest
+/** Named, in call order (Seams, Provides: "`FrameLoop` phases by name"). M18 Scope, step 1: `acquire` is the new first phase -- takes the newest
  * DrawList slot once (`Client.pick.acquire()`, `render/drawlist-slot.ts`'s own `DrawListSlot`), so
  * `camera` (follow, a later step), picking, `overlay` and `render` all read the same slot for the
  * rest of this `tick()`. */

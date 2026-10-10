@@ -2,8 +2,8 @@
 // `Ui.in_range` entry, anchored over its tile; a click dispatches `StartCollect`; while
 // `Ui.collecting` names this button's own tile it fills over the collect duration and every other
 // button disables; a button whose tile drops out of `in_range` while it is the collecting one gets
-// `CancelCollect` sent once ("panning out of range cancels a collect", `docs/spec/
-// reference-game.md`); a rejected `StartCollect` flashes its own button with the reject reason as a
+// `CancelCollect` sent once ("panning out of range cancels a collect", `games/reference/
+// README.md`); a rejected `StartCollect` flashes its own button with the reject reason as a
 // CSS class.
 //
 // DOM identity (Deviations, reused by later steps/milestones): a button carries `data-collect-tile

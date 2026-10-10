@@ -1,6 +1,6 @@
 //! `engine::noise` (docs/decisions/0008-chunk-generation.md §1; Planning decisions 1 of
 //! M08: optional, unprivileged f64 simplex noise and fBm a
-//! game's `Worldgen` impl may use. Ported from `spikes/determinism-hash/src/lib.rs`'s f64
+//! game's `Worldgen` impl may use. Ported from the Phase 1 `determinism-hash` spike's f64
 //! instance (`noise64`); the f32 instance is not carried over -- 0008 §1 requires f64 (or an
 //! integer lattice coordinate plus a float fraction) for worldgen noise coordinates, and the spike
 //! measured no speed difference. Octaves, frequencies, thresholds, biomes and scatter stay the
@@ -23,7 +23,7 @@ const GRAD: [(f64, f64); 8] = [
     (0.0, -1.0),
 ];
 
-/// 32-bit lattice hash for gradient selection (`spikes/determinism-hash`): integer ops only.
+/// 32-bit lattice hash for gradient selection (Phase 1 `determinism-hash` spike): integer ops only.
 #[inline]
 fn lattice_hash(seed: u32, x: i32, y: i32) -> u32 {
     let mut h = seed ^ (x as u32).wrapping_mul(0x27d4_eb2d) ^ (y as u32).wrapping_mul(0x1656_67b1);

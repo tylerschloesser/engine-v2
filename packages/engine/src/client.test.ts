@@ -336,8 +336,7 @@ test('onui_fires_before_action_results', async () => {
   client.onActionResult(() => order.push('result'))
 
   // The kind-2 record precedes the kind-1 one in the raw ring bytes (the reverse of the order
-  // `game_instance::GameInstance::on_frame` actually produces, docs/plan/
-  // 16b-ui-observation-and-clock.md Deviations "Delivery order") -- proving the drain's own
+  // `game_instance::GameInstance::on_frame` actually produces, M16b Deviations "Delivery order") -- proving the drain's own
   // delivery-order rule ("onUi then results", Provides) holds independent of byte order, since a
   // real drain always sees the Rust-side order anyway; this is the stronger claim.
   pushUiBatch(h.sabs.uiRing, [

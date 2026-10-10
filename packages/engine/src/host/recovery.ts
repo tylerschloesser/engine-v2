@@ -8,8 +8,7 @@ import { RegionId } from '../abi.js'
 import { type EngineInstance, EngineTrap } from '../loader.js'
 import type { Persistence } from './persistence.js'
 
-/** Mirrors `persist::progress::Phase` (Rust), in this exact numeric order (docs/plan/
- * 24-recovery-and-migration.md Seams): read, never written, from TS. */
+/** Mirrors `persist::progress::Phase` (Rust), in this exact numeric order (M24 Seams): read, never written, from TS. */
 export const Phase = {
   Idle: 0,
   Admit: 1,
@@ -79,8 +78,7 @@ export type RecoveryOutcome =
   | { kind: 'ok'; sim: EngineInstance; tick: number; skipped: number }
   | { kind: 'fatal'; tick: number; message: string }
 
-/** A safety backstop only, never expected to bind in practice (docs/plan/
- * 24-recovery-and-migration.md): each successful `appendSkip` makes forward progress, since the
+/** A safety backstop only, never expected to bind in practice (M24): each successful `appendSkip` makes forward progress, since the
  * newly-appended `Skip` frame is itself part of the segment tail the *next* attempt's own scan pass
  * sees (the same byte offset can never be re-skipped) -- this exists only so a defect elsewhere
  * cannot spin this loop forever. */

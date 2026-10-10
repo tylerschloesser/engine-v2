@@ -225,8 +225,7 @@ impl Instance for FixtureTerrain {
                 // M11 Seams originally had this fixture clear
                 // `InputQueue` here, unconditionally, every call ("cleared at the end of each
                 // `frame`") -- harmless while nothing read the queue's contents from anywhere near
-                // `frame()` (`FrameCx::input` was M18, Non-scope at the time). docs/plan/
-                // 18-picking-and-overlay.md gate round 1 changed `worker/client.ts`'s own `body()`
+                // `frame()` (`FrameCx::input` was M18, Non-scope at the time). M18 gate round 1 changed `worker/client.ts`'s own `body()`
                 // to drain `inputRing` into this queue *before* calling `frame()`, in the same wake
                 // (so `GameInstance<G>::frame`'s real `cx.input()` sees this wake's own events, not
                 // one wake late) -- with that reorder, clearing here unconditionally would erase

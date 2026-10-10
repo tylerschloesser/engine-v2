@@ -9,7 +9,7 @@ import { openPage } from './support/page.ts'
 
 zeroGcSuite({ pageId: 'gc-loop', path: '/gc-loop.html' })
 
-// 0016's Consequences / PRE-PLAN.md risk 11: `Target.sendMessageToTarget` is deprecated; this proves
+// 0016's Consequences: `Target.sendMessageToTarget` is deprecated; this proves
 // `cdp-flat.ts`'s replacement reads the same bytes, so the day Chrome removes it the fix is flipping
 // `instrument.ts`'s default transport, not writing a transport under a red suite (Planning decisions
 // "CDP transport: both, behind one interface").

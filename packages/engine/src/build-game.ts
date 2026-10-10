@@ -325,8 +325,7 @@ export const BINDINGS_CARGO_ARGS = ['test', '--workspace', '--color', 'never', '
  * runs zero matching tests and copies nothing (`cargo test`'s own behaviour for a name filter that
  * matches no test).
  *
- * Runs plain `cargo test --workspace ... export_bindings` with *no* env override (docs/plan/
- * 17d-fast-tier-wall-time.md step 2, measured with
+ * Runs plain `cargo test --workspace ... export_bindings` with *no* env override (M17d step 2, measured with
  * `CARGO_LOG=cargo::core::compiler::fingerprint=info`): a single-package `cargo test -p <crate>`
  * -- with or without a `TS_RS_EXPORT_DIR` override, that made no difference -- resolves a
  * different fingerprint for the crate's own `serde` dependency edge than `cargo nextest run

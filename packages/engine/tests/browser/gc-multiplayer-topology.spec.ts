@@ -1,5 +1,4 @@
-// `gc/multiplayer-topology` + `gc/net-negative-control` (docs/plan/
-// 29-net-worker-and-reference-server.md, this cut's own step 5): a real `createClient()`
+// `gc/multiplayer-topology` + `gc/net-negative-control` (M29, this cut's own step 5): a real `createClient()`
 // multiplayer topology (`host: { kind: 'remote' }` -- client + gen0 + net, no sim worker) over a
 // real loopback `ws` socket, `zeroGcSuite`-generated exactly like every other production-topology
 // gc page, plus this brief's own hand-built control.

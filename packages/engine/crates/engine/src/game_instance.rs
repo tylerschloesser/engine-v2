@@ -45,8 +45,7 @@ const ACTION_RX_BYTES: usize = 1024;
 /// later milestone's (M16b's `onUi` shares this region as record kind 1). Not an enforced
 /// per-record cap -- `client_poll_ui`'s own doc comment covers the one record that exceeds it.
 const UI_BYTES: u32 = (crate::client::OUTBOX_CAPACITY * 128) as u32;
-/// `RegionId::Downlink`'s size on the client role (docs/plan/
-/// 15b-ring-connection-and-replica-rendering.md): must hold the largest frame `host::Host::
+/// `RegionId::Downlink`'s size on the client role (M15b): must hold the largest frame `host::Host::
 /// build_frame` can ever produce, matching `host::mod`'s own `SIM_TX_BYTES` -- duplicated here
 /// (that constant is private to `host::mod`) rather than shared, since keeping the two in step is
 /// already `host::mod`'s own Deviations to track, not a value either role's `Instance` reads from
@@ -127,8 +126,7 @@ fn push_lost_record(buf: &mut Vec<u8>, seq: u32) {
 
 /// `TILE_MIN as f64`/`TILE_MAX as f64`'s own floor/clamp, shared by `frame()`'s window-origin and
 /// visible-rect maths below (`view::visible_rect`'s own private `clamp_tile_axis` is not `pub`, and
-/// duplicating a two-line floor+clamp is cheaper than exporting it, docs/plan/
-/// 17-drawlist-and-sprites.md Deviations).
+/// duplicating a two-line floor+clamp is cheaper than exporting it, M17 Deviations).
 fn clamp_floor_tile_axis(v: f64) -> i32 {
     v.floor().clamp(TILE_MIN as f64, TILE_MAX as f64) as i32
 }
@@ -280,13 +278,10 @@ fn installed_world<P: serde::Serialize + serde::de::DeserializeOwned>(
     }
 }
 
-/// The client-role instance (M13 Scope, extended by docs/plan/
-/// 15b-ring-connection-and-replica-rendering.md): a [`ClientCore<G>`] (whose [`crate::client::
+/// The client-role instance (M13 Scope, extended by M15b): a [`ClientCore<G>`] (whose [`crate::client::
 /// Replica<G>`] owns the one `TerrainStore` over `Pristine<G::Worldgen>` this instance has), the
-/// `TerrainFeed` that turns cache misses into `genRequest`/`genResult` traffic (docs/plan/
-/// 08b-gen-workers-and-queue.md), the `Uploader` that turns residency into upload-ring records
-/// (M09, and the `InputQueue` `on_input` decodes into (docs/plan/
-/// 11-camera-and-input.md). Before 15b, this held its own standalone `TerrainStore` alongside a
+/// `TerrainFeed` that turns cache misses into `genRequest`/`genResult` traffic (M08b), the `Uploader` that turns residency into upload-ring records
+/// (M09, and the `InputQueue` `on_input` decodes into (M11). Before 15b, this held its own standalone `TerrainStore` alongside a
 /// nonexistent replica; 15b merges the two (Deviations: "one client-role terrain store, not two")
 /// since `TerrainFeed`/`Uploader` only ever need `&TerrainStore`/`&mut TerrainStore`, which
 /// `ClientCore::replica()`/`replica_mut()` now supply via `Replica::terrain()`/`terrain_mut()`.
@@ -460,8 +455,7 @@ impl<G: Game> Instance for GameInstance<G>
 where
     G::Global: Default,
 {
-    // M19 step 2 (Deviations, carrying forward docs/plan/
-    // 18-picking-and-overlay.md steps 4-6's own note): M18 added a `G::Presence: Default`
+    // M19 step 2 (Deviations, carrying forward M18 steps 4-6's own note): M18 added a `G::Presence: Default`
     // where-clause here to construct `frame()`'s scratch value, since `Presence`'s own supertraits
     // (M12) did not include `Default` yet. 0024 §6 now puts `Default` directly on `Presence` itself
     // (`crate::presence::Presence: Codec + Copy + Default + 'static`), and `Game::type Presence:
@@ -1146,8 +1140,7 @@ where
                         // the `ui` call policy runs *here*, right after this frame's own mutation
                         // has landed on the replica and *before* this same frame's own results are
                         // pushed below -- not in `frame(t_ms)` (a separate ABI export the client
-                        // worker calls *before* draining the downlink, docs/plan/
-                        // 15b-ring-connection-and-replica-rendering.md), which would only ever see
+                        // worker calls *before* draining the downlink, M15b), which would only ever see
                         // this mutation on the *next* wake. This guarantees a kind-1 record for
                         // this frame's own state precedes this frame's own kind-2 result records in
                         // `ui_buf`, satisfying "a result handler sees current state" (M16 brief,

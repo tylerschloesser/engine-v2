@@ -153,8 +153,7 @@ export const ABI_EXPORTS = {
   // for a real `Game`). M22b adds the load-from-storage path.
   sim_genesis: { role: 'sim', params: 0, result: 'status' },
   // M13: write-ahead log bytes for the frame about to be applied
-  // (0024 §1), written into `RegionId.Persist`. Real since docs/plan/
-  // 22-persistence-log-and-snapshots.md steps 4-6 (0 = nothing to log this tick).
+  // (0024 §1), written into `RegionId.Persist`. Real since M22 steps 4-6 (0 = nothing to log this tick).
   sim_seal_frame: { role: 'sim', params: 0, result: 'len' },
   // M13: generates at most one uncached chunk from the warm list
   // (`host::warm`), nearest-to-view-centre first. `1`/`0` (not a `Status`: costs nothing, always

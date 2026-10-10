@@ -1,5 +1,4 @@
-//! Native "through the C ABI" smoke test for M15b step 1 (docs/plan/
-//! 15b-ring-connection-and-replica-rendering.md): drives the real, macro-generated ABI surface
+//! Native "through the C ABI" smoke test for M15b step 1 (M15b): drives the real, macro-generated ABI surface
 //! (`engine::abi`'s generic functions -- the same bodies `export_instance!`'s `extern "C"`
 //! wrappers each forward to, one line -- see `abi::registry::export_instance!`) against
 //! `GameInstance<Puts>`, proving a whole connection lifecycle round-trips: `sim_connect` ->

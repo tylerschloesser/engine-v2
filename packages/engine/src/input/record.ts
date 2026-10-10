@@ -1,5 +1,4 @@
-// The `inputRing` wire record (docs/decisions/0019-camera-input-and-overlay.md §4; docs/plan/
-// 11-camera-and-input.md Seams, `inputRing` record: 32 bytes, little-endian, one per recognized
+// The `inputRing` wire record (docs/decisions/0019-camera-input-and-overlay.md §4; M11 Seams, `inputRing` record: 32 bytes, little-endian, one per recognized
 // semantic event). `writeInputRecord` is the single encoder both `input/semantic.ts`'s ring
 // producer and this file's own golden test go through -- pure, allocation-free (`.claude/rules/
 // hot-paths.md`: this runs on the semantic-recognition path, once per emitted event, which is

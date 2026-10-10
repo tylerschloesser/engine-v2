@@ -1,5 +1,4 @@
-// `terrain-client.html`: the real-client host for `terrain-readback.spec.ts` (docs/plan/
-// 09-renderer-terrain.md, step 5). Unlike `terrain.ts` (steps 2-4: hand-filled page/indirection
+// `terrain-client.html`: the real-client host for `terrain-readback.spec.ts` (M09, step 5). Unlike `terrain.ts` (steps 2-4: hand-filled page/indirection
 // textures, no worker), this page runs a real `createClient()` over `fx-terrain` (Gen + Client
 // roles) so `probe_tile_colours`/`nonresident_is_neutral`/`patch_one_texel`/
 // `upload_budget_while_panning` exercise the whole worker -> ring -> drain data path.

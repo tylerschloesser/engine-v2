@@ -1,5 +1,4 @@
-// Readable start-up errors (docs/decisions/0015-threads-memory-and-topology.md §3; docs/plan/
-// 06b-workers-and-spawn.md, Tests added). `not_isolated_error`/`worker_blocked_error` navigate to
+// Readable start-up errors (docs/decisions/0015-threads-memory-and-topology.md §3; M06b, Tests added). `not_isolated_error`/`worker_blocked_error` navigate to
 // routes `fixturesPlugin()` adds under `tests/browser/pages/` (Deviations: `/__no-isolation__/*`
 // serves a built page with no COOP/COEP at all; `/__no-coep-worker__.js` serves the built worker
 // script with COOP but no COEP), since `vite preview`'s normal routes always carry both (0015 §3).

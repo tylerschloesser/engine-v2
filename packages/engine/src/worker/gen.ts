@@ -2,8 +2,7 @@
 // `genRequest[i]` ring, calls `gen_chunk`, and produces a `genResult[i]` record back to the client
 // (whose `W_WAKE` the result producer is constructed with, so a finished chunk wakes the client,
 // Planning decisions 2). `W_ACK` is still stored on every real wake regardless of `gcHook` (a plain
-// `Atomics.store`, allocation-free, after any job work that pass): docs/plan/
-// 06b-workers-and-spawn.md, Notes for later briefs, and this milestone's own orchestrator decision
+// `Atomics.store`, allocation-free, after any job work that pass): M06b, Notes for later briefs, and this milestone's own orchestrator decision
 // ("`W_ACK` on a gen worker keeps M06b's meaning, not 'jobs finished'"). Finished jobs are counted
 // where they are consumed: `GenStats.delivered` through `client_gen_stats`, and the ring's own
 // `pushed`/`popped` counters.

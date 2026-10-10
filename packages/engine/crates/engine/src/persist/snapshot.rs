@@ -318,8 +318,7 @@ impl UpgradeReader {
 /// The other half of [`SnapshotWriter`]: a resumable, block-split-tolerant reader that decodes
 /// into a caller-supplied, already-constructed empty `Store<G>` shell (correct terrain pristine
 /// source/dims/cache capacity, exactly what `Store::decode` already requires -- see its own doc
-/// comment). Reconstructing a whole stored world from this is Non-scope (docs/plan/
-/// 22-persistence-log-and-snapshots.md Non-scope: "loading a stored world ... M22b"); this is the
+/// comment). Reconstructing a whole stored world from this is Non-scope (M22 Non-scope: "loading a stored world ... M22b"); this is the
 /// container-level round trip only, used natively by `testing::replay`/`testing::heavy` and by
 /// this module's own tests.
 pub struct SnapshotReader<G: Game> {

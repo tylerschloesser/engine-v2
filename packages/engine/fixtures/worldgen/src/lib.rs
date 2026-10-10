@@ -1,7 +1,7 @@
 //! Fixture game `worldgen`: a `Worldgen` impl in the `gen` role only, benchmark-representative
 //! (Planning decisions 5 of M08 -- five-octave height,
 //! three-octave moisture, a scatter hash for resources -- the spike's shape
-//! (`spikes/determinism-hash`), so `worldgen-bench`'s number is comparable with 0008 §6.
+//! (Phase 1 `determinism-hash` spike), so `worldgen-bench`'s number is comparable with 0008 §6.
 //!
 //! Float bits reach the golden through the tile (Planning decisions 3): the low 16 mantissa bits
 //! of the height sample are packed into `aux`, so last-bit drift changes tile bytes, not just a
@@ -32,8 +32,7 @@ pub struct FixtureGen {
     role: FixtureRole,
 }
 
-/// Gen-role: `GenCore` wraps `Worldgen::generate` (M08). Client-role (docs/plan/
-/// 08b-gen-workers-and-queue.md): a `TerrainStore` over `Pristine<FixtureGen>` plus the
+/// Gen-role: `GenCore` wraps `Worldgen::generate` (M08). Client-role (M08b): a `TerrainStore` over `Pristine<FixtureGen>` plus the
 /// `TerrainFeed` that drives its generation queue -- the worldgen fixture for gen workers and the
 /// client pristine-cache feed (CLAUDE.md).
 enum FixtureRole {

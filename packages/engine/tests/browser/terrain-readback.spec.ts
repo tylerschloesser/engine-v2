@@ -726,8 +726,7 @@ async function stageDitherScene(
 // texels_per_px === 1 (fully magnified, fade === 1): the band=2 dithering zone spans art texels 2
 // and 3 (dist_right 1 and 0); texels 0 and 1 (dist_right 3 and 2) are outside it.
 const DITHER_TILES_PER_PX = 1 / ART_SIZE
-// Tiles 31/32 straddle the chunk (0,0)/(1,0) border (`CHUNK_BITS === 5`, docs/plan/
-// 09-renderer-terrain.md Planning decisions), matching `stageDitherScene`'s own chunk-index
+// Tiles 31/32 straddle the chunk (0,0)/(1,0) border (`CHUNK_BITS === 5`, M09 Planning decisions), matching `stageDitherScene`'s own chunk-index
 // indirection entries (`x: 0`/`x: 1`) -- an adjacent-tile *within* one chunk (e.g. tiles 0/1) would
 // never reach the neighbouring chunk's own staged visual at all.
 const SELF_TILE_X = 31

@@ -154,8 +154,7 @@ test('dead_instance_memory_still_readable', () => {
   const view = new DataView(progress.u8.buffer, progress.u8.byteOffset, progress.u8.byteLength)
   const phase = view.getUint32(0, true)
   const tick = view.getUint32(4, true)
-  // `Phase::ApplyRecord = 2` (`persist::progress::Phase`, docs/plan/
-  // 24-recovery-and-migration.md Seams): `PanicInApply` traps mid-`Game::apply`, so the last
+  // `Phase::ApplyRecord = 2` (`persist::progress::Phase`, M24 Seams): `PanicInApply` traps mid-`Game::apply`, so the last
   // write before the trap names that phase, at the tick the frame was applied for.
   expect(phase).toBe(2)
   expect(tick).toBe(0) // `completed = sim.tick()` read *before* `advance_tick()`: the tick 0 -> 1

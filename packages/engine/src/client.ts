@@ -230,8 +230,7 @@ export interface ClientOptions {
    * game passes its world id, so each world keeps its own camera). `camera/persistence.ts`'s
    * `cameraStorageKey` turns this into the actual key; omitted means `'default'`. */
   cameraKey?: string
-  /** M09, Seams (Provides): URL of `tiles.json`; `sprites` (docs/plan/
-   * 17b-sprites-and-frame-budget.md Seams, Provides) is URL of `sprites.json`. Not read by
+  /** M09, Seams (Provides): URL of `tiles.json`; `sprites` (M17b Seams, Provides) is URL of `sprites.json`. Not read by
    * `createClient` itself -- rendering is main-thread-only and owns no WASM instance (0018 §1) --
    * kept here so a caller's one `ClientOptions` object is also what it hands `render/art.ts`'s
    * `loadTileArt`/`render/atlas.ts`'s `loadSpriteAtlas`, instead of a second, separately-threaded
@@ -1067,7 +1066,7 @@ export function wsUrl(location: { protocol: string; host: string }): string {
   return `${scheme}://${location.host}/ws`
 }
 
-/** `createClient` is synchronous (PRE-PLAN §4); spawn itself is asynchronous, tracked by
+/** `createClient` is synchronous ; spawn itself is asynchronous, tracked by
  * `client.ready`. */
 export function createClient(options: ClientOptions): Client {
   // Checked first, synchronously, before anything below touches `SharedArrayBuffer`

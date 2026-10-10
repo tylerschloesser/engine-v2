@@ -1,5 +1,4 @@
-// DrawList renderer (docs/decisions/0018-renderer.md §2, §4 "Shapes need no art"; docs/plan/
-// 17-drawlist-and-sprites.md Scope, steps 4-6; M17b Scope, steps
+// DrawList renderer (docs/decisions/0018-renderer.md §2, §4 "Shapes need no art"; M17 Scope, steps 4-6; M17b Scope, steps
 // 1-3): `acquire()` the newest `drawList` triple-buffer slot, one `queue.writeBuffer(instanceBuf, 0,
 // slotView, 0, usedBytes)`, then one instanced `draw(6, n, 0, first)` per non-empty layer through the
 // uber-quad pipeline (`wgsl/uberquad.wgsl`) -- every kind including sprite (M17b: the atlas + two
@@ -161,8 +160,7 @@ export interface DrawablesRenderer {
    * `render/drawlist-slot.ts`) currently holds and does the one `writeBuffer` (Scope). This renderer
    * never pulls a new slot itself -- M18's own `acquire` phase
    * (`Client.pick.acquire()`) is the *one* place that ever calls `TripleReader.acquire()` over
-   * `drawList`; a second independent reader here would tear the triple-buffer handoff (docs/plan/
-   * 17-drawlist-and-sprites.md Deviations, "Two-reader torn read", now a real defect this milestone's
+   * `drawList`; a second independent reader here would tear the triple-buffer handoff (M17 Deviations, "Two-reader torn read", now a real defect this milestone's
    * gate round 1 found live in production: `gc-drawables`/`frame-bench`/`device.html?harness=1` all
    * built their own second reader through the old `drawListSab` option). A no-op when `drawListSlot`
    * was not given (a renderer built for a probe scene that only ever calls `acquireFromBytes`,
@@ -217,8 +215,7 @@ export interface DrawablesRenderer {
    * frame have issued". */
   nonEmptyLayerCount(): number
   /** Installs a loaded sprite atlas (`render/atlas.ts`'s `loadSpriteAtlas`): swaps the atlas + two
-   * sprite data textures into this renderer's one bind group (docs/plan/
-   * 17b-sprites-and-frame-budget.md Planning decisions "Sprite table in data textures") and updates
+   * sprite data textures into this renderer's one bind group (M17b Planning decisions "Sprite table in data textures") and updates
    * `gpuBytes()`. Before the first call, the sprite kind reads a tiny placeholder (never referenced
    * by a real `sprite_id` until a manifest is loaded) -- the same "placeholder, then install" shape
    * `TerrainRenderer.setTileArray` already uses. */

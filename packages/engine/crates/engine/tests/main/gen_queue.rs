@@ -1,5 +1,4 @@
-//! `GenQueue` (docs/decisions/0008-chunk-generation.md §4-5; `docs/plan/
-//! 08b-gen-workers-and-queue.md` Tests added), through its public API only.
+//! `GenQueue` (docs/decisions/0008-chunk-generation.md §4-5; `M08b` Tests added), through its public API only.
 
 use engine::gen_queue::{GenQueue, GenView};
 use engine::view;
@@ -267,8 +266,7 @@ fn set_view_reaches_quiescence_under_lru_capacity_churn() {
     );
 }
 
-/// M15c step 1's reproducer, native and browser-free (docs/plan/
-/// 15c-terrain-visibility-and-cache-invalidation.md "The bug, confirmed at M15b's gate"): a chunk
+/// M15c step 1's reproducer, native and browser-free (M15c "The bug, confirmed at M15b's gate"): a chunk
 /// the client has already pristine-generated (here, `TerrainStore::materialize`, the same effect
 /// `TerrainFeed::deliver` -> `insert_pristine` has once a gen worker's result lands), then
 /// receives a host snapshot for (`Replica::apply_snapshot_overlay` -> `TerrainStore::

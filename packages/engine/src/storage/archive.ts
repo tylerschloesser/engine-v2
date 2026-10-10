@@ -1,5 +1,4 @@
-// World archive: `exportWorld`/`importWorld`/`deleteWorld` (docs/plan/
-// 23-persistence-opfs-and-lifecycle.md step 5, Seams "Provides"): plain functions over any `Storage`
+// World archive: `exportWorld`/`importWorld`/`deleteWorld` (M23 step 5, Seams "Provides"): plain functions over any `Storage`
 // (usable by a server, `engine/server`, and by the sim worker's own request handler,
 // `worker/sim.ts`). No DOM here (`gzip`/`gunzip` use the Streams-API `CompressionStream`/
 // `DecompressionStream`, available in every runtime this engine targets -- browsers and Node >=22,

@@ -1,6 +1,5 @@
-//! `StartCollect`/`CancelCollect` and the tick rule that completes them (docs/plan/
-//! 20-reference-game-v0.md Scope). [`in_range`] is a Provides seam shared with M20b's own button
-//! logic (`docs/spec/reference-game.md`: "a collect button appears ... when a player is within 3
+//! `StartCollect`/`CancelCollect` and the tick rule that completes them (M20 Scope). [`in_range`] is a Provides seam shared with M20b's own button
+//! logic (`games/reference/README.md`: "a collect button appears ... when a player is within 3
 //! tiles").
 //!
 //! **Collects are not reservations** (Planning decisions): `apply` never claims a resource, only

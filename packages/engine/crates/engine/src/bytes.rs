@@ -127,8 +127,7 @@ impl<'a> ByteReader<'a> {
         ByteReader { buf, pos: 0 }
     }
 
-    /// Bytes consumed so far, relative to `buf`'s own start (docs/plan/
-    /// 24-recovery-and-migration.md: `FrameReader` uses this to report each record's own byte
+    /// Bytes consumed so far, relative to `buf`'s own start (M24: `FrameReader` uses this to report each record's own byte
     /// offset within a decoded frame's body, for 0005's `Skip { segment, offset }`).
     pub fn pos(&self) -> usize {
         self.pos

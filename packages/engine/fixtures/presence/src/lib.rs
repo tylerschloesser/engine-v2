@@ -1,5 +1,5 @@
 //! Fixture game `fx-presence` (M19, steps 1-3): the presence-channel
-//! fixture 0001 asks for (`docs/spec/reference-game.md`: "Player position is presence, not world
+//! fixture 0001 asks for (`games/reference/README.md`: "Player position is presence, not world
 //! state"; 0001 "Witness-carrying actions"). `Presence = { pos, vel }`, 12 bytes, the exact shape
 //! ADR 0001's own "reference game" example gives (`PlayerPresence { pos: [i32; 2] /* Q24.8 */, vel:
 //! [i16; 2] }`); `Action::Poke { tile, from }` is the witness-carrying action 0001's own
@@ -106,8 +106,7 @@ fn within(dist: i64, tiles: i64) -> bool {
 
 /// One witness-carrying action (0001 Decision): `from` is the client's own presence position when
 /// it pressed the button, copied into the action so `apply` can re-check it without reading
-/// non-sim state (0001 "Witness-carrying actions"). `#[ts(export)]` (docs/plan/
-/// 16-action-round-trip.md step 4): without it ts-rs's derive macro emits no `export_bindings_*`
+/// non-sim state (0001 "Witness-carrying actions"). `#[ts(export)]` (M16 step 4): without it ts-rs's derive macro emits no `export_bindings_*`
 /// test at all.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
@@ -140,8 +139,7 @@ impl From<Unknown> for Reject {
 }
 
 /// Private per-player state: how many `Poke`s this player has had applied, and the last tile
-/// poked -- just enough for a test to observe that `apply` actually ran (docs/plan/
-/// 19-presence-channel.md Tests added: `apply_range_is_replayable`/`presence_is_not_state` compare
+/// poked -- just enough for a test to observe that `apply` actually ran (M19 Tests added: `apply_range_is_replayable`/`presence_is_not_state` compare
 /// state hashes, which fold this in).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Player {

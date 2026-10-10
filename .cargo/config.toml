@@ -1,8 +1,7 @@
 # Repo-wide cargo config (applies to every `cargo`/`cargo nextest` invocation whose CWD is under
 # this tree, `.cargo/config.toml`'s own ancestor-directory discovery).
 [env]
-# ts-rs's bindings step (docs/decisions/0017-packaging-and-build.md §5; docs/plan/
-# 16-action-round-trip.md step 4). `TS_RS_IMPORT_EXTENSION = "js"` matches this repo's `nodenext`
+# ts-rs's bindings step (docs/decisions/0017-packaging-and-build.md §5; M16 step 4). `TS_RS_IMPORT_EXTENSION = "js"` matches this repo's `nodenext`
 # module resolution (`packages/engine/CLAUDE.md`: "Relative imports carry the `.js` extension");
 # without it ts-rs emits no extension at all and `tsc` fails.
 #

@@ -1,6 +1,6 @@
 //! `predict_alloc` (M25 Tests added; 0012 Decision, "Measured: 0
-//! allocations over 190 frames x 4 pending actions"): ported from `spikes/prediction-api/game/
-//! tests/alloc.rs`, driven against the real `Host<Predict>`/`ClientCore<Predict>` instead of the
+//! allocations over 190 frames x 4 pending actions"): ported from the Phase 1 `prediction-api`
+//! spike's `game/tests/alloc.rs`, driven against the real `Host<Predict>`/`ClientCore<Predict>` instead of the
 //! spike's own harness. No `#[global_allocator]` here (unlike the spike, and unlike this crate's
 //! own `no_alloc_*` binaries in `crates/engine/tests/`): `fx_predict::export_game!` already installs
 //! `engine::abi::Arena` (needed for the crate's own `cdylib`/`.wasm` target), and that declaration

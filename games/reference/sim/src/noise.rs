@@ -12,8 +12,8 @@
 use engine::noise::fbm2;
 
 /// XORed into the moisture channel's seed so height and moisture read independent fields, not the
-/// same noise at half frequency (`fx-worldgen`'s own precedent, ported from `spikes/
-/// determinism-hash`).
+/// same noise at half frequency (`fx-worldgen`'s own precedent, ported from the Phase 1
+/// `determinism-hash` spike).
 const MOISTURE_SEED_XOR: u32 = 0x5bd1_e995;
 
 /// Height channel: `octaves`-octave fBm at `freq`, roughly `[-1, 1]` (0008 §1).

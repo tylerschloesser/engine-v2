@@ -1,5 +1,4 @@
-// `games/reference-server`: a deployable, game-agnostic multiplayer server (docs/plan/
-// 29-net-worker-and-reference-server.md Scope) -- `ws` + `engine/server/node`'s Node adapter,
+// `games/reference-server`: a deployable, game-agnostic multiplayer server (M29 Scope) -- `ws` + `engine/server/node`'s Node adapter,
 // wired together the way 0009 §"Node" describes: "the game's server package installs `ws`,
 // constructs the `WebSocketServer`, and passes it to the engine's Node adapter". Testable against
 // any built game (a fixture, or the reference game once it is multiplayer, M34) before either one

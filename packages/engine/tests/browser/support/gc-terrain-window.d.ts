@@ -1,5 +1,4 @@
-// Ambient `window.__terrainGcCounters` type (Open gate failures item 3, gate round 1: docs/plan/
-// 09-renderer-terrain.md Deviations "Gate fix round 1"), shared by two separate `tsc` programs:
+// Ambient `window.__terrainGcCounters` type (Open gate failures item 3, gate round 1: M09 Deviations "Gate fix round 1"), shared by two separate `tsc` programs:
 // `gc-terrain.html`'s page script (`tests/browser/pages/tsconfig.json`) and `gc-terrain.spec.ts`
 // (`tests/tsconfig.json`) -- written once here and included by both, the same split
 // `terrain-window.d.ts` already uses.

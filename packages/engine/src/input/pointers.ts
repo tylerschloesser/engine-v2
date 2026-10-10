@@ -1,5 +1,4 @@
-// Fixed pointer slots (docs/decisions/0019-camera-input-and-overlay.md §3; docs/plan/
-// 11-camera-and-input.md Scope: "listeners per 0019 §3-§4 that write into two fixed pointer slots
+// Fixed pointer slots (docs/decisions/0019-camera-input-and-overlay.md §3; M11 Scope: "listeners per 0019 §3-§4 that write into two fixed pointer slots
 // ... nothing else happens in a listener"). At most two pointers are tracked at once (extra touches
 // are silently ignored -- 0019 §3's own "at most two pointers"); macOS Safari's non-standard
 // `gesturechange` writes into its own small `GestureState`, not a third pointer slot, since it never

@@ -284,8 +284,7 @@ where
     *sim = Sim::from_parts(authority);
 }
 
-/// Heavy mode (docs/decisions/0002 "Heavy mode"; Planning decisions 6 of docs/plan/
-/// 22-persistence-log-and-snapshots.md): replays `log` twice from the same `base`, run A
+/// Heavy mode (docs/decisions/0002 "Heavy mode"; Planning decisions 6 of M22): replays `log` twice from the same `base`, run A
 /// uninterrupted, run B snapshotting and restoring into a fresh `Sim` every `every_n` ticks.
 /// Reports the first tick at which the two disagree.
 pub fn heavy<G: Game>(base: WorldParams<G>, log: &[u8], every_n: u32) -> Result<(), FirstDivergence>

@@ -74,8 +74,7 @@ export type GcResult = {
   crossOriginIsolated: boolean
   adapter: object | null
   gc: Record<string, GcCounts>
-  /** `analyseTrace(...).presentIsolates`, as an array (gate round 3, docs/plan/
-   * 09-renderer-terrain.md Deviations): isolate names with at least one trace event inside the
+  /** `analyseTrace(...).presentIsolates`, as an array (gate round 3, M09 Deviations): isolate names with at least one trace event inside the
    * window, proving the CDP thread-discovery A depends on actually found that isolate's thread. */
   presentIsolates: string[]
   /** Exact sampled bytes over the whole window (`sumProfile(...).total`), before dividing by
@@ -144,8 +143,7 @@ export async function measure(
       expectedWorkers: number,
     ) => Promise<{ main: IsolateSession; workers: IsolateSession[]; close?: () => void }>
     /** Extra frames driven, through the same `window.__gc.run(n, false)` warm-up path, right after
-     * the `WARMUP_PASSES` loop and still before `HeapProfiler.startSampling` (docs/plan/
-     * 09-renderer-terrain.md, Deviations "Gate fix round 2"). `terrain`'s own `client` isolate races
+     * the `WARMUP_PASSES` loop and still before `HeapProfiler.startSampling` (M09, Deviations "Gate fix round 2"). `terrain`'s own `client` isolate races
      * a background (concurrent) TurboFan recompilation of the hot `waitForWake`/`runBlockingLoop`
      * path against the profiler's own start on roughly a third of runs (measured: `--no-concurrent-
      * recompilation` made the flake a *constant* reading, `--no-lazy-feedback-allocation` did too --
@@ -155,8 +153,7 @@ export async function measure(
      * the identical production path for longer, still entirely inside the always-allocation-free
      * warm-up phase, gives that recompilation time to land before sampling starts instead of during
      * it -- 0/140 failures at 300-500 extra frames in isolated repro, against ~30% at 0 and ~15% at
-     * 200 (a real threshold, not a smooth "rarer with more frames" curve, docs/plan/
-     * 09-renderer-terrain.md, Deviations "Gate fix round 2" has the full table). Default 0: every
+     * 200 (a real threshold, not a smooth "rarer with more frames" curve, M09, Deviations "Gate fix round 2" has the full table). Default 0: every
      * other page's own warm-up (and terrain's own negative controls, which trip on `client` anyway
      * and are unaffected either way) is unchanged.
      *

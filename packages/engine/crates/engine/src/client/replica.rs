@@ -55,8 +55,7 @@ pub struct Replica<G: Game> {
     store: Store<G>,
     dims: ChunkDims,
     /// This connection's own player id (0011 "OwnPlayer"), fixed at construction: a real
-    /// connection learns it out of band, from `Host::connect`'s return value (docs/plan/
-    /// 15-connection-and-subscriptions.md Deviations).
+    /// connection learns it out of band, from `Host::connect`'s return value (M15 Deviations).
     own_player: PlayerId,
     held: BTreeMap<ChunkCoord, u32>,
     /// One queue, one bound (see [`DirtyEvent`]'s own doc comment): `drain_dirty` (M15's landed,
@@ -243,8 +242,7 @@ impl<G: Game> Replica<G> {
     }
 
     /// Every chunk whose effective tiles changed since the last [`Replica::drain_dirty`] call
-    /// (pristine/snapshot enters, tile deltas, and leaves -- docs/plan/
-    /// 15-connection-and-subscriptions.md Deviations left leave out, deferring the decision to
+    /// (pristine/snapshot enters, tile deltas, and leaves -- M15 Deviations left leave out, deferring the decision to
     /// 15b's own texel upload path, which is the one thing that reads this: a leave clears the
     /// chunk's overlay (`apply_leave`, below), which changes its *effective* tiles back to
     /// pristine even though the chunk itself may still be GPU-resident from before this replica

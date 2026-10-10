@@ -3,8 +3,7 @@ import { RingConnection } from './ring-connection.js'
 import { createRing, RingConsumer, RingProducer } from './sab/ring.js'
 import { MsgClass } from './server.js'
 
-/** A minimal "client side" of the ring pair, in the same thread (docs/plan/
- * 15b-ring-connection-and-replica-rendering.md step 2: "Vitest with real SAB rings in one
+/** A minimal "client side" of the ring pair, in the same thread (M15b step 2: "Vitest with real SAB rings in one
  * thread"): writes `uplink` (what `RingConnection` consumes) and reads `downlink` (what
  * `RingConnection` produces). Real `RingProducer`/`RingConsumer`, no mocks. */
 function clientSide(uplink: SharedArrayBuffer, downlink: SharedArrayBuffer) {

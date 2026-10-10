@@ -182,7 +182,7 @@ window.__genIdle = () => gen.idle(requireClient())
 window.__genChunkHash = (cx, cy) => gen.chunkHash(requireClient(), cx, cy)
 /** Batched form of `__genChunkHash`, one `page.evaluate` round trip for a whole rect instead of one
  * per chunk (`gen.spec.ts`'s "one and two workers" test: the `browser` suite's own time budget,
- * docs/plan/deferred-ledger.md's "Added during Phase 3" trip-wire). */
+ * ADR 0060's trip-wire). */
 window.__genChunkHashRect = async (minCx, minCy, maxCx, maxCy) => {
   const client = requireClient()
   const out: (string | null)[] = []
@@ -288,8 +288,7 @@ window.__genProbeOrder = async () => {
   let ring2At = -1
   const CYCLES = 24
   for (let cycle = 1; cycle <= CYCLES; cycle++) {
-    // One bounded burst per worker per cycle: entry-drain (docs/plan/
-    // 08b-gen-workers-and-queue.md, orchestrator decision 2) processes exactly what is already
+    // One bounded burst per worker per cycle: entry-drain (M08b, orchestrator decision 2) processes exactly what is already
     // queued, then the loop re-parks before anything new can arrive -- deterministic, since nothing
     // runs in the background between cycles (both workers are parked at rest the rest of the time).
     await resumeOne(client, 'gen0')

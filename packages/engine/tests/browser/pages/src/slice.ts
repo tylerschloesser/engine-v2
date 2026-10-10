@@ -5,13 +5,13 @@
 // manual-clock test fixture page), a real paced sim (`test.flags.pace = true`, `connected-paced.ts`'s
 // own combination of "real-time pacing" + "the parked test-call channel stays reachable") and a
 // Paint control. This is both the page `vertical_slice` (`vertical-slice.spec.ts`) drives *and* the
-// page Tyler opens on the phone (`pnpm device:serve`, `docs/plan/device-checks.md` "M16: Vertical
+// page Tyler opens on the phone (`pnpm device:serve`, the `device-check` skill "M16: Vertical
 // slice on the phone") -- one script, not a harness-driven `gc-*` page (`gc-slice.ts` is the
 // separate, dedicated zero-GC-measured sibling: `installGcPage`'s manual-clock, harness-driven
 // shape is incompatible with a real `requestAnimationFrame` production loop in the same script).
 //
 // The HUD (diagnostic only, outside the zero-GC rule, `device.ts`'s own precedent) shows exactly
-// the field names `vertical_slice`'s own HUD-text assertion and `docs/plan/device-checks.md`'s
+// the field names `vertical_slice`'s own HUD-text assertion and the `device-check` skill's
 // "M16: Vertical slice on the phone" section both read (Provides, a contract M23/M39 also read):
 // `confirmed`, `rejected`, `ring drops`, `engine_mem_grows` (per instance), `tick`. `?hud=0` hides
 // the HUD element (a human running a long device session without the visual noise); the counters

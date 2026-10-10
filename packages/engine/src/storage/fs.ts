@@ -130,8 +130,7 @@ class LogAppender {
   }
 
   /** Flushes and closes the underlying file handle: called before `Storage.write`/`delete` replace
-   * or remove this key out from under an open append handle (Planning decisions 1 of docs/plan/
-   * 22b-persistence-load-and-fs.md: "adapters must accept `append` after `write` on one key" --
+   * or remove this key out from under an open append handle (Planning decisions 1 of M22b: "adapters must accept `append` after `write` on one key" --
    * the next `append` on this key opens a brand new handle against the file `write`/`delete` just
    * replaced). */
   async close(): Promise<void> {

@@ -1,5 +1,4 @@
-//! Fixture game `fx-puts` (M12, docs/plan/
-//! 12b-world-access-and-sim-driver.md): the fixture 0003's Consequences names ("the puts cover
+//! Fixture game `fx-puts` (M12, M12b): the fixture 0003's Consequences names ("the puts cover
 //! every replicated scope of 0011"). M12 declared the replicated types only; M12b adjusts them
 //! (M12 Deviations: "M12b may adjust; nothing here is a fixed seam beyond 'these types exist and
 //! are Codec/TS-compatible'") to match this milestone's own handler set and implements `Game`
@@ -32,8 +31,7 @@ use engine::world::{PrototypeId, Registry, TilePos, TraitSet};
 use ts_rs::TS;
 
 /// M19 steps 4-6: the zero-GC scene's own fixture gains a real
-/// presence type, so `gc-connected-terrain.html`'s existing panning window (docs/plan/
-/// 15c-terrain-visibility-and-cache-invalidation.md step 4) also exercises presence sampling,
+/// presence type, so `gc-connected-terrain.html`'s existing panning window (M15c step 4) also exercises presence sampling,
 /// uplink and host decode allocation-free -- this game never spawns a player entity, so a
 /// camera-derived position (rather than a real player avatar) is the only thing to sample. Same
 /// shape as `fx-presence`'s own `PlayerPresence` (0001's own reference-game example).
@@ -193,7 +191,7 @@ pub enum Reject {
     NotFound,
     /// `Paint`: `pos` outside `PAINT_BOUND` (M16, `vertical_slice`'s
     /// own "out-of-range Paint" test). A fixture-only demo bound for `G::admit`'s rejection path,
-    /// not a world-model rule: `docs/spec/world.md` ("coordinates are unbounded; the cap applies
+    /// not a world-model rule: `docs/architecture/world-and-worldgen.md` ("coordinates are unbounded; the cap applies
     /// to *materialized* chunks held in memory") is unaffected -- this never touches `apply`/
     /// `Sim`/`sim_hash`, so it cannot change any golden (0004: an admission-time reject is never
     /// logged or replayed).
@@ -382,8 +380,7 @@ impl Game for Puts {
 
     /// HOST ONLY, never replayed (0004 Pipeline step 2; the default `Game::admit` is `Ok` for
     /// every other handler here, unchanged). `Paint` outside `PAINT_BOUND` is rejected before
-    /// `apply` ever runs: `vertical_slice`'s own "out-of-range Paint" test (docs/plan/
-    /// 16-action-round-trip.md) needs a real, deterministic `Reject::Game` path for an action that
+    /// `apply` ever runs: `vertical_slice`'s own "out-of-range Paint" test (M16) needs a real, deterministic `Reject::Game` path for an action that
     /// (unlike `Bump`/`Remove`) always succeeds at `apply` time otherwise -- `set_tile` itself is
     /// infallible (0003: "`WorldWrite` puts are infallible").
     fn admit(

@@ -1,5 +1,4 @@
-// Semantic input recognition (docs/decisions/0019-camera-input-and-overlay.md §4; docs/plan/
-// 11-camera-and-input.md Scope, Order of work step 4): tap/hover/longpress/drag* recognition, run
+// Semantic input recognition (docs/decisions/0019-camera-input-and-overlay.md §4; M11 Scope, Order of work step 4): tap/hover/longpress/drag* recognition, run
 // once per rAF from the same fixed pointer slots `camera/camera.ts`'s integrator reads -- no DOM,
 // so it is unit-testable with `dt` and plain state (Planning decisions: "integration functions take
 // `dt` and plain state, no DOM", the same discipline `camera.ts` follows). `client.input.{on,

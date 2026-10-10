@@ -1,7 +1,6 @@
 // Seqlock: a small latest-wins record (camera block, clocks; docs/decisions/0015 §2). Layout:
 // `[seq: i32][data: bytes]`. Writer `begin()`/`end()` bracket a write with two `Atomics.add`s (the
-// word is odd mid-write, even once published). Reader `readInto()` retries up to 8 times (docs/plan/
-// 06-sab-primitives-and-workers.md, Planning decisions "Seqlock reader rule"): a clean copy is
+// word is odd mid-write, even once published). Reader `readInto()` retries up to 8 times (M06, Planning decisions "Seqlock reader rule"): a clean copy is
 // staged in a scratch buffer first and only moved into the caller's `dst` once verified, so a torn
 // attempt never overwrites the caller's previous good copy. Both copies move a whole preallocated
 // view (`TypedArray.set`, not `sab/bytes.ts`'s per-byte `copyBytes`): keeping the window between the

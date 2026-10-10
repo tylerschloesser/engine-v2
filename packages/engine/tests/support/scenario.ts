@@ -43,8 +43,7 @@ export type WorldgenScenario = {
   chunks: [number, number][]
 }
 
-/** One scripted action, JSON-encoded exactly as `client.dispatch` would encode it (docs/plan/
- * 16-action-round-trip.md step 5): `seq` is the client-assigned per-player sequence (0004), and
+/** One scripted action, JSON-encoded exactly as `client.dispatch` would encode it (M16 step 5): `seq` is the client-assigned per-player sequence (0004), and
  * `action` is `G::Action`'s own external-tag JSON shape (a fixture author writes `{"Paint":
  * {...}}` or a bare `"Roll"` for a unit variant, exactly as `serde_json` would produce). */
 export type ScriptAction = { seq: number; action: unknown }

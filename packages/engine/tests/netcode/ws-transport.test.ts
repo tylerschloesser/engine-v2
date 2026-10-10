@@ -273,7 +273,7 @@ test('ws/trace-identical @slow', async () => {
   expect(Array.from(a)).toEqual(Array.from(b))
 })
 
-// M29 Planning decisions ("Spike C (PRE-PLAN §10)"):
+// M29 Planning decisions ("Spike C"):
 // the full spike -- one seed, 3 runs of a 10 s (200-tick, 20 Hz) 4-client session over loopback
 // `ws`, identical `trace()`. `@slow`: not required for this cut's own green gate (`pnpm test`
 // skips it), run by `pnpm test:slow`.

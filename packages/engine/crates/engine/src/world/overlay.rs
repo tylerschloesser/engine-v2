@@ -197,8 +197,7 @@ impl Overlays {
         self.0.entry(chunk.key()).or_default()
     }
 
-    /// Removes `chunk`'s entry if it is present and empty (M22's own bug fix, docs/plan/
-    /// 22-persistence-log-and-snapshots.md Deviations): [`Overlays::get_or_create`] always inserts
+    /// Removes `chunk`'s entry if it is present and empty (M22's own bug fix, M22 Deviations): [`Overlays::get_or_create`] always inserts
     /// a default (empty) `ChunkOverlay` before its caller writes into it, so a write that reverts
     /// the chunk's last live entry back to pristine (`ChunkOverlay::write`'s own `new == pristine`
     /// branch), or that was already a no-op on a chunk touched for the first time, otherwise leaves

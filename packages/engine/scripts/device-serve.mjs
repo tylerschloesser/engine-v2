@@ -1,6 +1,5 @@
 // `pnpm device:serve [--tunnel] [--ws [<fixture>]] [--app reference [--bench]]` (M03
-// harness.md, Planning decisions "Determinism on a physical phone"; docs/plan/
-// 29-net-worker-and-reference-server.md Scope). Builds an app and serves it statically with `vite
+// harness.md, Planning decisions "Determinism on a physical phone"; M29 Scope). Builds an app and serves it statically with `vite
 // preview` on `127.0.0.1:4173` (no HMR socket; the engine plugin's COOP/COEP headers land on every
 // response the same as under `vite preview` in the suite). `--tunnel` additionally runs a
 // Cloudflare quick tunnel (`cloudflared tunnel --url http://127.0.0.1:4173`: HTTPS, no account;

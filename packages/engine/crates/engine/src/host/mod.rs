@@ -130,8 +130,7 @@ struct ConnSlot<G: Game> {
     /// `build_frame` every time it runs for this connection, so it never grows unbounded.
     pending_results: Vec<Outcome<G>>,
     /// The highest `seq` this connection has ever had *admitted* (queued into `pending_records`,
-    /// not merely decoded), across every `on_uplink` call so far -- gate fix, docs/plan/
-    /// 16-action-round-trip.md: `Store::last_seq` only advances inside `Sim::step`, at the next
+    /// not merely decoded), across every `on_uplink` call so far -- gate fix, M16: `Store::last_seq` only advances inside `Sim::step`, at the next
     /// `tick()`, so a snapshot of it alone cannot dedup a resend that arrives in the same
     /// tick-to-tick window as the original (`worker/sim.ts` drains the uplink ring on every wake,
     /// and `poll_uplink` flushes a non-empty outbox immediately, so more than one `on_uplink` call
@@ -194,8 +193,7 @@ fn default_cache_chunks() -> u32 {
     1024
 }
 /// A generous sentinel meaning "no enforced ceiling" for a config that never sets
-/// `worldBudgetBytes` (every pre-M21 fixture and test config, docs/plan/
-/// 21-entities-and-timers.md Deviations): the init check below is then a no-op, exactly as it
+/// `worldBudgetBytes` (every pre-M21 fixture and test config, M21 Deviations): the init check below is then a no-op, exactly as it
 /// was before this milestone. **Distinct from the engine's own pre-existing, outer
 /// `InstanceConfig.arenaBytes`** (`src/sim-config.ts`, `src/client.ts`'s `DEFAULT_ARENA_BYTES`):
 /// that field is the real WASM memory size `instantiate()` allocates, one level up in the JSON
@@ -265,8 +263,7 @@ struct SimConfig<P> {
     max_action_growth: u32,
     /// Parsed and held on [`Host`] for M15's connection/warmer wiring, but **not yet wired to
     /// `TerrainStore` capacity**: `Sim::genesis`'s own signature is fixed by M12b's Provides and
-    /// takes no cache-size parameter, so this field is inert today (docs/plan/
-    /// 13-sim-host-tick-loop.md Deviations records this as a known gap, not a silent drop).
+    /// takes no cache-size parameter, so this field is inert today (M13 Deviations records this as a known gap, not a silent drop).
     #[serde(default = "default_cache_chunks")]
     cache_chunks: u32,
     /// M21 (Scope: "init check of the 0007 §8 memory split
@@ -667,8 +664,7 @@ pub struct Host<G: Game> {
     /// The in-progress scan-pass decode [`Host::sim_replay_scan_begin`] started, fed by
     /// [`Host::sim_replay_scan_push`]; `None` when no scan is in flight. A separate reader from
     /// `replay_reader`: the scan pass runs once, over the whole segment tail, *before*
-    /// `sim_replay_begin`/`push`/`end`'s own real apply pass (docs/plan/
-    /// 24-recovery-and-migration.md, amending M22b's single-pass placeholder) -- a `Skip` record's
+    /// `sim_replay_begin`/`push`/`end`'s own real apply pass (M24, amending M22b's single-pass placeholder) -- a `Skip` record's
     /// own target can (and typically does) live in an *earlier* frame than the `Skip` record
     /// itself, so every frame must be seen once before any of them can be safely applied.
     scan_reader: Option<crate::persist::FrameReader<G>>,
@@ -686,8 +682,7 @@ pub struct Host<G: Game> {
     /// `replay_segment`. `BTreeSet`, not a `HashSet` (`.claude/rules/determinism.md`), though
     /// iteration order is not itself observable here -- consistency with the rest of this crate.
     replay_skip_targets: BTreeSet<u32>,
-    /// `(who, seq)` of every record [`Host::sim_replay_end`]'s apply pass skipped (docs/plan/
-    /// 24-recovery-and-migration.md Planning decisions 4): drained into that player's
+    /// `(who, seq)` of every record [`Host::sim_replay_end`]'s apply pass skipped (M24 Planning decisions 4): drained into that player's
     /// `ConnSlot::pending_results` the next time [`Host::connect`] sees them (their first frame
     /// after recovery reconnects), each becoming `Ack { seq, Rejected(Engine(EngineFault)) }`.
     pending_fault_acks: Vec<(PlayerId, u32)>,
@@ -700,8 +695,7 @@ pub struct Host<G: Game> {
     /// `client/camera.rs`); null when this instance was built without one (`Host::genesis_for_test`
     /// and other native-only constructors, which have no `RegionLayout` at all).
     progress_ptr: *mut u8,
-    /// Diagnostic-only, always `None` unless a test calls [`Host::start_progress_log`] (docs/plan/
-    /// 24-recovery-and-migration.md: "prove failable per phase" -- `progress` alone only shows the
+    /// Diagnostic-only, always `None` unless a test calls [`Host::start_progress_log`] (M24: "prove failable per phase" -- `progress` alone only shows the
     /// *last* write, always back to `Idle` by the time a successful call returns, so a test needs
     /// the whole sequence to prove a write really happened for a phase that never panics on its
     /// own). Kept as a plain field (not `#[cfg(test)]`) so the tick-path hook closures below can
@@ -760,8 +754,7 @@ impl<G: Game> Host<G> {
     }
 
     /// Writes a [`ProgressCursor`] both into `self.progress` (native-testable with no ABI at all)
-    /// and, when this instance has a `Progress` region, into it directly (docs/plan/
-    /// 24-recovery-and-migration.md). Called *before* starting the work `phase` names, so a trap
+    /// and, when this instance has a `Progress` region, into it directly (M24). Called *before* starting the work `phase` names, so a trap
     /// partway through leaves exactly this value behind for a dead instance's own memory to be read
     /// back from (0014 §6) -- never after, and never batched: `.claude/rules/hot-paths.md`'s "plain
     /// stores into a fixed region, no allocation" is met by three `u32` LE stores, nothing else.
@@ -800,8 +793,7 @@ impl<G: Game> Host<G> {
         self.progress
     }
 
-    /// Starts recording every [`ProgressCursor`] this instance writes from now on (docs/plan/
-    /// 24-recovery-and-migration.md: `progress_cursor_written_before_each_phase`'s own mechanism).
+    /// Starts recording every [`ProgressCursor`] this instance writes from now on (M24: `progress_cursor_written_before_each_phase`'s own mechanism).
     /// Never called by production code.
     #[cfg(any(test, feature = "testing"))]
     pub fn start_progress_log(&mut self) {
@@ -926,8 +918,7 @@ impl<G: Game> Host<G> {
         self.chunk_versions.len()
     }
 
-    /// `who`'s held presence sample, if any (test/diagnostic convenience, docs/plan/
-    /// 19-presence-channel.md step 3): `Self::presence` has no public accessor of its own since
+    /// `who`'s held presence sample, if any (test/diagnostic convenience, M19 step 3): `Self::presence` has no public accessor of its own since
     /// nothing outside `Host` reads it yet (relay is steps 4-6's job).
     #[cfg(any(test, feature = "testing"))]
     pub fn debug_presence(&self, who: PlayerId) -> Option<G::Presence> {
@@ -961,8 +952,7 @@ impl<G: Game> Host<G> {
         }
     }
 
-    /// Pacing counters and gauges for `conn` (`sim_conn_counters`' tail, docs/plan/
-    /// 31-rates-and-integrity.md): re-enters, cap evictions, late-visible ticks, degrade level,
+    /// Pacing counters and gauges for `conn` (`sim_conn_counters`' tail, M31): re-enters, cap evictions, late-visible ticks, degrade level,
     /// queue depth and bucket level.
     pub fn pacing_counters(&self, conn: ConnId) -> Option<PacingCounters> {
         let slot = self.conns.get(conn as usize)?.as_ref()?;
@@ -977,8 +967,7 @@ impl<G: Game> Host<G> {
         self.bandwidth = cfg;
     }
 
-    /// The chunk-bucket entry point for a snapshot of a chunk `conn` already holds (docs/plan/
-    /// 31-rates-and-integrity.md Provides, M31b's resync answer): queued behind the same bucket,
+    /// The chunk-bucket entry point for a snapshot of a chunk `conn` already holds (M31 Provides, M31b's resync answer): queued behind the same bucket,
     /// sorted by `priority`, sent as a `ChunkSnapshots` entry. A chunk not held is ignored (its
     /// ordinary enter is already a snapshot); already queued, it is upgraded to a snapshot.
     pub fn enqueue_chunk_snapshot(
@@ -1250,8 +1239,7 @@ impl<G: Game> Host<G> {
     /// this into a wire `Gone` for every *other* connection's very next `build_frame`, satisfying
     /// "at once" without a separate queued-event mechanism.
     ///
-    /// **Does not queue `Record::Player { Disconnected }`** (docs/plan/
-    /// 28b-reconnect-and-lifecycle.md step 4, 0013 "the logged `Disconnected` event is injected
+    /// **Does not queue `Record::Player { Disconnected }`** (M28b step 4, 0013 "the logged `Disconnected` event is injected
     /// only after a 10 s grace"): that decision -- and its timing -- belongs to the host-side
     /// grace timer (`host/lifecycle.ts`), which calls [`Self::log_disconnected`] once the grace
     /// expires (or at once, on an explicit `Bye{Leave}`). This method only ever runs the *at-once*
@@ -1467,8 +1455,7 @@ impl<G: Game> Host<G> {
         Ok(())
     }
 
-    /// The `Welcome` tail both [`Host::attach`] and [`Host::resync`] (docs/plan/
-    /// 28b-reconnect-and-lifecycle.md step 2) share: everything after a connection's own `player`/
+    /// The `Welcome` tail both [`Host::attach`] and [`Host::resync`] (M28b step 2) share: everything after a connection's own `player`/
     /// `epoch` are decided is read straight off live sim/presence state, identically whether this
     /// is a first join, a reconnect, or a resync on an already-open connection.
     fn write_welcome_for(&self, player: PlayerId, epoch: u32, welcome_sink: &mut impl ByteSink) {

@@ -61,8 +61,7 @@ declare global {
       drawListDropped: number
     }
     /** Test-only, outside `engine/test` (M17 Tests added:
-     * `drawlist.triple_newest_wins`, `counters.draws_equal_nonempty_layers`; docs/plan/
-     * 18-picking-and-overlay.md gate round 1: `drawlist.picker_matches_renderer_frame_seq`): every
+     * `drawlist.triple_newest_wins`, `counters.draws_equal_nonempty_layers`; M18 gate round 1: `drawlist.picker_matches_renderer_frame_seq`): every
      * read goes through `drawListSlot` (the client's own single `DrawListSlot`/`TripleReader`,
      * `acquire()` below calling `client.pick.acquire()` then `drawablesRenderer.acquire()`, which
      * itself builds no reader of its own), never a second, independent `TripleReader` over the same
@@ -113,8 +112,7 @@ declare global {
        * truth `counters.draws_equal_nonempty_layers` checks `drawCallsNow()`'s delta against,
        * never derived from `render/drawables.ts`'s own `computeLayerOffsets`/`layerCounts`. */
       populatedLayers(): number[]
-      /** `engine/test`'s `gpuBytes` counter, the whole renderer (docs/plan/
-       * 17b-sprites-and-frame-budget.md fix round 1: "must cover the whole renderer"): `renderer.
+      /** `engine/test`'s `gpuBytes` counter, the whole renderer (M17b fix round 1: "must cover the whole renderer"): `renderer.
        * gpuBytes()` (terrain: page, indirection, tile art, visual table, frame uniform) plus
        * `drawablesRenderer.gpuBytes()` (instance buffer, DrawFrame uniform, sprite atlas + tables). */
       gpuBytes(): number
@@ -138,8 +136,7 @@ const wasm = await fixtureWasm('drawables')
 const canvas = document.createElement('canvas')
 const clock = createManualClock()
 
-// One `ClientOptions.assets` object, threaded to both `createClient` (docs/plan/
-// 17b-sprites-and-frame-budget.md fix round 1: "ClientOptions.assets.sprites is read by the real
+// One `ClientOptions.assets` object, threaded to both `createClient` (M17b fix round 1: "ClientOptions.assets.sprites is read by the real
 // client path") and the two real asset loaders below, rather than the literal URL typed twice --
 // research found no existing real-client page building one shared object this way (every one of
 // them still passes `options.assets` decoratively and calls `loadTileArt` with a second, separately

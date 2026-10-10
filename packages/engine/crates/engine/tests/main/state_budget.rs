@@ -1,7 +1,6 @@
 //! The state-budget check + per-action growth declaration (docs/decisions/
 //! 0004-action-timing-and-rejection.md "State-budget check", docs/decisions/
-//! 0023-action-growth-declaration.md), native tests that need no fixture crate (docs/plan/
-//! 21-entities-and-timers.md Tests added). `growth_declarations_are_honest` and `full_world_
+//! 0023-action-growth-declaration.md), native tests that need no fixture crate (M21 Tests added). `growth_declarations_are_honest` and `full_world_
 //! rejects_place_accepts_remove_then_place` are the `machines` fixture's own (step 6): they
 //! exercise real game handlers this file has no reason to duplicate.
 

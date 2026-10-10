@@ -181,7 +181,7 @@ test('vertical_slice', async ({ page }, testInfo) => {
   // `__sliceInjectPointer`, not a raw `cameraState` nudge, so the whole real input pipeline
   // (`installPointerListeners` -> `SemanticRecognizer` -> `CameraIntegrator`) is what moves it.
   // Zoomed well out (`tilesAcross: 64`) so a drag of a realistic CSS-pixel distance covers enough
-  // *world* tiles to cross a chunk edge (32 tiles, `docs/spec/world.md`): at `tilesAcross: 8`
+  // *world* tiles to cross a chunk edge (32 tiles, `docs/architecture/world-and-worldgen.md`): at `tilesAcross: 8`
   // (the Paint-probe camera above) the same drag would pan only a couple of tiles, nowhere near
   // one chunk width -- the subscribed chunk rect would never move at all, and the assertion below
   // would fail not because panning is broken but because this test never asked for enough of it.
@@ -295,7 +295,7 @@ test('vertical_slice', async ({ page }, testInfo) => {
   const lastReject = await page.evaluate(() => window.__sliceLastReject?.())
   expect(lastReject).toEqual({ Rejected: { Game: 'OutOfRange' } })
 
-  // Phase 7: the HUD shows exactly the field names the device check (`docs/plan/device-checks.md`,
+  // Phase 7: the HUD shows exactly the field names the device check (the `device-check` skill,
   // "M16: Vertical slice on the phone") reads, with the values this test itself just produced.
   const hud = await page.evaluate(() => window.__hudText?.())
   expect(hud).toContain('confirmed: 1')

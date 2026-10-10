@@ -5,8 +5,7 @@
 //! by construction -- the same technique `engine`'s own `testing::replay` tests use, at fixture
 //! scale (~320 ticks, past several would-be 25-tick and 1-tick heavy-mode snapshot boundaries).
 //!
-//! Exercises every part of the fixture's own feature set (docs/plan/
-//! 22-persistence-log-and-snapshots.md Files): a `Joined` connection event, `PlaceTimer` (the
+//! Exercises every part of the fixture's own feature set (M22 Files): a `Joined` connection event, `PlaceTimer` (the
 //! timer wheel, self-rearming via `TickCx::wake_at`), `Roll` (`SimRng`), and enough `Harvest` calls
 //! to run the origin tile's resource down to zero and then keep going -- the tail of those are
 //! rejected (`Reject::Depleted`), so the log also carries rejected actions, not only accepted ones.

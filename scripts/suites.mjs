@@ -69,8 +69,7 @@ export const buildStepsFor = (tier) => buildSteps.filter((s) => s.tiers?.include
  * adapter in scripts/lib/adapters.mjs. `legs` are extra runs reported on the suite's line, each
  * `{ name, kind, ... }` with what its adapter needs, run concurrently with the suite's own main leg
  * (`runSuite`'s `Promise.all`), except a leg with `after: true`, which starts once all the others have finished. Ids follow the rows of the 0020 §3 table: `rust`, `unit`, `wasm`,
- * `netcode`, `browser`; `frame-bench` (docs/plan/
- * 17b-sprites-and-frame-budget.md, Fix round 2) is this repo's one addition outside that table, for
+ * `netcode`, `browser`; `frame-bench` (M17b, Fix round 2) is this repo's one addition outside that table, for
  * the reason its own entry below explains. `budgetMs` is the fast-tier budget; owner of the numbers:
  * docs/decisions/0020 §3. Slow-tier lines carry no budget. `solo: true` (`scripts/test.mjs`'s own
  * Phase 2): this suite runs alone, after every non-`solo` suite of the same tier has fully finished,
@@ -165,8 +164,7 @@ export const suites = [
     // 60,000 (docs/decisions/0060 §1, Tyler's Q16 answer; 48,000 under 0036 §1, 35,000 before):
     // the demotion ladder (0020 §4) is exhausted, so the fast tier is about 70 s with the 10 s build.
     budgetMs: 60_000,
-    // `chromium` + `gc` in every tier (0020 §4, first rung: gate round 3, docs/plan/
-    // 09-renderer-terrain.md Deviations). WebKit and Firefox move to the `engines` leg below.
+    // `chromium` + `gc` in every tier (0020 §4, first rung: gate round 3, M09 Deviations). WebKit and Firefox move to the `engines` leg below.
     // `reference` (M20: `games/reference`'s own project, same leg
     // (its own `testDir` and `webServer` entry keep it from ever running the other projects' specs
     // or vice versa) -- a separate leg would need its own port for the *pages* server too, since a

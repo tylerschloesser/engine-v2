@@ -1,5 +1,4 @@
-//! Native v1 -> v2 migration, both game types in one test binary (docs/plan/
-//! 24b-upgrade-and-migration.md Order of work 3): `fx-migrate-v1` (schema 1) builds a real old
+//! Native v1 -> v2 migration, both game types in one test binary (M24b Order of work 3): `fx-migrate-v1` (schema 1) builds a real old
 //! world and encodes it exactly as a snapshot's own store-section bytes would be; `fx-migrate-v2`
 //! (schema 2, same 20Hz tick rate) brings it forward through `engine::migrate::migrate`.
 //!

@@ -183,8 +183,7 @@ async function checkReferenceApp(): Promise<void> {
 // progress-logging fix** on either half -- not "slow", but no visible progress at all inside 600 s
 // on even the simpler `fixture app` mode. The file's own comment above (`cargo test --workspace`
 // always *executes* every workspace member's test binaries regardless of compile-cache warmth) is
-// the most likely mechanism: this is the same `--workspace` bindings cost `docs/plan/
-// 24c-...md`'s own ledger rows already documented as slow even on a fast local machine (~50 s
+// the most likely mechanism: this is the same `--workspace` bindings cost `M24c-...md`'s own ledger rows already documented as slow even on a fast local machine (~50 s
 // compile+link alone there), now paid a *second* time by `device-serve.mjs`'s own independent
 // invocation, on a CI runner smaller than any machine that cost was ever measured against. Fixing
 // it for real (scoping `buildGame()`'s bindings step narrower than `--workspace`) is a real,
@@ -192,7 +191,7 @@ async function checkReferenceApp(): Promise<void> {
 // stale/uncommitted binding anywhere is caught") well outside this milestone's scope.
 //
 // The exit criterion this test partially automated already has its own Tyler-run manual device
-// check (`docs/plan/device-checks.md#m29-net-worker-and-reconnect`); the *other* half of this
+// check (the `device-check` skill); the *other* half of this
 // test's own value (headers + `/ws` upgrade through the proxy) was independently confirmed working
 // with raw `curl`/`WebSocket` checks earlier in this same investigation. Skipping under CI trades
 // an automated, CI-blocking proxy for that already-proven-working functionality against a real,

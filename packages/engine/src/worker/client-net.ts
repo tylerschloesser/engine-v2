@@ -131,8 +131,7 @@ const LINK_STATE_UP = 1
  * kept null-tolerant anyway, the same "costs nothing, answers nothing" shape every other pump here
  * uses for a role/instance that doesn't have what it needs.
  *
- * `ticksPerSecond` is read once at setup (`worker/client.ts`'s own `tick_hz()` call, docs/plan/
- * 16-action-round-trip.md: "need not be re-plumbed per frame") and mirrored into the clock block
+ * `ticksPerSecond` is read once at setup (`worker/client.ts`'s own `tick_hz()` call, M16: "need not be re-plumbed per frame") and mirrored into the clock block
  * unchanged on every write; `clockBlock`/`result` are `null`/absent only for the same hand-rolled-
  * fixture case as `downlink`/`tx`, above -- a real `GameInstance` always has a `Result` region.
  */

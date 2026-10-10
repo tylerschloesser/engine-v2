@@ -450,8 +450,7 @@ pub(crate) fn encode_to_with<T: Codec>(
 }
 
 /// Encodes `value` into any [`ByteSink`] — a [`SliceSink`] for snapshot bytes, an
-/// [`crate::hash::Fnv64`] to hash without a buffer (Planning decisions 4). `?Sized` (docs/plan/
-/// 14-wire-framing.md Deviations) so a caller inside `wire::FrameWriter::section`'s `&mut dyn
+/// [`crate::hash::Fnv64`] to hash without a buffer (Planning decisions 4). `?Sized` (M14 Deviations) so a caller inside `wire::FrameWriter::section`'s `&mut dyn
 /// ByteSink` body can call this directly, the same way M05's own callers use a concrete sink.
 pub fn encode_to<T: Codec>(
     value: &T,

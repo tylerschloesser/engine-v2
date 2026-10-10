@@ -77,7 +77,7 @@ const SMALL_GENERATION_SET_SIZE = 36
 // The view clamp of 0008 §5: "at most 9x9 visible chunks" (worst-case alignment for a 256-tile
 // viewport, half-extent 128 tiles each axis) -- `visible_rect((0,0),(128,128),dims(5))` gives
 // exactly `ChunkRect{(-4,-4)-(4,4)}` (9x9), the same rect `queue_counts_at_view_bound` (Rust) hard-
-// codes. `visible.expanded(2)` = 13x13 = 169 -- PRE-PLAN §7's "chunk generation, join case" figure,
+// codes. `visible.expanded(2)` = 13x13 = 169 -- ADR 0062's "chunk generation, join case" figure,
 // `budgets.json`'s `counters.gen.genJoinChunks` (Planning decisions 8: exact values are budgets).
 const VIEW_CLAMP = { x: 0, y: 0, halfExtentX: 128, halfExtentY: 128 }
 const GENERATION_SET_SIZE = budget('counters.gen.genJoinChunks')

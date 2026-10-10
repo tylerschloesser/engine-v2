@@ -84,8 +84,7 @@ async function main() {
     console.error(formatBuildWarning(buildMs, buildBudgetMs, opts.scale, stepTimings))
   }
 
-  // Phase 2: every selected suite at once, except a `solo: true` suite (docs/plan/
-  // 17b-sprites-and-frame-budget.md, Fix round 2: a frame-time gate cannot share the machine with a
+  // Phase 2: every selected suite at once, except a `solo: true` suite (M17b, Fix round 2: a frame-time gate cannot share the machine with a
   // parallel Playwright worker pool) -- those run one at a time, afterward, each with every other
   // suite's own process already finished. `selected`'s own registration order is preserved either
   // way (`suites.mjs` lists every `solo` suite after the ones it must not race), so this changes

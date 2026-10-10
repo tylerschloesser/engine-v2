@@ -1,5 +1,4 @@
-// The zero-GC negative-control hook every production worker kind can carry (docs/plan/
-// 06b-workers-and-spawn.md, orchestrator decision 2). `src/test/controls.ts` is the harness-worker
+// The zero-GC negative-control hook every production worker kind can carry (M06b, orchestrator decision 2). `src/test/controls.ts` is the harness-worker
 // original this mirrors; production code (`src/worker/*.ts`) cannot import `src/test/**` (0017 §2),
 // so the same small allocation shapes are duplicated here, read from `CB_TEST_CONTROL`
 // (`sab/control.ts`) instead of a message. A kind body calls `applyGcHook` once per real wake only

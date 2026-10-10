@@ -72,8 +72,7 @@ export {
   importWorld,
   WorldExistsError,
 } from './storage/archive.js'
-// `storage/types.ts`'s own home for `Storage`/`worldKeys` (docs/plan/
-// 22-persistence-log-and-snapshots.md steps 4-6): re-exported unchanged, same "no renamed Provides"
+// `storage/types.ts`'s own home for `Storage`/`worldKeys` (M22 steps 4-6): re-exported unchanged, same "no renamed Provides"
 // convention as the `sim-config.ts` re-exports above.
 export type { Storage } from './storage/types.js'
 
@@ -291,8 +290,7 @@ export function wrapEngineInstance(inst: EngineInstance): SimInstance {
   // call, matching its own doc comment ("a view valid only during the call"), so overwriting it in
   // place on the next call is safe.
   const sealResult: { len: number; bytes?: Uint8Array } = { len: 0 }
-  // Same discipline as `sealResult` above, for `simBuildFrame` (docs/plan/
-  // 15b-ring-connection-and-replica-rendering.md): one object, mutated in place every call.
+  // Same discipline as `sealResult` above, for `simBuildFrame` (M15b): one object, mutated in place every call.
   const frameResult: { len: number; bytes?: Uint8Array } = { len: 0 }
   return {
     simGenesis: () => inst.call0(inst.x.sim_genesis),
@@ -1008,8 +1006,7 @@ export function createSimHostFromInstance(
     for (let conn = 0; conn < MAX_CONNS; conn++) {
       const connection = conns[conn]
       if (!connection) continue
-      // `RingConnection.pumpRetries()`'s own doc comment (docs/plan/
-      // 15b-ring-connection-and-replica-rendering.md): every tick, not only one whose
+      // `RingConnection.pumpRetries()`'s own doc comment (M15b): every tick, not only one whose
       // `simBuildFrame` produced a fresh frame -- otherwise a connection that once fell behind a
       // full downlink ring stays behind forever once the world goes idle (no more fresh frames to
       // piggyback a retry on). A generic 0009 `Connection` carries no such method; the same
@@ -1589,8 +1586,7 @@ export function createSimHostFromInstance(
 }
 
 /** `createSimHost(cfg, services)` (Provides): instantiates a real `role=sim` instance from
- * `services.wasm`, builds a [`Persistence`] over `services.storage` (docs/plan/
- * 22-persistence-log-and-snapshots.md steps 4-6: "create world (manifest + segment 0)" happens
+ * `services.wasm`, builds a [`Persistence`] over `services.storage` (M22 steps 4-6: "create world (manifest + segment 0)" happens
  * right here, once, before the host ever ticks), and drives both through
  * [`createSimHostFromInstance`]. */
 export function createSimHost(cfg: WorldConfig, services: HostServices): SimHost {

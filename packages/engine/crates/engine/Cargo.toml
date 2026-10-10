@@ -33,8 +33,7 @@ postcard = { version = "1", default-features = false, features = ["alloc"] }
 # "nothing of it is reachable from an export, so LTO removes it; the size test watches this").
 ts-rs = "12"
 
-# Dev-dependencies are unrestricted (0017 §7). `wgsl.terrain_validates` (docs/plan/
-# 09-renderer-terrain.md Planning decisions "Bind group layout") parses and validates every
+# Dev-dependencies are unrestricted (0017 §7). `wgsl.terrain_validates` (M09 Planning decisions "Bind group layout") parses and validates every
 # `.wgsl` file the TypeScript renderer embeds, natively, with no GPU.
 [dev-dependencies]
 naga = { version = "30", default-features = false, features = ["wgsl-in"] }

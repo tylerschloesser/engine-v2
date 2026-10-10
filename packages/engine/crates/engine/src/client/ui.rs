@@ -1,8 +1,7 @@
 //! The `ui` call policy and its encode (M16b Scope): when the
 //! replica changes or the client-side dirty flag is set, call `ClientSide::ui` into a reused
 //! `G::Ui`, and only if the value differs from the last one emitted, serialise it into a kind-1 UI-
-//! ring record (`[kind u8 = 1][len u32 LE][JSON]`, sharing `RegionId::Ui` with docs/plan/
-//! 16-action-round-trip.md's kind-2 `ActionResults` records -- a consumer dispatches on the kind
+//! ring record (`[kind u8 = 1][len u32 LE][JSON]`, sharing `RegionId::Ui` with M16's kind-2 `ActionResults` records -- a consumer dispatches on the kind
 //! byte, never assumes every record is one kind).
 
 use crate::client::ClientSide;

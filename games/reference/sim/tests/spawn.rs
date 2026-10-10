@@ -35,8 +35,7 @@ fn spawn_is_nearest_land_tile() {
     assert_eq!(spawn, TilePos::new(want_x, want_y));
 }
 
-/// `spawn_alt_params_is_nearest_land_tile` (gate round 1 fix, docs/plan/
-/// 20b-reference-player-and-collect-ui.md Deviations): guards `../tests/fixtures/
+/// `spawn_alt_params_is_nearest_land_tile` (gate round 1 fix, M20b Deviations): guards `../tests/fixtures/
 /// spawn-alt-params.json` the same way `landmarks_fixture.rs` guards `landmarks.json` -- an
 /// independent full-chunk scan (`RefWorldgen::generate`, never `nearest_land_tile` itself), failing
 /// by name with a regenerate instruction if the fixture drifts -- and separately asserts both the

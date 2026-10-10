@@ -1,5 +1,4 @@
-//! `ui_in_range_lists_each_resource_once`/`ui_from_is_within_range_of_its_tile` (docs/plan/
-//! 20b-reference-player-and-collect-ui.md Tests added, step 3): `RefClient::ui`'s own bounding-box
+//! `ui_in_range_lists_each_resource_once`/`ui_from_is_within_range_of_its_tile` (M20b Tests added, step 3): `RefClient::ui`'s own bounding-box
 //! scan + tracked-set diff, driven directly (never through `FrameCx`, `extract_golden.rs`'s own
 //! precedent: `FrameCx::new` is `pub(crate)` to the engine crate).
 
@@ -156,8 +155,7 @@ fn ui_from_is_within_range_of_its_tile() {
 }
 
 /// Every tile inside the scanned square (`-content::RANGE_SCAN_TILES..=RANGE_SCAN_TILES` per axis)
-/// carries a resource -- the orchestrator fix's own test (docs/plan/
-/// 20b-reference-player-and-collect-ui.md, step 1: "`RefClient::ui()` silently drops any in-range
+/// carries a resource -- the orchestrator fix's own test (M20b, step 1: "`RefClient::ui()` silently drops any in-range
 /// resource past `MAX_IN_RANGE`"): with every scanned tile a candidate, `MAX_IN_RANGE` sized to the
 /// scan's own tile count means none of them can be truncated.
 struct AllResourceWorld {

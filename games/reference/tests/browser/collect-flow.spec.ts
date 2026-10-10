@@ -1,5 +1,4 @@
-// `reference_collect_flow`/`reference_several_buttons`/`reference_pan_out_cancels` (docs/plan/
-// 20b-reference-player-and-collect-ui.md Tests added, step 6): the scripted end-to-end passes this
+// `reference_collect_flow`/`reference_several_buttons`/`reference_pan_out_cancels` (M20b Tests added, step 6): the scripted end-to-end passes this
 // milestone's own Goal describes -- a button anchored on its tile, a real fill animation, an item
 // landing in the inventory and the tile depleting, two buttons at once, and a collect cancelled by
 // panning away. `tests/helpers/game.ts`'s own `panTo`/`uiState`/`clickCollect` (Seams, Provides) do

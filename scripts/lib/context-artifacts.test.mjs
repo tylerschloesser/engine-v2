@@ -15,7 +15,7 @@ const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclud
   maxBuffer: 256 * 1024 * 1024,
 })
   .split('\n')
-  .filter((f) => f && !f.startsWith('spikes/') && !f.startsWith('docs/'))
+  .filter((f) => f && !f.startsWith('docs/'))
 
 const read = (file) => {
   try {

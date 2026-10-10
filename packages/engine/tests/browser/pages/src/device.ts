@@ -1,5 +1,5 @@
 // `device.html`: the manual fill-rate/HUD page (M09b, step 7)
-// Tyler opens on a phone through M03's `pnpm device:serve --tunnel` (`docs/plan/device-checks.md`,
+// Tyler opens on a phone through M03's `pnpm device:serve --tunnel` (the `device-check` skill,
 // "M09b: Terrain fill rate"), and the host `canvas.spec.ts`'s two automated tests drive against
 // (`canvas: presents`, `frame-loop: production runs phases in order`) -- the exit criterion "`device
 // .html` runs the production `createFrameLoop` ... driven by `requestAnimationFrame` through the
@@ -69,7 +69,7 @@ declare global {
     __pageReady?: true
     /** `?harness=1` (M17b, Planning decisions "Manual harness
      * shape"): Tyler's own troubleshooting via the Playwright CLI skill; the HUD text is the primary
-     * output (`docs/plan/device-checks.md`, M17b: read from the browser's own DevTools UI, not this
+     * output (the `device-check` skill, M17b: read from the browser's own DevTools UI, not this
      * hook). */
     __deviceHarness?: {
       errors(): string[]
@@ -428,7 +428,7 @@ async function runFillRateHud(): Promise<void> {
   }
 }
 
-// --- `?probe=memory` (docs/plan/device-checks.md, M11-memory) -------------------------------
+// --- `?probe=memory` (the `device-check` skill, M11-memory) -------------------------------
 async function runMemoryProbe(): Promise<void> {
   const hudEl = document.getElementById('hud') as HTMLPreElement
   const log: string[] = []
@@ -550,7 +550,7 @@ async function runMemoryProbe(): Promise<void> {
 }
 
 // --- `?harness=1` (M17b, Planning decisions "Manual harness
-// shape"; docs/plan/device-checks.md, M17b: desktop Safari and Firefox, closing 0018 Consequences'
+// shape"; the `device-check` skill, M17b: desktop Safari and Firefox, closing 0018 Consequences'
 // deferral -- "the CDP instrument of 0016 is Chromium-only"). A real, connected `fx-drawables`
 // client (`gc-drawables.ts`'s own topology, TerrainRenderer + DrawablesRenderer + sprite atlas)
 // stepped -- not real rAF: Tyler drives this from his own DevTools "record" button, so a fast,
@@ -686,7 +686,7 @@ async function runHarness(): Promise<void> {
     renderer.draw(target)
   }
 
-  // `docs/plan/device-checks.md`'s own M17b steps: "record, press 'run' on the page, stop after it
+  // the `device-check` skill's own M17b steps: "record, press 'run' on the page, stop after it
   // prints" -- setup (above) is one-time and not what the check measures, so it runs immediately;
   // the actual warm-up + measured steps wait for this button, so Tyler's own DevTools recording
   // (started first) brackets only the work being checked.
@@ -746,7 +746,7 @@ async function runHarness(): Promise<void> {
 }
 
 // --- `?anchors=50[&anchorMode=translate]` (M18 step 8;
-// docs/plan/device-checks.md, "M18: Picking and overlay anchoring") -- Tyler's own fill/pinch check
+// the `device-check` skill, "M18: Picking and overlay anchoring") -- Tyler's own fill/pinch check
 // for overlay anchoring on a real phone (0019 Consequences: "Deferred to Phase 2/3 manual device
 // checks: anchoring on iOS Safari"), and the one exit criterion needing a real running page:
 // "device.html?anchors=50 shows pick_id on the HUD". A real, connected `fx-overlay` client (unlike
@@ -893,7 +893,7 @@ async function runAnchorsCheck(count: number, mode: 'properties' | 'translate'):
     client.camera.tick(dtMs)
   }
 
-  // `device.ts`'s own `runFillRateHud` precedent, and `docs/plan/device-checks.md`'s M18-anchors
+  // `device.ts`'s own `runFillRateHud` precedent, and the `device-check` skill's M18-anchors
   // check ("HUD rAF p95 <= 17.5 ms during the pinch"): the rAF interval, not the callback's own
   // duration (this page's own frame cost is dominated by the terrain/drawables draw, already
   // covered by M09b/M17b's own checks; what M18-anchors adds is whether *mounting anchors* itself

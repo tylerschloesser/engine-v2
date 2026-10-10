@@ -1,5 +1,4 @@
-//! Fixture game `fx-machines` (M21, docs/plan/
-//! 21b-timers-wakeups-and-tickcx.md): a 2x2 multi-tile entity that exercises footprint occupancy,
+//! Fixture game `fx-machines` (M21, M21b): a 2x2 multi-tile entity that exercises footprint occupancy,
 //! footprint-scoped delta/snapshot delivery, the state-budget check and (M21b) the timer wheel,
 //! wake queue and an active-list "Spinner" end to end.
 //!

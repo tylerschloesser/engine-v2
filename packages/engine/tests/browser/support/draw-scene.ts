@@ -1,5 +1,4 @@
-// Hand-builds a `RegionId::DrawList` slot's wire bytes (header + body) for a probe scene (docs/plan/
-// 17-drawlist-and-sprites.md Tests added): the exact layout `client/drawlist.rs`'s `DrawList::
+// Hand-builds a `RegionId::DrawList` slot's wire bytes (header + body) for a probe scene (M17 Tests added): the exact layout `client/drawlist.rs`'s `DrawList::
 // sort_into` writes (Planning decisions "Slot header is 1,024 bytes"), assembled directly rather
 // than through a real `Instance` -- no worker, no ABI, no sim (`draw.*.spec.ts`'s own scenes, plumbed
 // through `window.__drawables.acquireFromBytes`). Records are expected pre-sorted by `layer`

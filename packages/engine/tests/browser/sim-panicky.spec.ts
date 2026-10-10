@@ -25,8 +25,7 @@ test('sim_worker_recovers_from_panic', async ({ page }) => {
   const worldId = `panicky-${test.info().workerIndex}-${Date.now()}`
   // `sim_test_trap`'s own default panic text ("sim_test_trap: deliberate test trap") reaches the
   // page's console through the loader's default `onPanic` hook (`console.error`, `loader.ts`) --
-  // expected exactly once here, `openPage`'s own `allowConsoleError` hook (docs/plan/
-  // 24-recovery-and-migration.md's own addition to `support/page.ts`).
+  // expected exactly once here, `openPage`'s own `allowConsoleError` hook (M24's own addition to `support/page.ts`).
   await openPage(page, `/sim-panicky.html?world=${worldId}`, {
     allowConsoleError: (text) => text.includes('sim_test_trap'),
   })

@@ -1,6 +1,5 @@
 //! `Prediction`, `Pending<G>` and `PendingQueue<G>` (docs/decisions/0012-prediction-and-
-//! reconciliation.md Decision: "queued as pending with its `seq`"; docs/plan/
-//! 25-prediction-core.md Seams). Ported from the spike's own `Prediction<R>`/`Pending<G>`/
+//! reconciliation.md Decision: "queued as pending with its `seq`"; M25 Seams). Ported from the spike's own `Prediction<R>`/`Pending<G>`/
 //! `Client`'s `pending: VecDeque<Pending<G>>`.
 
 use std::collections::VecDeque;
@@ -40,8 +39,7 @@ pub struct Pending<G: Game> {
 }
 
 /// The client's own pending queue (0012 Decision): every action dispatched but not yet acked,
-/// oldest first. Capacity is a convention shared with `client::core::OUTBOX_CAPACITY` (docs/plan/
-/// 25-prediction-core.md Planning decisions: "Queue full stays M16's behaviour ... prediction adds
+/// oldest first. Capacity is a convention shared with `client::core::OUTBOX_CAPACITY` (M25 Planning decisions: "Queue full stays M16's behaviour ... prediction adds
 /// no second limit") -- `ClientCore::on_action` refuses a further dispatch once *this* queue
 /// itself reaches `OUTBOX_CAPACITY`, so nothing here needs to enforce a second cap of its own.
 ///

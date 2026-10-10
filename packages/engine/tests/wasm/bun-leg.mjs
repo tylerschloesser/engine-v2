@@ -101,8 +101,7 @@ function manualTimer() {
   }
 }
 
-/** `fx-puts`'s own idle-100 golden (M13 step 3). docs/plan/
- * 27-server-entrypoint-and-netcode-harness.md, Order of work 1 ("Bun: M02's plain script,
+/** `fx-puts`'s own idle-100 golden (M13 step 3). M27, Order of work 1 ("Bun: M02's plain script,
  * extended"): ticked through a real `createWorldServer` with `memoryStorage()`, the Bun leg's own
  * counterpart of `puts.test.ts`'s `wasm_idle_100_matches_native` -- the checkpoint hash is read
  * back by reopening the same storage through `Persistence.open`, since `WorldServer`'s own

@@ -68,7 +68,7 @@ const swiftshaderArgs =
 // a *separate*, non-aliased executable (playwright-core@1.63.0 lib/coreBundle.js:
 // `chromiumAliases = ['chrome-for-testing']` does not include it; `registry.getExecutableName`
 // passes an explicit non-alias channel straight through as the binary name) -- the "old shell" the
-// spike used locally (`spikes/zero-gc-webgpu/playwright.config.mjs`: `CHANNEL=shell -> old headless
+// spike used locally (Phase 1 spike, tag `phase-3-complete`: `CHANNEL=shell -> old headless
 // shell, which with --enable-unsafe-webgpu yields the SwiftShader adapter`, confirmed in
 // `RESULT.md`: `vendor: google, architecture: swiftshader, isFallbackAdapter: true`, even on
 // macOS, because the shell binary has no real-GPU path at all and always falls back to software
@@ -176,7 +176,7 @@ export default defineConfig({
       // `requestAnimationFrame` pacing (0020 §3's "browser tests never use real rAF pacing" rule is
       // about lockstep determinism tests; this one exists specifically to measure real frame
       // pacing, `device.html`'s own precedent). `--disable-frame-rate-limit --disable-gpu-vsync`
-      // (the spike's own flags, `spikes/zero-gc-webgpu/RESULT.md`: "600 frames in 93 ms" with them)
+      // (the spike's own flags, Phase 1 spike at tag `phase-3-complete`: "600 frames in 93 ms" with them)
       // are scoped to this project alone, not `chromium`/`gc`, so no other real-rAF-driven test
       // (none exist yet) is affected by uncapped pacing.
       name: 'frame-bench',

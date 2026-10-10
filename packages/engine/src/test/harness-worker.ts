@@ -11,7 +11,7 @@ import type { FromWorker, ToWorker } from './protocol.js'
 import { StepBlockField, StepOp, stepBlockView, WorkerState } from './step-block.js'
 
 // `tsconfig.json` has no `webworker` lib (it would fight `dom`'s incompatible `self`/`postMessage`
-// declarations); the spike's worker files (spikes/vite-lib-worker-wasm) used the same cast.
+// declarations); the spike's worker files (Phase 1 spike, tag `phase-3-complete`) used the same cast.
 const scope = self as unknown as {
   postMessage(m: FromWorker): void
   onmessage: ((ev: MessageEvent<ToWorker>) => void) | null

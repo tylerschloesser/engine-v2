@@ -33,8 +33,7 @@ const MAX_PENDING: usize = 512;
 /// applied to a Q24.8-per-second velocity, i.e. exactly 0.5s, with no float involved.
 const LOOKAHEAD_HALF: i64 = 2;
 
-/// The queue's view of the world this pass (Planning decisions 3 of docs/plan/
-/// 08b-gen-workers-and-queue.md): `visible` and `center` come from `view::visible_rect` and the
+/// The queue's view of the world this pass (Planning decisions 3 of M08b): `visible` and `center` come from `view::visible_rect` and the
 /// camera block; `velocity` is Q24.8 tiles/second. Integer-only beyond `view::visible_rect` itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GenView {

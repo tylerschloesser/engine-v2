@@ -1,5 +1,4 @@
-// The `SabSet` every later milestone posts to its workers (docs/decisions/0015 §2, §5; docs/plan/
-// 06-sab-primitives-and-workers.md, Planning decisions "Ring capacities"). Ring sizes here are
+// The `SabSet` every later milestone posts to its workers (docs/decisions/0015 §2, §5; M06, Planning decisions "Ring capacities"). Ring sizes here are
 // internal constants, not game config; an owning milestone may revise its own row in its
 // Deviations. `sabBytesTotal()` assumes the worst case, two gen workers (docs/decisions/
 // 0008-chunk-generation.md), which is what the whole-tab budget must hold under.

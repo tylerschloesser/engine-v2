@@ -3,8 +3,7 @@
 /**
  * 0004 Decision, verbatim: `RateLimited` (admission, never reaches `apply`), `StateBudgetFull`
  * (0007 §8's check), `EngineFault` (0005 skip-record recovery). None is produced by this
- * milestone (M12b Non-scope). `Serialize` (docs/plan/
- * 16-action-round-trip.md): a rejected action's result JSON (`client.onActionResult`) needs to
+ * milestone (M12b Non-scope). `Serialize` (M16): a rejected action's result JSON (`client.onActionResult`) needs to
  * encode this half of `Rejected<G>`, tagged `{"Engine":<this>}` -- `game_instance::
  * push_result_record` keeps `Rejected<G>`'s own `Game`/`Engine` level in the JSON rather than
  * flattening it away (orchestrator ruling at the M16 gate): 0004's Decision defines `Rejected<G>`

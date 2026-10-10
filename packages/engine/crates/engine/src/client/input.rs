@@ -1,5 +1,4 @@
-//! Semantic input events (docs/decisions/0019-camera-input-and-overlay.md §4; docs/plan/
-//! 11-camera-and-input.md Seams): the wire record `packages/engine/src/input/record.ts` writes
+//! Semantic input events (docs/decisions/0019-camera-input-and-overlay.md §4; M11 Seams): the wire record `packages/engine/src/input/record.ts` writes
 //! into `inputRing`, decoded here after the client worker drains that ring into `Rx` and calls
 //! `on_input(len)` (`abi::on_input`). `InputQueue` is the fixed-64 holding area a `client`-role
 //! `Instance` owns beside its own state; nothing reads it for game logic yet (`FrameCx::input` is
@@ -99,8 +98,7 @@ impl InputEvent {
 /// record is dropped to make room -- the two kinds a later, in-progress gesture makes stale -- before
 /// any other kind; if none exists (every queued event is some other kind) **and the incoming event
 /// is not `kind::GAME`**, the incoming event is dropped instead of displacing something the Seams
-/// call more important. A `kind::GAME` event is never dropped this way (docs/plan/
-/// 18-picking-and-overlay.md Scope: "it is never dropped by `InputQueue` overflow"): if no hover/drag
+/// call more important. A `kind::GAME` event is never dropped this way (M18 Scope: "it is never dropped by `InputQueue` overflow"): if no hover/drag
 /// victim exists either, the *oldest event of any other kind* is evicted to make room instead (`Self
 /// ::drop_oldest_non_game`) -- `client.input.emit`'s own call rate (a handful of human-driven UI
 /// intents per frame, M33's construction mode) makes a queue of all 64 slots already holding

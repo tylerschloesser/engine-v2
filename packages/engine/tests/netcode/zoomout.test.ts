@@ -1,4 +1,4 @@
-// `zoomout/*` (M31 step 6, PRE-PLAN §9 risk 3): the 128-chunk cap
+// `zoomout/*` (M31 step 6, 0059): the 128-chunk cap
 // measured at full zoom-out (a 256-tile view, 9 x 9 visible chunks, ring 1 = 121) over a dense
 // `fx-busy-field` region, panning at one and two view-widths per second and oscillating under 64
 // tiles. One world is built once (a 25 x 11 block of dense chunks, about 55,000 entities) and every
@@ -168,7 +168,7 @@ test('zoomout/oscillate-48-tiles', async () => {
 }, 120_000)
 
 test('zoomout/oscillate-48-tiles-cap144', async () => {
-  // The risk-3 candidate (PRE-PLAN section 11 item 8): a 144-chunk cap, ring 1 of the maximum view
+  // The risk-3 candidate (0059): a 144-chunk cap, ring 1 of the maximum view
   // plus one entering and one retained column.
   const r = await pan({ cap: 144, halfH: 128, viewWidthsPerS: 0.375, seconds: 10, oscillate: 48 })
   const s = summarize(r)

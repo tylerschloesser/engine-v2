@@ -62,8 +62,7 @@ export type IndirEntry = { x: number; y: number; value: number }
 export type Texel = { base: number; resource: number }
 
 /** `renderer.viewport`'s own shape (Seams, Provides), named so `render/viewport.ts` and
- * `engine/test`'s `setViewport` don't each restate it inline (docs/plan/
- * 09b-terrain-art-and-lifecycle.md). */
+ * `engine/test`'s `setViewport` don't each restate it inline (M09b). */
 export type Viewport = { widthPx: number; heightPx: number; dpr: number; renderScale: number }
 
 export interface TerrainRenderer {
@@ -148,8 +147,7 @@ export interface TerrainRenderer {
   /** `render/viewport.ts`'s own call, right after mutating `viewport` in place -- not a Seam name
    * itself, the wiring between this renderer and whatever owns its resize observer. */
   notifyViewportChange(): void
-  /** `engine/test`'s `gpuBytes` counter, this renderer's own share (docs/plan/
-   * 17b-sprites-and-frame-budget.md Scope: "page, indirection, tile art with mips" plus every other
+  /** `engine/test`'s `gpuBytes` counter, this renderer's own share (M17b Scope: "page, indirection, tile art with mips" plus every other
    * buffer this renderer creates): the fixed page texture (4 MiB), indirection texture, visual-table
    * buffer and frame uniform, plus whatever the currently-installed tile array reports
    * (`setTileArray`'s own `gpuBytes` argument, or the tiny placeholder's byte count before the first
@@ -168,8 +166,7 @@ function placeholderTileArray(device: GPUDevice): GPUTexture {
     usage: GPUTextureUsage.TEXTURE_BINDING,
     // Compatibility mode (0018 §7: "each texture bound with one view dimension"): a texture's
     // *bindable* view dimension must be declared at creation and match every view of it used in a
-    // bind group -- found by `device: view probe both paths`'s own `uncapturederror` (docs/plan/
-    // 09-renderer-terrain.md Deviations), since `buildBindGroup` always views this as `2d-array`.
+    // bind group -- found by `device: view probe both paths`'s own `uncapturederror` (M09 Deviations), since `buildBindGroup` always views this as `2d-array`.
     textureBindingViewDimension: '2d-array',
   })
   return texture
@@ -314,7 +311,7 @@ export async function createTerrainRenderer(
   }
 
   // Reused every frame (`.claude/rules/hot-paths.md`): the spike's own pattern
-  // (`spikes/zero-gc-webgpu/public/main.js`) of mutating one descriptor object in place.
+  // (Phase 1 spike, tag `phase-3-complete`) of mutating one descriptor object in place.
   const colorAttachment: GPURenderPassColorAttachment = {
     view: undefined as unknown as GPUTextureView,
     loadOp: 'clear',

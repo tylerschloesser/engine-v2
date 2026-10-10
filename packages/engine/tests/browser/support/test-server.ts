@@ -57,8 +57,7 @@ export interface StartTestServerOptions {
    * what a fixture with `Params = ()` needs; a game with real params (the reference game's
    * `games/reference/world.json`, M34) passes its own. */
   params?: WorldConfig['params']
-  /** A fixed port instead of the default OS-assigned one (docs/plan/
-   * 29-net-worker-and-reference-server.md, this cut's own step 5): `gc/multiplayer-topology`'s own
+  /** A fixed port instead of the default OS-assigned one (M29, this cut's own step 5): `gc/multiplayer-topology`'s own
    * spec needs a URL it can bake into `zeroGcSuite`'s `path` *before* `test.beforeAll` ever runs
    * (test registration happens synchronously, at file-load time -- there is no way to thread an
    * async-discovered OS-assigned port into a `path` string chosen before any hook runs). Every

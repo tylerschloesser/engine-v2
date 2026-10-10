@@ -38,8 +38,7 @@ export interface OpfsStorage extends Storage {
    * is queued -- a worker body can poll this every wake, cheaply, with no allocation on a `null`
    * read. At most one continuation is ever queued at a time (0005 Cadence writes are already
    * serialized); a `write()` that arrives before the previous one drains chains behind it instead of
-   * replacing it (`#queueRename`'s own `previous` capture). Gate fix (docs/plan/
-   * 23-persistence-opfs-and-lifecycle.md, "Open gate failures" 1): once handed out and invoked by
+   * replacing it (`#queueRename`'s own `previous` capture). Gate fix (M23, "Open gate failures" 1): once handed out and invoked by
    * *any* caller (`shell.runAsync`, or `flush()` itself), the closure marks itself running
    * (`#renameInFlight`) until its own work -- rename and scratch reopen both -- has fully finished, so
    * `flush()` (below) can find and wait for it even after this method has already handed it off and

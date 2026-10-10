@@ -1,5 +1,4 @@
-// The session table (docs/decisions/0013-sessions-and-integrity.md "Identity"; docs/plan/
-// 28-sessions-and-reconnect.md steps 1-2): `SHA-256(secret) -> { playerId, lastPresence }`,
+// The session table (docs/decisions/0013-sessions-and-integrity.md "Identity"; M28 steps 1-2): `SHA-256(secret) -> { playerId, lastPresence }`,
 // persisted through `Storage.write` at key `sessions` (0005's key list, `storage/types.ts`'s own
 // `WorldKeys.sessions`). Off the tick path (a join/reconnect is a human-rate event, not per-frame
 // or per-tick), so JSON plus `crypto.subtle.digest` (WebCrypto, present in every target runtime,

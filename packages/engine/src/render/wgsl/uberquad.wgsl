@@ -1,5 +1,4 @@
-// Uber-quad instanced shader (docs/decisions/0018-renderer.md §2, §4 "Shapes need no art"; docs/plan/
-// 17-drawlist-and-sprites.md Scope, steps 4-6): one instanced draw per non-empty DrawList layer, six
+// Uber-quad instanced shader (docs/decisions/0018-renderer.md §2, §4 "Shapes need no art"; M17 Scope, steps 4-6): one instanced draw per non-empty DrawList layer, six
 // vertices (two triangles) per instance, drawing every `Draw` kind except sprite (M17b) by an SDF or
 // simple coverage test in the fragment stage -- circle, ring, rect, progress bar, radial progress,
 // tile ghost. `pick_id` (bytes 28..32 of a `Draw` record) is never bound as a vertex attribute (0018
@@ -203,8 +202,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     alpha = 0.5;
   } else if (in.kind == KIND_SPRITE) {
     // Sprite sampling (M17b steps 1-3; binding rule: anchor the
-    // magnified path on `floor(texel + 0.5)`, never `floor(texel)` -- `docs/plan/
-    // 09b-terrain-art-and-lifecycle.md` Deviations "Fix round 2" found the inverted form saturates to
+    // magnified path on `floor(texel + 0.5)`, never `floor(texel)` -- `M09b` Deviations "Fix round 2" found the inverted form saturates to
     // a shared texel *edge* instead of the texel's own centre, blending ~50/50 with the neighbour
     // almost everywhere. This is the same formula as `terrain.wgsl`'s fixed `sample_tile_art`, redone
     // here per-axis (a sprite's rect need not be square relative to its own world size) and with an

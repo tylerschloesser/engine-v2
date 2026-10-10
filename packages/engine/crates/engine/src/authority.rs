@@ -1,8 +1,7 @@
 //! `Authority<G>` (docs/decisions/0003-game-facing-api.md "Contexts": "the host; reads never
 //! `Unknown`" except a missing player; a write applies, records the delta, and derives its scope
 //! from footprint or player"): wraps a `Store<G>` plus the host driver's own state, `SimRng` and
-//! the current `Tick`, that M12's `Store` deliberately does not hold (docs/plan/
-//! 12-store-and-game-trait.md Deviations). `TickCx` (0003: "`Authority` plus iteration over active
+//! the current `Tick`, that M12's `Store` deliberately does not hold (M12 Deviations). `TickCx` (0003: "`Authority` plus iteration over active
 //! entities") is built here too, since it delegates every `WorldRead`/`WorldWrite` method straight
 //! to one; M21b gives it its final shape (wake/timer/active-
 //! list methods) and adds the undo-journal experiment at the bottom of this file.
@@ -17,8 +16,7 @@ use crate::time::{Tick, Ticks};
 use crate::world::{ChunkCoord, SystemId, TerrainStore, Tile, TilePos, TileRect, TraitSet};
 use crate::world_access::{WorldRead, WorldWrite, chunk_of};
 
-/// The undo-journal experiment's adopt/not-adopt decision (docs/plan/
-/// 21b-timers-wakeups-and-tickcx.md Planning decisions; the ADR this milestone writes has the full
+/// The undo-journal experiment's adopt/not-adopt decision (M21b Planning decisions; the ADR this milestone writes has the full
 /// measurement). `true`: the bench (`fixtures/machines/tests/journal_bench.rs`,
 /// `slow_apply_journal_overhead`) measured a 2.5% median `apply` overhead and zero steady-state
 /// allocations against `fx-machines` (10k mixed actions, 5% rejecting) -- both inside 0023's own
@@ -202,8 +200,7 @@ impl<G: Game> Authority<G> {
     /// `terrain` is already constructed (M07/M08 own that); `global` is the value before
     /// `Game::genesis` runs (`Store::new`'s own doc comment: `G::Global` has no `Default` bound in
     /// the `Game` trait, so `Sim::genesis` -- the only production caller -- supplies one through a
-    /// local `where G::Global: Default` bound instead; see docs/plan/
-    /// 12b-world-access-and-sim-driver.md Deviations). `Game::register` runs once, inside
+    /// local `where G::Global: Default` bound instead; see M12b Deviations). `Game::register` runs once, inside
     /// `Store::new` (M21, M21 Deviations: moved from here into
     /// `Store` so `Store::apply` can consult footprints for `ChunkIndex` maintenance) -- `Authority`
     /// no longer holds its own `Registry` copy, reading `self.store.registry()` instead.
@@ -418,8 +415,7 @@ impl<G: Game> Authority<G> {
     }
 
     /// A rejecting `apply` that nonetheless wrote (violates "validate first, write after", 0003).
-    /// Debug and test builds panic immediately, so authors learn the mistake right away (docs/plan/
-    /// 21b-timers-wakeups-and-tickcx.md Planning decisions: "debug and test builds keep the
+    /// Debug and test builds panic immediately, so authors learn the mistake right away (M21b Planning decisions: "debug and test builds keep the
     /// panic"). Release builds roll back through the undo journal instead, counting it, **only if**
     /// [`UNDO_JOURNAL_ADOPTED`] -- Deviations records the measured numbers behind that constant;
     /// while it is `false` this is unconditional, exactly the assert this milestone found in place.
@@ -482,8 +478,7 @@ impl<G: Game> Authority<G> {
     /// `Store::apply` is the only mutator of replicated state (`crate::store`'s own doc comment)
     /// -- but outside [`Authority::write`]/the [`ChangeLog`]: 0004 delivers acks to a client over
     /// their own channel ("Acks ride on deltas", a separate `Ack<G>`, never a rebroadcast
-    /// `Delta`), so this is never a scoped, client-visible change (docs/plan/
-    /// 12b-world-access-and-sim-driver.md Deviations, which also has the added `Delta::Ack`
+    /// `Delta`), so this is never a scoped, client-visible change (M12b Deviations, which also has the added `Delta::Ack`
     /// variant this calls into `Store::apply` through).
     pub(crate) fn record_ack(&mut self, who: PlayerId, seq: u32) {
         self.store.apply(&Delta::Ack { who, seq });
@@ -554,8 +549,7 @@ impl<G: Game> Authority<G> {
         // nothing further to do here.
     }
 
-    /// Pushes `id` to the wake queue's `next` list, deduplicated (docs/plan/
-    /// 21b-timers-wakeups-and-tickcx.md Scope). Shared by every auto-wake put and `TickCx::wake`.
+    /// Pushes `id` to the wake queue's `next` list, deduplicated (M21b Scope). Shared by every auto-wake put and `TickCx::wake`.
     fn auto_wake(&mut self, id: EntityId) {
         let pushed = self.store.wake_push_next(id);
         if pushed && self.journal.is_recording() {

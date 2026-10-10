@@ -143,8 +143,7 @@ fn border_machine_gone_when_last_overlapped_chunk_leaves() {
         lb.step();
     }
     assert!(!lb.client(idx).view().is_held(ChunkCoord::new(2, 0)));
-    // `entity(id)`'s `Unknown`-vs-`None` split (0022 §7, landed by M25, docs/plan/
-    // 25-prediction-core.md): the client cannot tell "despawned" from "outside my subscription",
+    // `entity(id)`'s `Unknown`-vs-`None` split (0022 §7, landed by M25, M25): the client cannot tell "despawned" from "outside my subscription",
     // so a real id it no longer holds is `Err(Unknown)`, not `Ok(None)`.
     assert_eq!(
         lb.client(idx).view().entity(id),

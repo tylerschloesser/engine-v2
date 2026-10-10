@@ -62,8 +62,7 @@ export function installGcPage(
   // `attributionRoots` moves from `["stepFrame", "stepTick"]` to `["drive"]`, an ancestor that
   // already contained both and adds nothing else). Mirrors `src/worker/{client,gen,sim}.ts`'s
   // `body()` calling `applyGcHook` as its own first statement -- not a sibling call in `run`'s own
-  // loop, which is where it lived before and why software-mode B never saw it (docs/plan/
-  // 10-ci-workflow.md, Deviations, part (a)).
+  // loop, which is where it lived before and why software-mode B never saw it (M10, Deviations, part (a)).
   function drive(f: number): void {
     if (control && control.kind !== 'post-message' && control.isolate === 'main') {
       if (control.kind === 'object') allocateObject(f)

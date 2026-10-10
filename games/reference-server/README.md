@@ -37,7 +37,7 @@ ENGINE_WS_PROXY_PORT=4174 pnpm --filter reference exec vite preview --host 0.0.0
 Open `http://<your LAN address>:4173/#k=` on each device (the fragment is the invite: `k` is the join
 key, empty unless you start the server with `JOIN_KEY=...`, then `#k=<that key>`). Without a `#k=` the
 page plays a world of its own in that browser. To reach it from a phone over HTTPS, use
-[How to serve a page to the phone](../../docs/plan/device-checks.md#how-to-serve-a-page-to-the-phone)
+[How to serve a page to the phone](../../.claude/skills/device-check/SKILL.md#how-to-serve-a-page-to-the-phone)
 (`pnpm device:serve --tunnel --app reference --ws` starts the server and the proxy for you).
 
 ## Flags and environment

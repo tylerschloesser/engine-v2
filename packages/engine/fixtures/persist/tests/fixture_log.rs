@@ -1,5 +1,4 @@
-//! Records and checks in `fx-persist`'s own log + checkpoint hashes (docs/plan/
-//! 22-persistence-log-and-snapshots.md Order of work step 3). Regenerated only by an explicit
+//! Records and checks in `fx-persist`'s own log + checkpoint hashes (M22 Order of work step 3). Regenerated only by an explicit
 //! command (0020 §5), the same bless convention every other native golden in this repo uses:
 //!
 //! ```sh

@@ -53,7 +53,7 @@ impl ByteSink for Fnv64 {
     }
 }
 
-/// SplitMix64 finalizer (`spikes/determinism-hash`): spreads a hash or counter into a
+/// SplitMix64 finalizer (Phase 1 `determinism-hash` spike): spreads a hash or counter into a
 /// well-mixed 64-bit value, e.g. for RNG seeding (M12) or bucketing.
 #[inline]
 pub fn mix64(mut z: u64) -> u64 {

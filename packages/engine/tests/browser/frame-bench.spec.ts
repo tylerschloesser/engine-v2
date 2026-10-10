@@ -109,8 +109,8 @@ test('bench.frame_worstcase @slow', async ({ page, browser }, testInfo) => {
   await page.evaluate(() => window.__frameBench?.start())
 
   // Warm-up: 120 real rAF frames, unmarked on the main thread (JIT tiers, inline caches, lazily
-  // created GPU state -- the spike's own `WARMUP` precedent, `spikes/zero-gc-webgpu/tests/
-  // harness.mjs`); the worker wrapper above is already marking every `frame()` call, but nothing
+  // created GPU state -- the spike's own `WARMUP` precedent, Phase 1 spike at tag
+  // `phase-3-complete`); the worker wrapper above is already marking every `frame()` call, but nothing
   // reads those marks back until `Tracing.start` below.
   await page.waitForFunction(
     (n) => (window.__frameBench?.framesRendered() ?? 0) >= n,

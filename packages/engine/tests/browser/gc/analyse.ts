@@ -1,5 +1,5 @@
 // Pure analysis of the two CDP artefacts the `gc` instrument collects (docs/decisions/0016 §3 steps
-// 6-7; ported from spikes/zero-gc-webgpu/tests/harness.mjs's `sumProfile`/`analyseTrace`). No CDP,
+// 6-7; ported from the Phase 1 zero-gc-webgpu spike's (tag `phase-3-complete`) `sumProfile`/`analyseTrace`). No CDP,
 // no Playwright: everything here is a function of already-captured JSON, so it is unit-testable on
 // small canned samples (`gc/data/{trace,profile}-sample.json`) without a browser.
 
@@ -188,8 +188,7 @@ export type Verdict = {
  * `software.isolates.main.attributedBytesPerFrame` instead of the raw total. `main` hosts the
  * renderer, the one isolate a software (SwiftShader) adapter's own CPU-side work can land in;
  * every other isolate never touches WebGPU at all, so its raw byte count in software mode is
- * exactly as clean as it already is in hardware -- same check, same budget, both modes (docs/plan/
- * 10-ci-workflow.md, orchestrator's decision, 2026-09-21).
+ * exactly as clean as it already is in hardware -- same check, same budget, both modes (M10, orchestrator's decision, 2026-09-21).
  *
  * **This was not always true and is not obviously true from 0016's own text**: caveat b's stated
  * reason for attribution is "harness overhead no longer amortises" once a slow scene forces a

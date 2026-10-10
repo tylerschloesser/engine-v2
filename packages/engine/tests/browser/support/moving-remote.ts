@@ -1,5 +1,4 @@
-// A second player for a browser page over the same `startTestServer` server (docs/plan/
-// 30-interpolation.md, exit criterion "zero-GC in the multiplayer topology with one moving
+// A second player for a browser page over the same `startTestServer` server (M30, exit criterion "zero-GC in the multiplayer topology with one moving
 // remote"): a Node-side `HeadlessClient` on a real loopback socket whose camera walks a small
 // curve around the origin. `fx-presence`'s client copies a non-default camera's centre and
 // velocity into its presence sample, so each `step()` gives the host a new sample to relay to the

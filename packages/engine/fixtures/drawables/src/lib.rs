@@ -1,5 +1,4 @@
-//! Fixture game `fx-drawables` (M17, steps 2 and 6; docs/plan/
-//! 17b-sprites-and-frame-budget.md fix round 1): a `Game` whose only interesting behaviour is
+//! Fixture game `fx-drawables` (M17, steps 2 and 6; M17b fix round 1): a `Game` whose only interesting behaviour is
 //! `ClientSide::extract` -- one circle (or, for an entity with `sprite: true`, one `sprite_id::QUAD`
 //! sprite instead) per replica entity, skipping the smallest ones above a zoom threshold
 //! (`frameview.zoom_matches_camera_block`'s own coverage: "the record count and DrawList hash

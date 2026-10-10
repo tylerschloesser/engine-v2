@@ -147,8 +147,7 @@ impl TimerWheel {
         self.by_entity.count
     }
 
-    /// Non-mutating peek (the undo journal's own pre-image capture, docs/plan/
-    /// 21b-timers-wakeups-and-tickcx.md fix round 1): `id`'s current timer tick, if any, without
+    /// Non-mutating peek (the undo journal's own pre-image capture, M21b fix round 1): `id`'s current timer tick, if any, without
     /// removing it.
     pub(crate) fn tick_of(&self, id: EntityId) -> Option<Tick> {
         self.by_entity.get(id)

@@ -2,7 +2,7 @@
 //! `testkit::Loopback` runs of the same action script, each under a *different* scripted camera
 //! path, must seal byte-identical write-ahead log frames -- camera reports are never logged
 //! (spec `simulation.md`; the engine's own camera/viewport is deliberately non-mutating and no
-//! part of the sim, `docs/spec/overview.md`). Needs `Host::sim_seal_frame` wired for real (step 4
+//! part of the sim, `docs/architecture/README.md`). Needs `Host::sim_seal_frame` wired for real (step 4
 //! of this brief); steps 1-3 left this test for the second implementer (Deviations).
 
 use engine::abi::Instance;

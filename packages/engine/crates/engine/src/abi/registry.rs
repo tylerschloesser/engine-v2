@@ -599,7 +599,7 @@ pub trait Instance: Sized + 'static {
     /// last_summary()`, two LE `u32` into `result` (the whole `Result` region), the same crossing
     /// shape as `sim_region_hash`/`client_region_hash`. `ticks_per_second` (already `tick_hz()`,
     /// read once at worker setup, not re-plumbed per frame) and `session_state`/`seq_seed`
-    /// (learned from the first frame's own `ack_seq`, PRE-PLAN §10) are derived entirely on the TS
+    /// (learned from the first frame's own `ack_seq`) are derived entirely on the TS
     /// side.
     ///
     /// M26 steps 4-6 (`ABI_VERSION` 23 -> 24): widened

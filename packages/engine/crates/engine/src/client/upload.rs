@@ -83,8 +83,7 @@ fn push_bounded<T>(q: &mut VecDeque<T>, item: T) {
 }
 
 /// Squared distance in chunk space, for nearest-first ordering (mirrors `view::nearest_first`'s
-/// private helper; duplicated here because that one is not `pub` -- docs/plan/
-/// 09-renderer-terrain.md Deviations).
+/// private helper; duplicated here because that one is not `pub` -- M09 Deviations).
 #[inline]
 fn chunk_dist_sq(a: ChunkCoord, b: ChunkCoord) -> i64 {
     let dx = a.x as i64 - b.x as i64;
@@ -355,15 +354,13 @@ impl<C: ClientSide<G>, G: crate::game::Game> Uploader<C, G> {
     /// `upload_stage` ABI export's implementation forwards here with the fixture's own store.
     /// Returns the number of records actually written. Every `CHUNK` record reads pristine + the
     /// replica overlay only, the same as always: for the prediction overlay too, use
-    /// [`Self::stage_predicted`] (`game_instance.rs`'s own `upload_stage`, docs/plan/
-    /// 26-prediction-rendering-and-clocks.md).
+    /// [`Self::stage_predicted`] (`game_instance.rs`'s own `upload_stage`, M26).
     pub fn stage(&mut self, max_records: u32, store: &TerrainStore, region: &mut [u8]) -> u32 {
         self.stage_impl(max_records, store, None, region)
     }
 
     /// Same as [`Self::stage`], but every `CHUNK` record's own tile pass additionally overwrites
-    /// with `overlay`'s effective value where one exists (docs/plan/
-    /// 26-prediction-rendering-and-clocks.md Planning decisions "One resolution point": "the slab
+    /// with `overlay`'s effective value where one exists (M26 Planning decisions "One resolution point": "the slab
     /// rebuild ... reads effective tiles (pristine, then replica overlay, then prediction
     /// overlay)"). `PATCH`/`INDIR` records are unaffected -- a replica delta's own confirmed value
     /// is always the correct one for a fine-grained patch; the prediction overlay only ever needs

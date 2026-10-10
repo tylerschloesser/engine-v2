@@ -1,5 +1,4 @@
-// The 0005 `Storage` contract's own behavioural conformance checks (docs/plan/
-// 22-persistence-log-and-snapshots.md Seams: `runStorageConformance(make): Promise<string[]>`, "no
+// The 0005 `Storage` contract's own behavioural conformance checks (M22 Seams: `runStorageConformance(make): Promise<string[]>`, "no
 // test-runner imports, so M23 can run it in a page"). Every check builds a fresh instance from
 // `make()`, throws with a descriptive message on the first failure, and otherwise pushes its own
 // name onto the result -- a plain array a caller (a Vitest test today, a browser page's own

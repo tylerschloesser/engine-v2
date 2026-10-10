@@ -1,7 +1,7 @@
 // M18 Exit criteria: "In desktop Chrome `device.html?anchors=50`
 // shows `pick_id` on the HUD: a click on a ring sets it to that ring's id, a click on empty ground
 // to `-`, a click on an anchored button leaves it unchanged (asserted by the `anchors` browser test
-// reading the HUD text)." Also the device page half of `docs/plan/device-checks.md`'s M18 section.
+// reading the HUD text)." Also the device page half of the `device-check` skill's M18 section.
 //
 // Viewport fixed at 800x600 (`device.html`'s own canvas fills `100vw`/`100vh`) so the screen math is
 // exact: `tilesAcross=20` -> `pxPerTile = max(800, 600) / 20 = 40`. Ring `pickId=26` (grid index 25,

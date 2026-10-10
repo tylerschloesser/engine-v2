@@ -1,5 +1,4 @@
-// The `profile-frame` skill's own command (`.claude/skills/profile-frame/SKILL.md`; docs/plan/
-// 17b-sprites-and-frame-budget.md Planning decisions "profile-frame skill contents"). Rebuilds the
+// The `profile-frame` skill's own command (`.claude/skills/profile-frame/SKILL.md`; M17b Planning decisions "profile-frame skill contents"). Rebuilds the
 // engine + fixtures + browser-suite pages, serves them, launches Chromium with the same
 // `--disable-frame-rate-limit --disable-gpu-vsync` flags `frame-bench.spec.ts`'s own Playwright
 // project uses, and runs the identical park/install/resume/start/warm-up/timed-window sequence
@@ -123,7 +122,7 @@ function sumCpuProfile(profile) {
   return { totalMs: total / 1000, top5: byFn.slice(0, 5) }
 }
 
-/** Non-flattened CDP tunnel to a worker (spike precedent, `spikes/zero-gc-webgpu/tests/harness.mjs`;
+/** Non-flattened CDP tunnel to a worker (Phase 1 spike precedent, tag `phase-3-complete`;
  * `tests/browser/gc/sessions.ts`'s own `TunnelSession`, duplicated here for the same TS/plain-Node
  * boundary reason `frameDurationsMs` above is). */
 class TunnelSession {

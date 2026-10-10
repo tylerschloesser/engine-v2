@@ -1,5 +1,4 @@
-// The device identity secret (docs/decisions/0013-sessions-and-integrity.md "Identity"; docs/plan/
-// 28-sessions-and-reconnect.md Seams): `loadOrMintSecret(): Uint8Array`, `localStorage` key
+// The device identity secret (docs/decisions/0013-sessions-and-integrity.md "Identity"; M28 Seams): `loadOrMintSecret(): Uint8Array`, `localStorage` key
 // `engine.playerSecret`, one per origin. On the ambient-randomness allowlist by name
 // (`src/no-ambient-random.test.ts`): "the device-secret module M28 adds. No other entry without an
 // ADR." Browser-only (`localStorage`); `src/client.ts`'s own main-thread path is this module's one

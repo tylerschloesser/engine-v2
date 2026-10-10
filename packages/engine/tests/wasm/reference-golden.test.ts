@@ -3,7 +3,7 @@
 // by `pnpm --filter reference golden:record`) replayed as `.wasm` under Node; every checkpoint hash
 // must match, and a mismatch names the first divergent tick. Native leg: `reference-sim`'s
 // `golden_replay`; Bun leg: `bun-leg.mjs`; browsers: `determinism.html`. Also asserts
-// `logBytesPerPlayerHour` (PRE-PLAN.md section 7, "Action rate / log").
+// `logBytesPerPlayerHour` (ADR 0062, "Action rate / log").
 import { expect, test } from 'vitest'
 import { loadGame } from '../../src/server-node.js'
 import { replayLog } from '../../src/test/replay.js'

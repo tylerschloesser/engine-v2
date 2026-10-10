@@ -2,8 +2,7 @@
 // `Connection` shape over one SAB ring pair (`SabSet.uplink`/`SabSet.downlink`), `datagrams:
 // false`. This is the sim role's own end of the pair -- `send`/`close` write the *downlink*
 // (`RingProducer`), `onMessage` fires from draining the *uplink* (`RingConsumer`). The client
-// worker's own end (writing uplink, reading downlink) is a separate, later concern (docs/plan/
-// 15b-ring-connection-and-replica-rendering.md step 4, Non-scope here): it has no `Connection`
+// worker's own end (writing uplink, reading downlink) is a separate, later concern (M15b step 4, Non-scope here): it has no `Connection`
 // shape to implement (0009's `Connection` is the *host's* view of a link), so it drives
 // `RingProducer`/`RingConsumer` directly.
 //

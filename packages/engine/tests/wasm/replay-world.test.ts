@@ -7,8 +7,7 @@
 //    frames only, M22's native `record()` never wrote one). Satisfies the exit criterion's literal
 //    wording ("hashes ... equal the native golden hashes checked in by M22").
 // 2. `replay_world_checkpoints_two_segment_real_pipeline`: a real `SimHost` + `Persistence` run
-//    that actually rolls a segment (Planning decisions 2 of docs/plan/
-//    22-persistence-log-and-snapshots.md), so Planning decisions 5's own cross-segment hash
+//    that actually rolls a segment (Planning decisions 2 of M22), so Planning decisions 5's own cross-segment hash
 //    assertion is exercised for real, not vacuously (a single-segment world never reaches it).
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -152,8 +151,7 @@ describe('replayWorld / runHeavy (fx-persist)', () => {
     expect(result.firstDivergentTick).toBeNull()
   })
 
-  /** A genuine two-segment world (Planning decisions 2 of docs/plan/
-   * 22-persistence-log-and-snapshots.md: growing segment 0 past a tiny roll threshold, then a couple
+  /** A genuine two-segment world (Planning decisions 2 of M22: growing segment 0 past a tiny roll threshold, then a couple
    * more connects in the new segment 1), plus the live per-tick `{ tick, hash }` list from the real
    * host that produced it. */
   async function buildTwoSegmentWorld(): Promise<{

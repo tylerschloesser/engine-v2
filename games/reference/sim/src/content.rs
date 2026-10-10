@@ -73,8 +73,8 @@ pub const RESOURCE_STAGE_LOW: u8 = 2;
 pub const UNITS_PER_TILE: u16 = 10;
 
 /// `TraitSet` bits (0007 §6, step 4): the game declares which bit means what, the engine only
-/// carries the bitset. Bit 0 on both waters ("placement asks the tiles", `docs/spec/
-/// reference-game.md`); bit 1 on every resource id (`rules::collect::start`'s own check).
+/// carries the bitset. Bit 0 on both waters ("placement asks the tiles", `games/reference/
+/// README.md`); bit 1 on every resource id (`rules::collect::start`'s own check).
 pub const NOT_BUILDABLE: TraitSet = TraitSet(1 << 0);
 pub const COLLECTABLE: TraitSet = TraitSet(1 << 1);
 /// Carried by an entity prototype (the furnace): every tile of its footprint is covered, so a
@@ -104,7 +104,7 @@ pub const RANGE_SCAN_TILES: i32 = RANGE_Q8 / 256 + 1;
 pub const SEED: u64 = 0x5EED_1234_ABCD_0042;
 
 /// `admit`'s witness tolerance (0001 "Witness-carrying actions" step 1: "reject if farther than 16
-/// tiles from the sample or if no sample exists"; `PRE-PLAN.md` §4 Presence row), in the same
+/// tiles from the sample or if no sample exists"), in the same
 /// Q24.8 raw units as [`RANGE_Q8`]. Deliberately much larger than `RANGE_Q8`: it only guards
 /// against an implausible claim (staleness of half an RTT plus one 100 ms sample interval, 0001),
 /// while `RANGE_Q8` is `apply`'s own exact gameplay rule.

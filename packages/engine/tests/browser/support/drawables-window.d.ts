@@ -1,5 +1,4 @@
-// Ambient `window.__drawables` type (M17, steps 4-6; docs/plan/
-// 17b-sprites-and-frame-budget.md steps 1-3: `loadSprites`/`gpuBytes`), shared by `drawables.html`'s
+// Ambient `window.__drawables` type (M17, steps 4-6; M17b steps 1-3: `loadSprites`/`gpuBytes`), shared by `drawables.html`'s
 // page script and `draw.*.spec.ts`/`sprite.*.spec.ts` -- same shape as `terrain-window.d.ts`'s own
 // precedent (M09): a hand-filled scene, no worker, no ABI instance.
 export {}

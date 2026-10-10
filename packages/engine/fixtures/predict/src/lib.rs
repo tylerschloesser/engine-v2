@@ -2,7 +2,7 @@
 //! `Deposit` (addressed by tile, so a follow-up can name a machine the client has only predicted),
 //! a timed `Collect`, `Roll` (draws from `w.rng()`, host-only under prediction), `Cascade`
 //! (`predict() == false`), and `SetGlobal` (`w.put_global`). Modelled on
-//! `spikes/prediction-api/game/src/lib.rs`'s `RefGame`, renamed to the real engine's own method
+//! the Phase 1 `prediction-api` spike's `RefGame`, renamed to the real engine's own method
 //! names (`spawn`/`put_entity`/`despawn`/`entity_at`/`entity`/`tile`/`traits_at`/`player`/
 //! `put_player`/`global`/`put_global`/`rng`).
 //!
@@ -59,8 +59,7 @@ pub enum Action {
     Place { origin: Pos },
     /// Like [`Action::Place`], but writes the spent inventory *before* drawing from the sim RNG
     /// (an audit roll the host discards): declines under prediction through `rng()` rather than
-    /// through the placement read, and only after already writing (docs/plan/
-    /// 25-prediction-core.md Tests added: `taint_rollback_visibility`, "A failing through rng()
+    /// through the placement read, and only after already writing (M25 Tests added: `taint_rollback_visibility`, "A failing through rng()
     /// after a read" -- proving the overlay rollback undoes a write, not just a read that never
     /// happened).
     PlaceChecked { origin: Pos },

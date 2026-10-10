@@ -737,8 +737,7 @@ fn admit_diagnostic_tail(window: u32) -> String {
 /// (`codec::decode_canonical`'s own scratch buffer inside it) are all local to one `on_uplink`
 /// call and freed before it returns -- `live_bytes()` is allocated-minus-freed (`abi::arena`'s
 /// own doc comment), so a matched alloc/free pair inside one measured call nets to zero in it,
-/// the same "gross vs. net" lesson M15 fix round 3 already drew (docs/plan/
-/// 15-connection-and-subscriptions.md). `pending_records` and `scratch_action_players` settle at
+/// the same "gross vs. net" lesson M15 fix round 3 already drew (M15). `pending_records` and `scratch_action_players` settle at
 /// a steady capacity after the warm-up and are cleared every `Host::tick`.
 ///
 /// **First draft of this test measured a real, non-zero, *not*-per-action cost, and it was a

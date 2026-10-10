@@ -1,5 +1,4 @@
-// `reference: zero-GC over a scripted pan with two collect buttons mounted` (docs/plan/
-// 20b-reference-player-and-collect-ui.md, zero-allocation exit criterion): a real `games/reference`
+// `reference: zero-GC over a scripted pan with two collect buttons mounted` (M20b, zero-allocation exit criterion): a real `games/reference`
 // production topology (`gc.html`/`gc-entry.ts`, that package's own `startGame` wiring, driven by
 // `engine/test.asHarness` instead of a real frame loop), oscillating the camera a little every frame
 // near two isolated wood tiles (`collect-flow.spec.ts`'s own `reference_several_buttons` scan) so

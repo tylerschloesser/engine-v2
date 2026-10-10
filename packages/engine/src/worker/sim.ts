@@ -11,12 +11,10 @@
 // race a deterministic step request the instant a `body()` pass crossed a real 50 ms tick boundary
 // (a slow CI machine, say), corrupting a hash comparison that must match a golden bit-for-bit
 // (Deviations). The same `pacingEnabled` decision also picks *which timer service* `SimHost` is
-// built with (a no-op `every()` for a test/dev page): `SimHost.resume()` (docs/plan/
-// 28b-reconnect-and-lifecycle.md step 4, "a `Hello` while paused resumes the timer") calls the
+// built with (a no-op `every()` for a test/dev page): `SimHost.resume()` (M28b step 4, "a `Hello` while paused resumes the timer") calls the
 // exact same `arm()` `start()` does, reachable from a fresh, never-`start()`ed `SimHost`'s own
 // first real `Hello` regardless of topology -- a real timer there would arm the race above through
-// a path this gate alone cannot see (found live, a real CI-only regression: docs/plan/
-// 28b-reconnect-and-lifecycle.md, Deviations).
+// a path this gate alone cannot see (found live, a real CI-only regression: M28b, Deviations).
 //
 // `W_ACK` is still stored on every real wake regardless of `gcHook` (a plain `Atomics.store`,
 // allocation-free, kept from the M06b stub this replaces): `asHarness.stepTick()`'s own generic
@@ -388,7 +386,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       // `WorldLoadError`'s own identity mismatch): a corrupt manifest (`JSON.parse` itself throwing
       // a plain `SyntaxError`, `export_works_after_load_failure`'s own scenario) is just as much "a
       // save the game cannot load" as an identity mismatch, and Q9's answer (this milestone's own
-      // default, PLAN.md header) draws no distinction -- `exportWorld`/`deleteWorld` must still work
+      // default) draws no distinction -- `exportWorld`/`deleteWorld` must still work
       // either way (Scope). Non-scope this milestone (M24b owns the upgrade/`SaveIncompatible` path):
       // reported, not handled, and nothing is written; the worker stays alive with a degraded,
       // non-ticking loop instead of dying like `world-busy` does.
@@ -591,8 +589,7 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
   // time and no tick ran at all (`sim_ticks_steadily_under_external_wakes`, same spec file).
   let lastWokenBy: number | null = null
 
-  // Production topology, or a test page that opts in with `test.pace` (docs/plan/
-  // 13b-tick-timing-allocation.md, Order of work 1): a test/dev page normally never calls this and
+  // Production topology, or a test page that opts in with `test.pace` (M13b, Order of work 1): a test/dev page normally never calls this and
   // drives every tick itself through `CB_SIM_STEP_REQ` instead. `pace` exists so a zero-GC page can
   // arm real-time pacing (`onFire` via `AtomicsTimer`) while `test` stays present (`gcHook`/the
   // parked test-call channel still need it) -- safe to combine with manual `CB_SIM_STEP_REQ`

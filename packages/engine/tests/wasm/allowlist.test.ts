@@ -20,8 +20,7 @@ const CULPRITS: Record<string, string> = {
   wasi_snapshot_preview1: 'wrong target: build for wasm32-unknown-unknown',
 }
 
-/** The two checks below, shared by every fixture and every in-repo game's `sim/` crate (docs/plan/
- * 20-reference-game-v0.md, orchestrator ruling): identical assertions, `label` only changes what a
+/** The two checks below, shared by every fixture and every in-repo game's `sim/` crate (M20, orchestrator ruling): identical assertions, `label` only changes what a
  * failure names. */
 function checkAllowlist(label: string, bytes: Uint8Array<ArrayBuffer>): void {
   const module = new WebAssembly.Module(bytes)

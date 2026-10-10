@@ -399,8 +399,7 @@ fn entity_straddling_subscribed_and_unsubscribed_chunks_delivered_once() {
     );
 }
 
-/// The anchor-move case M15 originally covered (kept per docs/plan/
-/// 21-entities-and-timers.md Deviations, "keep an equivalent anchor-move case if one existed"): a
+/// The anchor-move case M15 originally covered (kept per M21 Deviations, "keep an equivalent anchor-move case if one existed"): a
 /// plain (1x1) entity whose *anchor* moves from a subscribed chunk to a far, unsubscribed one must
 /// be seen leaving, exactly once.
 #[test]

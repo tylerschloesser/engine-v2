@@ -1,5 +1,5 @@
 // Test-only allocation controls (docs/decisions/0016 §3 step 8; the negative-control mechanics
-// ported from spikes/zero-gc-webgpu/public/{main,worker}.js's `dirty`/`doTick`). Never imported by
+// ported from the Phase 1 zero-gc-webgpu spike's `dirty`/`doTick`, tag `phase-3-complete`). Never imported by
 // production code.
 import { StepControl } from './step-block.js'
 

@@ -1,5 +1,4 @@
-// Entity picking (docs/decisions/0019-camera-input-and-overlay.md §4 "Picking"; docs/plan/
-// 18-picking-and-overlay.md Scope, Order of work steps 1-2): scans the frame's already-acquired
+// Entity picking (docs/decisions/0019-camera-input-and-overlay.md §4 "Picking"; M18 Scope, Order of work steps 1-2): scans the frame's already-acquired
 // DrawList slot (`render/drawlist-slot.ts`) front to back -- layers high to low, reverse submission
 // order within a layer -- for the first `pick_id != 0` record, skipping any `ANCHOR_CURSOR_TILE`
 // record, whose shape contains the pointer. The pointer is converted once (not per record) to

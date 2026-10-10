@@ -100,8 +100,7 @@ fn chunk_point_dist_sq(c: ChunkCoord, center: TilePos) -> i64 {
 /// sorted nearest-first to `center`; returns the count written. In place, allocation-free
 /// (`sort_unstable_by_key` on the `out` slice itself -- no scratch buffer).
 ///
-/// `center` is in the same coordinate space as [`ChunkCoord`] (docs/plan/
-/// 08b-gen-workers-and-queue.md Deviations: despite the [`TilePos`] type -- both are plain `i32`
+/// `center` is in the same coordinate space as [`ChunkCoord`] (M08b Deviations: despite the [`TilePos`] type -- both are plain `i32`
 /// pairs with no inherent scale -- a caller holding a genuine tile-space position converts with
 /// `dims.chunk_of(..)` first and passes the result reinterpreted as a `TilePos`; M13's `host::warm`
 /// already holds a `ChunkDims` to do this with).

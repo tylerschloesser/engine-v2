@@ -1,5 +1,4 @@
-// `connected-terrain: zero-GC over a real connected, rendered pan` (docs/plan/
-// 15c-terrain-visibility-and-cache-invalidation.md, step 4, Tests added: "the zero-GC panning
+// `connected-terrain: zero-GC over a real connected, rendered pan` (M15c, step 4, Tests added: "the zero-GC panning
 // window (600 frames, sim + client isolates within budget, ring drops === 0)"). A real
 // `createClient()` local, **connected** (`host.connect: true`) topology over `fx-puts`, plus a real
 // device/renderer, driven by a scripted pan (`gc-connected-terrain.ts`) -- `expectAdapter: true`

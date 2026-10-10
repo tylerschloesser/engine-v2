@@ -81,8 +81,7 @@ pub struct Registry {
     /// without ever calling [`Registry::set_chunk_edge`] (every pre-M21 test fixture, and any
     /// caller that only wants trait tables) stays exactly as permissive as before this milestone.
     chunk_edge: u32,
-    /// How many [`SystemId`]s [`Registry::system`] has already handed out (docs/plan/
-    /// 21b-timers-wakeups-and-tickcx.md Scope: "at most 16").
+    /// How many [`SystemId`]s [`Registry::system`] has already handed out (M21b Scope: "at most 16").
     system_count: u8,
 }
 
@@ -177,8 +176,7 @@ impl Registry {
         self.base_traits[tile.base() as usize].union(self.resource_traits[tile.resource() as usize])
     }
 
-    /// `TraitSet::EMPTY` for an id no `add_prototype` call ever returned (docs/plan/
-    /// 21-entities-and-timers.md Deviations: total rather than panicking, since every pre-M21 test
+    /// `TraitSet::EMPTY` for an id no `add_prototype` call ever returned (M21 Deviations: total rather than panicking, since every pre-M21 test
     /// fixture across this crate uses `PrototypeId(0)` with nothing registered at all -- occupancy
     /// was Non-scope before this milestone, so an out-of-range id was never reachable in practice
     /// until `Store::apply` started consulting this table for every entity put).

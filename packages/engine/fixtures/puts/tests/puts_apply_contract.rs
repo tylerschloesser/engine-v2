@@ -1,5 +1,4 @@
-//! `apply`'s "validate first, write after" contract (0003, 0004 Consequences): docs/plan/
-//! 12b-world-access-and-sim-driver.md Tests added.
+//! `apply`'s "validate first, write after" contract (0003, 0004 Consequences): M12b Tests added.
 
 use engine::game::{Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldRead as _};
 use engine::sim::{Record, Rejected, Sim, WorldParams};

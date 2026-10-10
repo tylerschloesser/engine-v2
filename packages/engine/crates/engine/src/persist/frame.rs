@@ -4,7 +4,7 @@
 //! by `tick_delta` (the number of ticks since the previous logged frame, counting this one).
 //!
 //! **`player_slot` is `PlayerId` truncated to a `u8`** (0003: "assigned at first join ... a small
-//! integer" -- 2-8 players per world, `docs/spec/overview.md` Scale): the log format's own
+//! integer" -- 2-8 players per world, `docs/architecture/README.md` Scale): the log format's own
 //! justification for calling it a "slot" rather than repeating the full `u32` id. A `PlayerId`
 //! that does not fit is a bug elsewhere (`debug_assert!`ed on write, never produced by this
 //! milestone's own fixture or tests).
@@ -28,8 +28,7 @@ use crate::persist::{
     PersistError, VarintPeek, crc32, peek_varint, read_sized_or_undecodable, write_sized,
 };
 
-/// A frame can never exceed the `Persist` region (Planning decisions 5 of docs/plan/
-/// 22-persistence-log-and-snapshots.md: "pending-frame capacity is fixed ... well under the region
+/// A frame can never exceed the `Persist` region (Planning decisions 5 of M22: "pending-frame capacity is fixed ... well under the region
 /// size", region sized at 256 KiB by that same brief's Seams). 64 KiB is a generous ceiling on the
 /// *frame body* (excluding the leading `len` varint) a corrupt or adversarial `len` cannot inflate
 /// past -- without this, [`FrameReader::push`] would happily buffer an unbounded amount of memory
@@ -250,13 +249,11 @@ pub enum FrameProgress<G: Game> {
     Frame(DecodedFrame<G>),
 }
 
-/// A resumable, block-split-tolerant frame decoder (module doc comment; docs/plan/
-/// 22-persistence-log-and-snapshots.md Seams: "`FrameReader::push` accept[s] arbitrary block
+/// A resumable, block-split-tolerant frame decoder (module doc comment; M22 Seams: "`FrameReader::push` accept[s] arbitrary block
 /// splits"). One `FrameReader` can decode many frames back to back, one `push` call at a time.
 pub struct FrameReader<G: Game> {
     buf: Vec<u8>,
-    /// Total bytes ever consumed by a successfully decoded frame (docs/plan/
-    /// 24-recovery-and-migration.md): the basis `DecodedFrame::frame_offset`/`record_offsets` are
+    /// Total bytes ever consumed by a successfully decoded frame (M24): the basis `DecodedFrame::frame_offset`/`record_offsets` are
     /// measured from. Distinct from `buffered_len()`, which reports bytes *not yet* consumed.
     total_consumed: u64,
     _marker: core::marker::PhantomData<fn() -> G>,
@@ -280,8 +277,7 @@ impl<G: Game> FrameReader<G> {
     /// Feeds `block` (any length, including empty -- an empty call just tries to drain whatever is
     /// already buffered) and returns at most one decoded frame. If more than one frame's worth of
     /// bytes is already buffered, the rest waits for the next call.
-    /// Bytes still buffered and not yet consumed by a decoded frame (docs/plan/
-    /// 22b-persistence-load-and-fs.md): the replay driver's own way to compute how many bytes of a
+    /// Bytes still buffered and not yet consumed by a decoded frame (M22b): the replay driver's own way to compute how many bytes of a
     /// segment tail were consumed by valid, CRC-checked frames (`fed - buffered_len()`) without this
     /// module exposing its internal parse state any further. On a decode error the malformed bytes
     /// are left in the buffer (never drained), so this correctly still names the byte just before

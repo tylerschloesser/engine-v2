@@ -21,7 +21,7 @@ const DEFAULT_GAME = { seed: '0x1', entities: 4 }
 // Matches `fixtures/hash`'s `CLIENT_RX_TX_BYTES` (M06b, Deviations):
 // the whole-block copies below (`tryPush`/`popInto`) rely on both ends being exactly this size.
 const ECHO_BYTES = 10 * 1024
-// The spike's ack-timeout guard (`spikes/zero-gc-webgpu/public/main.js`), reused the same way
+// The spike's ack-timeout guard (Phase 1 spike, tag `phase-3-complete`), reused the same way
 // `test/client.ts`'s `stepFrame` does.
 const SPIN_LIMIT = 2_000_000_000
 const canvas = document.createElement('canvas')

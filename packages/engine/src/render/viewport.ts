@@ -1,5 +1,4 @@
-// Canvas size/DPR/render-scale lifecycle (docs/decisions/0018-renderer.md §8; docs/plan/
-// 09b-terrain-art-and-lifecycle.md Scope, step 4): the `ResizeObserver` (`device-pixel-content-box`,
+// Canvas size/DPR/render-scale lifecycle (docs/decisions/0018-renderer.md §8; M09b Scope, step 4): the `ResizeObserver` (`device-pixel-content-box`,
 // Safari fallback, a re-armed one-shot `matchMedia`), render-scale computation
 // (`ClientOptions.render`), clamping to `maxTextureDimension2D`, and applying a pending resize once
 // per frame. `frame-loop.ts`'s own `tick()` calls `applyPending()` as its very first step, before

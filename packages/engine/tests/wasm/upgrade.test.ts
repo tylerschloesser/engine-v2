@@ -177,8 +177,7 @@ function putVarint(out: number[], value: number): void {
 /** One `Action` record whose own payload is a deliberately non-canonical postcard encoding: an
  * overlong 2-byte LEB128 form (`[0x80, 0x00]`) of discriminant 0 ("Deposit", `fx-migrate-v2`'s only
  * `Action` variant) -- a plain decode accepts it, but `decode_canonical`'s own re-encode-and-compare
- * check does not, since the canonical form is the 1-byte `[0x00]` (docs/plan/
- * 24b-upgrade-and-migration.md decision 6, amending 0024 §3b: exactly the "SCHEMA_VERSION-unbumped
+ * check does not, since the canonical form is the 1-byte `[0x00]` (M24b decision 6, amending 0024 §3b: exactly the "SCHEMA_VERSION-unbumped
  * layout change" case, faked here at the byte level rather than with a fourth fixture). Wraps it in
  * one whole, CRC-valid frame (`len | tick_delta | count=1 | record | crc32`) ready to `storage.append`
  * directly onto a segment's log key, right after a real snapshot's own log position. */

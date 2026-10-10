@@ -1,4 +1,4 @@
-//! Ported from `spikes/prediction-api/game/tests/prediction.rs` (M25
+//! Ported from the Phase 1 `prediction-api` spike's `game/tests/prediction.rs` (M25
 //! Tests added), driving `fx-predict`'s own `Place`/`Deposit`/`Collect` through the real
 //! `Host<Predict>` <-> `ClientCore<Predict>` round trip (`Loopback`) instead of the spike's own
 //! simplified harness. What each test would still pass without (the repo's own recurring-defect

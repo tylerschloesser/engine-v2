@@ -347,8 +347,7 @@ pub fn sim_warm_one<T: Instance>(slot: &Slot<T>) -> u32 {
     }
 }
 
-/// `tick_hz()`: the sim role's own tick rate ("20 Hz is hardcoded" gap, docs/plan/
-/// 13-sim-host-tick-loop.md). Same "always answer, cost nothing on a wrong role" shape as
+/// `tick_hz()`: the sim role's own tick rate ("20 Hz is hardcoded" gap, M13). Same "always answer, cost nothing on a wrong role" shape as
 /// `sim_warm_one`: the trait default (`20`) on anything but `Role::Sim`, not an error.
 /// M16: broadened from `slot.sim()` to "any initialised role"
 /// (Deviations) -- `Instance::tick_hz`'s own doc comment already established the answer is
@@ -602,8 +601,7 @@ pub fn client_region_hash<T: Instance>(slot: &Slot<T>) -> Status {
     rt.inst.client_region_hash(result)
 }
 
-/// `on_action(len) -> status`: `len` bytes of `Rx` are one action-ring record (docs/plan/
-/// 16-action-round-trip.md; `Instance::on_action`'s own doc comment has the exact shape). `Rx` is
+/// `on_action(len) -> status`: `len` bytes of `Rx` are one action-ring record (M16; `Instance::on_action`'s own doc comment has the exact shape). `Rx` is
 /// read through a raw pointer taken before `Instance::on_action` runs, the same deferred-borrow
 /// shape `on_input`/`on_frame` already use for their own receive regions.
 pub fn on_action<T: Instance>(slot: &Slot<T>, len: u32) -> Status {
@@ -630,8 +628,7 @@ pub fn client_poll_ui<T: Instance>(slot: &Slot<T>) -> u32 {
 }
 
 /// `client_clock_stats() -> status`: `authoritative_tick`, `ack_seq`, `predicted_tick`,
-/// `tick_fraction` (as `f32` bits) into `Result` (M16; docs/plan/
-/// 26-prediction-rendering-and-clocks.md steps 4-6 widened this from two fields to four,
+/// `tick_fraction` (as `f32` bits) into `Result` (M16; M26 steps 4-6 widened this from two fields to four,
 /// `ABI_VERSION` 23 -> 24; `Instance::client_clock_stats`'s own doc comment has the exact shape).
 pub fn client_clock_stats<T: Instance>(slot: &Slot<T>) -> Status {
     let rt = match slot.client() {
@@ -669,8 +666,7 @@ pub fn client_presence_sample_at<T: Instance>(slot: &Slot<T>, index: u32) -> Sta
     rt.inst.client_presence_sample_at(index, result)
 }
 
-/// `client_ui_mark_dirty() -> status`: forces `UiObserver::mark_dirty()` (docs/plan/
-/// 16b-ui-observation-and-clock.md; `Instance::client_ui_mark_dirty`'s own doc comment). No
+/// `client_ui_mark_dirty() -> status`: forces `UiObserver::mark_dirty()` (M16b; `Instance::client_ui_mark_dirty`'s own doc comment). No
 /// region crosses. `engine/test`-only (`markUiDirty`).
 pub fn client_ui_mark_dirty<T: Instance>(slot: &Slot<T>) -> Status {
     let rt = match slot.client() {

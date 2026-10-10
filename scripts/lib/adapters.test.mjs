@@ -147,8 +147,7 @@ describe('playwright adapter', () => {
 })
 
 describe('vitest adapter (fromReport)', () => {
-  // The exact shape of the CI finding this test exists to prevent recurring silently (docs/plan/
-  // 10-ci-workflow.md, Deviations): `wasm`'s own vitest process exited 1 on a run whose
+  // The exact shape of the CI finding this test exists to prevent recurring silently (M10, Deviations): `wasm`'s own vitest process exited 1 on a run whose
   // report.json parsed cleanly with 0 failed tests -- a process-level problem (unhandled rejection,
   // worker crash) the JSON reporter's summary never captures, not a missing or corrupt report.
   test('parse: a non-zero exit with a parseable, all-passing report says so, not "no report"', () => {

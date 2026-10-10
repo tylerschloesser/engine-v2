@@ -88,8 +88,7 @@ function config(bench: boolean) {
     preview: {
       port,
       strictPort: true,
-      // `pnpm device:serve --tunnel --app reference` (M03; docs/plan/
-      // 29-net-worker-and-reference-server.md): same "the tunnel's `Host` header is a random
+      // `pnpm device:serve --tunnel --app reference` (M03; M29): same "the tunnel's `Host` header is a random
       // `*.trycloudflare.com` subdomain" reasoning as the fixture app's own config.
       ...(process.env.ENGINE_DEVICE === '1' ? { allowedHosts: ['.trycloudflare.com'] } : {}),
       // `pnpm device:serve --app reference --ws`: same `/ws` proxy shape as the fixture app's own

@@ -171,8 +171,7 @@ export type SetupMessage = {
 }
 
 /**
- * Main -> worker, parked-only: one generic test-gated call channel (docs/plan/
- * 08b-gen-workers-and-queue.md, orchestrator decision 1 at the step-5 boundary), used by
+ * Main -> worker, parked-only: one generic test-gated call channel (M08b, orchestrator decision 1 at the step-5 boundary), used by
  * `engine/test`'s `callParked` instead of a new `SabSet` field or a query-specific message. `a`/`b`
  * are the export's arguments in order (0 or 2 args covers every export named by this milestone;
  * `undefined` means "not passed", not "pass 0"). Answered only by a worker whose setup message

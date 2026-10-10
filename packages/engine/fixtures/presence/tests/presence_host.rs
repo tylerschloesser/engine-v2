@@ -1,5 +1,4 @@
-//! `oversize_dropped`, `world_cap_check_accepts_representable_extremes` (docs/plan/
-//! 19-presence-channel.md Tests added, step 3, gate round 1 fix): `Host::on_uplink`'s own presence
+//! `oversize_dropped`, `world_cap_check_accepts_representable_extremes` (M19 Tests added, step 3, gate round 1 fix): `Host::on_uplink`'s own presence
 //! decode checks.
 
 use engine::bytes::SliceSink;

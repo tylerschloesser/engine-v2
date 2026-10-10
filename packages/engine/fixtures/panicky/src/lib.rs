@@ -44,8 +44,7 @@ pub struct Player;
 pub struct Global {
     pub armed_tick_panic: Option<u32>,
     pub armed_tick_alloc: Option<u32>,
-    /// Bumped once at the top of every `apply` call, regardless of which action (docs/plan/
-    /// 24-recovery-and-migration.md: the Skip/replay tests' own "additive action so a double-apply
+    /// Bumped once at the top of every `apply` call, regardless of which action (M24: the Skip/replay tests' own "additive action so a double-apply
     /// would show" -- a `Skip`-fenced record must leave this unchanged, and a resent `seq` must
     /// not bump it again after replay).
     pub apply_count: u32,

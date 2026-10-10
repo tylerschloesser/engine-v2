@@ -43,7 +43,7 @@ test('reference_bytes_and_mispredictions_in_budget', async () => {
       // A misprediction is a verdict the host refused: none in a play without races.
       expect(refused[i], `${tag}: mispredictions`).toEqual([])
     }
-    // One hour of play at this rate (PRE-PLAN section 7: 10 to 20 MB per hour, owner 0010); the
+    // One hour of play at this rate (ADR 0062: 10 to 20 MB per hour, owner 0010); the
     // busier client's downlink, scaled from the ticks the game took.
     const worst = Math.max(...[0, 1].map((i) => h.counters(i).bytesDown))
     const perHour = Math.round((worst / ticks) * TICKS_PER_HOUR)

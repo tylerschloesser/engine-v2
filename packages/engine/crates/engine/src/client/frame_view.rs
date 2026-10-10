@@ -276,8 +276,7 @@ pub struct FrameView<'a, G: Game> {
     /// the interpolation buffer at; `None` (every caller that never calls
     /// [`Self::with_render_time`]) yields each remote's raw newest sample, as M19 did.
     render_t: Option<f64>,
-    /// `None` until [`Self::with_prediction`] attaches one (docs/plan/
-    /// 26-prediction-rendering-and-clocks.md Scope), mirroring `world_access::View::with_overlay`'s
+    /// `None` until [`Self::with_prediction`] attaches one (M26 Scope), mirroring `world_access::View::with_overlay`'s
     /// own builder-step pattern: every existing caller (drawlist goldens, this file's own tests)
     /// keeps its exact prior behaviour and hashes.
     overlay: Option<&'a Overlay<G>>,
@@ -341,8 +340,7 @@ impl<'a, G: Game> FrameView<'a, G> {
         }
     }
 
-    /// Attaches the client's prediction overlay and pending queue (docs/plan/
-    /// 26-prediction-rendering-and-clocks.md Scope): `entities()` becomes overlay-aware and
+    /// Attaches the client's prediction overlay and pending queue (M26 Scope): `entities()` becomes overlay-aware and
     /// `is_predicted`/`tile_is_predicted`/`predicted_tiles`/`pending` start answering for real.
     /// `game_instance.rs` calls this on every real client's own `FrameView`; every other caller
     /// (a fixture's own drawlist golden, this file's tests) that never calls it keeps the exact
@@ -449,8 +447,7 @@ impl<'a, G: Game> FrameView<'a, G> {
         }
     }
 
-    /// True for a provisional id, or a real id the overlay currently overrides (docs/plan/
-    /// 26-prediction-rendering-and-clocks.md Planning decisions "`predicted` flag"): what
+    /// True for a provisional id, or a real id the overlay currently overrides (M26 Planning decisions "`predicted` flag"): what
     /// `extract` asks to set [`super::drawlist::PREDICTED`] on a `Draw`. `false` with no overlay
     /// attached.
     pub fn is_predicted(&self, id: EntityId) -> bool {
@@ -460,8 +457,7 @@ impl<'a, G: Game> FrameView<'a, G> {
                 .is_some_and(|o| matches!(o.find_entity(id), Some(Some(_))))
     }
 
-    /// True if the prediction overlay currently carries a put for `pos` (docs/plan/
-    /// 26-prediction-rendering-and-clocks.md Planning decisions "`predicted` flag": "the texel
+    /// True if the prediction overlay currently carries a put for `pos` (M26 Planning decisions "`predicted` flag": "the texel
     /// carries the predicted *value* only; a game styles a pending tile by drawing a `rect` or
     /// `ghost` from `predicted_tiles`" -- this is the query a game uses to decide *whether* to draw
     /// one). `false` with no overlay attached.
@@ -491,8 +487,7 @@ impl<'a, G: Game> FrameView<'a, G> {
     }
 
     /// The overlay-then-replica-merged player state, the same one-liner
-    /// `Predicting::player`/`world_access::View::player` already use (docs/plan/
-    /// 26-prediction-rendering-and-clocks.md Deviations: not in the brief's own Seams list by
+    /// `Predicting::player`/`world_access::View::player` already use (M26 Deviations: not in the brief's own Seams list by
     /// name -- added because `ClientSide::ui` has no other way to show "no visible change" for a
     /// player's own predicted inventory the way `entities()` now does for occupants; [`Self::
     /// world`] is deliberately left untouched, replica-only, for every other reader). Falls back

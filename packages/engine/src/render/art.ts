@@ -31,8 +31,7 @@ export const MAX_VISUALS = 1024
 export const MAX_CELLS = 256
 /** The visual table's own sizing (0018 §3: "uniform buffer of 1,024 x 16 B, the compatibility-mode
  * binding limit"). Owned here, not `render/terrain.ts`, since `buildVisualTable` is what actually
- * lays the bytes out; `terrain.ts` imports it back for its uniform buffer's size (docs/plan/
- * 09-renderer-terrain.md Deviations: step 3's art.ts precedes step 4's terrain.ts). */
+ * lays the bytes out; `terrain.ts` imports it back for its uniform buffer's size (M09 Deviations: step 3's art.ts precedes step 4's terrain.ts). */
 export const VISUAL_TABLE_ENTRIES = MAX_VISUALS
 export const VISUAL_TABLE_BYTES = VISUAL_TABLE_ENTRIES * 16
 
@@ -206,8 +205,7 @@ export async function loadTileArt(
   }
   bitmap.close()
 
-  // Mips generated after every layer's level-0 copy is enqueued (docs/plan/
-  // 09b-terrain-art-and-lifecycle.md Scope): WebGPU executes one queue's submissions in program
+  // Mips generated after every layer's level-0 copy is enqueued (M09b Scope): WebGPU executes one queue's submissions in program
   // order, so the blit passes below always read fully-written level-0 data with no extra await.
   await generateMips(device, texture, {
     layerCount: cellCount,

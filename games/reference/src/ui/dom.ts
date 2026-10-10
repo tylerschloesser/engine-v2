@@ -2,7 +2,7 @@
 // framework-free DOM helpers every UI module in this package builds on -- `el()` and a keyed-list
 // diff helper -- reused as-is by M32-M34's own crafting/roster UI (Provides).
 //
-// Framework-free by Requirement (`docs/spec/reference-game.md` UI: "Framework-free TypeScript. The
+// Framework-free by Requirement (`games/reference/README.md` UI: "Framework-free TypeScript. The
 // engine must not care either way."): no virtual DOM, no reconciler beyond the one small keyed diff
 // below.
 

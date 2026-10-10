@@ -98,7 +98,7 @@ function hostOf(client: Client): GpuHost {
   return h
 }
 
-/** M37b (0018 §8, PRE-PLAN §6): destroys the current `GPUDevice` (`device.destroy()`), i.e. a
+/** M37b (0018 §8): destroys the current `GPUDevice` (`device.destroy()`), i.e. a
  * device loss with reason `destroyed`. Resolves once the host has observed the loss (`current` is
  * `null` and the rebuild has started). The test must have called `allowDeviceLoss(page)`, or the
  * harness fails it for the loss (0020 §6). */
@@ -113,7 +113,7 @@ export async function loseDevice(client: Client): Promise<void> {
   if (host.current !== null) await Promise.resolve()
 }
 
-/** M37b (0018 §8, PRE-PLAN §6): the next `requestAdapter` (the next device (re)build) resolves
+/** M37b (0018 §8): the next `requestAdapter` (the next device (re)build) resolves
  * `null`, once. With `loseDevice`, the rebuild finds no adapter and `client.onRendererLost` fires
  * with `'no-adapter'`. Call it before `loseDevice`. */
 export function failNextAdapter(_client: Client): void {
@@ -244,8 +244,7 @@ async function readPixelsFromTarget(target: RenderTarget): Promise<PixelBuffer> 
   return { width: target.width, height: target.height, data }
 }
 
-/** Reads one mip level of an arbitrary `rgba8unorm` texture back to CPU (docs/plan/
- * 17b-sprites-and-frame-budget.md, `sprite.no_bleed_at_mip1`): the same `copyTextureToBuffer` +
+/** Reads one mip level of an arbitrary `rgba8unorm` texture back to CPU (M17b, `sprite.no_bleed_at_mip1`): the same `copyTextureToBuffer` +
  * `mapAsync` shape `readPixelsFromTarget` uses for a render target, generalised with an explicit mip
  * level and caller-supplied `width`/`height` (that level's own dimensions -- the JS `GPUTexture`
  * object exposes only the base level's). Lets a test inspect what the mip chain actually generated

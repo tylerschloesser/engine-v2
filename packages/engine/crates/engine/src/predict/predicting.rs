@@ -2,7 +2,7 @@
 //! overlay then replica; writes go to the overlay") and [`predict`], the reset-and-replay
 //! mechanism 0012's Decision describes ("At dispatch the action is applied once ... Then, once per
 //! received frame: ... re-run `G::apply` for each still-pending action"). Ported from the spike's
-//! `Predicting`/`Client::predict` (`spikes/prediction-api/engine/src/lib.rs`).
+//! `Predicting`/`Client::predict` (Phase 1 `prediction-api` spike).
 //!
 //! Deliberately generic over `&dyn WorldRead<G>` rather than a concrete replica type: the crate's
 //! own module-layering test forbids anything outside the client/host directories from importing

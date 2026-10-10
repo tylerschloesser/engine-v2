@@ -1,5 +1,4 @@
-// Camera integration (docs/decisions/0019-camera-input-and-overlay.md §1, §3; docs/plan/
-// 11-camera-and-input.md Scope): pan, pinch, wheel, WASD, inertia, `moveTo`, constraints (including
+// Camera integration (docs/decisions/0019-camera-input-and-overlay.md §1, §3; M11 Scope): pan, pinch, wheel, WASD, inertia, `moveTo`, constraints (including
 // bounds), the view-clamp/follow hooks and the device-pixel-at-rest snap, integrated once per rAF
 // from the fixed input slots (`input/pointers.ts`, `input/keys.ts`, `input/wheel.ts`) into a plain
 // `CameraState` -- no DOM, so it is unit-testable with `dt` and plain state (Planning decisions:
@@ -111,8 +110,7 @@ export interface CameraIntegrator {
    * in the frame that draws that DrawList. While a target is set, pan input is ignored and zoom
    * still works; `None` returns control." `src/client.ts`'s `camera.tick(dtMs)` calls this once per
    * rAF, straight from the acquired `DrawListSlot`'s own header (`follow_valid`/`follow`), before
-   * `integrate()` runs -- so a target set this frame centres this same frame (docs/plan/
-   * 18-picking-and-overlay.md Tests added: `follow.centres_in_same_frame_pan_ignored_zoom_works`). */
+   * `integrate()` runs -- so a target set this frame centres this same frame (M18 Tests added: `follow.centres_in_same_frame_pan_ignored_zoom_works`). */
   setFollow(x: number, y: number, valid: boolean): void
 }
 

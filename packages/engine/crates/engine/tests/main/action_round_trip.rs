@@ -358,8 +358,7 @@ fn resent_seq_is_dropped_after_apply() {
 }
 
 /// A resend *before* the first copy has ever been applied -- both `on_uplink` calls land in the
-/// same tick-to-tick window, so `Store::last_seq` has not advanced yet (docs/plan/
-/// 16-action-round-trip.md Deviations: it only advances inside `Sim::step`, at the next `tick()`).
+/// same tick-to-tick window, so `Store::last_seq` has not advanced yet (M16 Deviations: it only advances inside `Sim::step`, at the next `tick()`).
 /// This is the case `resent_seq_is_dropped_after_apply` above does *not* exercise, and a dedup
 /// that only ever compared against a `Store::last_seq` snapshot passed that test while still
 /// double-applying here: `Bump` is additive, so a double-apply is visible as `10`, not masked by

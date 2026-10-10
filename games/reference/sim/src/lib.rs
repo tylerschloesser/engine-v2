@@ -175,7 +175,7 @@ impl Inventory {
     }
 }
 
-/// A player's in-flight collect (Scope: "`collecting = Some { tile, done_at }`"; PRE-PLAN.md §4).
+/// A player's in-flight collect (Scope: "`collecting = Some { tile, done_at }`").
 /// `tile: TileXY`, not `engine::world::TilePos` (same reason as [`TileXY`]'s own doc comment: a
 /// replicated `Player` field must be `Codec`, and `TilePos` derives neither `Serialize` nor
 /// `Deserialize`).
@@ -229,7 +229,7 @@ impl RefGlobal {
 
 /// The one entity kind (M33): a 2x2 furnace (`content::FURNACE_PROTO`). `origin` is its min-corner
 /// tile (`Game::anchor`; `TileXY`, not `TilePos`, for the same `Codec` reason as [`Collecting`]).
-/// The fields after `origin` are the furnace's own state (`PRE-PLAN.md` §4, Entity row), operated
+/// The fields after `origin` are the furnace's own state, operated
 /// by M33b; placement leaves them all zero. Furnaces are addressed by tile everywhere (0022 §6).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Furnace {

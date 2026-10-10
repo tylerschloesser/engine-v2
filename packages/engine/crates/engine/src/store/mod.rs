@@ -254,8 +254,7 @@ impl<G: Game> Store<G> {
         &self.terrain
     }
 
-    /// Mutable terrain access, additive beyond [`Store::apply`] (docs/plan/
-    /// 15-connection-and-subscriptions.md Deviations): a client replica applies a chunk snapshot
+    /// Mutable terrain access, additive beyond [`Store::apply`] (M15 Deviations): a client replica applies a chunk snapshot
     /// or leave through `TerrainStore::{replace_overlay, clear_overlay}` directly, and a
     /// `ChunkDeltas` tile through `TerrainStore::set_tile` -- none of these is a `Delta<G>` variant
     /// (a snapshot/leave is 0011's own mechanism, distinct from the puts a `Delta` records), so
@@ -599,8 +598,7 @@ impl<G: Game> Store<G> {
         }
     }
 
-    /// The undo journal's own pre-image capture / rollback (docs/plan/
-    /// 21b-timers-wakeups-and-tickcx.md fix round 1): which systems `id` is truly active in right
+    /// The undo journal's own pre-image capture / rollback (M21b fix round 1): which systems `id` is truly active in right
     /// now, and restoring it to exactly that set.
     pub(crate) fn active_mask(&self, id: EntityId) -> u16 {
         self.active.active_mask(id)

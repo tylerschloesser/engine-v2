@@ -1,5 +1,5 @@
 // The flattened-session CDP transport (M04, Planning decisions "CDP
-// transport: both, behind one interface"; 0024 §12; PRE-PLAN.md risk 11). Node's own CDP WebSocket
+// transport: both, behind one interface"; 0024 §12). Node's own CDP WebSocket
 // against Chromium's `--remote-debugging-port`, `Target.attachToTarget` + `Target.setAutoAttach
 // {flatten: true}`, routed by `sessionId` on one connection -- the replacement named in 0016's
 // Consequences for the day the tunnel's `Target.sendMessageToTarget` is removed. Proven only by

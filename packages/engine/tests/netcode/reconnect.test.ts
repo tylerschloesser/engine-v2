@@ -391,7 +391,7 @@ test('reconnect/after-grace-logs-disconnected', async () => {
  * `square(0)`-centred reconnect scenario kept seeing a real, correct `ChunkSnapshots` entry for
  * the walk's own chunk, not a `keep`, because that chunk genuinely changes version every second).
  * A camera far from the origin sees none of it -- true "wilderness" for these tests' own purposes
- * (0013 Reconnect, PRE-PLAN.md §7 "Bandwidth per client, burst": "reconnect ... in wilderness"). */
+ * (0013 Reconnect, ADR 0062 "Bandwidth per client, burst": "reconnect ... in wilderness"). */
 function wilderness(): { x: number; y: number; tilesAcross: number } {
   return { x: 100_000, y: 100_000, tilesAcross: 20 }
 }
@@ -480,7 +480,7 @@ test('reconnect/changed-while-away', async () => {
 
 test('reconnect/cost', async () => {
   const seed = 3010
-  // A wilderness reconnect (PRE-PLAN.md §7 "Bandwidth per client, burst": "reconnect ≈ 1
+  // A wilderness reconnect (ADR 0062 "Bandwidth per client, burst": "reconnect ≈ 1
   // KB each way"; 0013 Reconnect: "Cost: one RTT plus <= ~1 KB up and typically ~1 KB down") --
   // far from `fx-puts`'s own once-a-second origin paint (`wilderness()`'s own doc comment), so
   // every kept chunk needs zero bytes beyond its own 3-byte coordinate entry.

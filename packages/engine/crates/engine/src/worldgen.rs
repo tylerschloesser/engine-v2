@@ -31,7 +31,7 @@ pub trait Worldgen {
 }
 
 /// The engine's stateless coordinate hash (0008 §1): the only source of randomness a [`Worldgen`]
-/// impl may use for scatter, variants and the like. Ported from `spikes/determinism-hash`'s
+/// impl may use for scatter, variants and the like. Ported from the Phase 1 `determinism-hash` spike's
 /// `coord_hash`, itself [`mix64`] applied three times.
 #[inline]
 pub fn hash2(seed: u64, x: i32, y: i32) -> u64 {

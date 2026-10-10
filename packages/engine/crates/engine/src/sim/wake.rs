@@ -115,8 +115,7 @@ impl WakeQueue {
         self.next.len()
     }
 
-    /// `Store::write_canonical`/`hash_state`: insertion order (docs/plan/
-    /// 21b-timers-wakeups-and-tickcx.md Scope "woken_next (insertion order)").
+    /// `Store::write_canonical`/`hash_state`: insertion order (M21b Scope "woken_next (insertion order)").
     pub(crate) fn write_canonical(&self, sink: &mut impl ByteSink) {
         sink.put_u32(self.next.len() as u32);
         for id in self.next.iter() {

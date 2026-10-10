@@ -2,8 +2,7 @@
 // twin of `draw-readback.spec.ts` (M17): `drawables.html`'s hand-filled scene, now with
 // `window.__drawables.loadSprites()` fetching the real fixture atlas (`scripts/gen-sprite-art.mjs`'s
 // own output, `/drawables/sprites.json`). Every probe sits off a texel centre and off a quadrant
-// boundary by several device pixels, never exactly on one -- `docs/plan/
-// 09b-terrain-art-and-lifecycle.md` Deviations: "every probe in the suite sat exactly at a texel
+// boundary by several device pixels, never exactly on one -- `M09b` Deviations: "every probe in the suite sat exactly at a texel
 // centre" is exactly what let the M09b magnified-sampling inversion ship unnoticed.
 import { expect, test } from '@playwright/test'
 import { scanDrawListForPick } from '../../src/input/pick.ts'

@@ -1,4 +1,4 @@
-// `size @slow` (M35; PRE-PLAN §7 "Download", 0015 §6, 0017 §9): the
+// `size @slow` (M35; ADR 0062 "Download", 0015 §6, 0017 §9): the
 // release `game.wasm` of `games/reference` at brotli 11 against the warn and fail budgets, and the
 // engine JS a game's browser bundle carries against `size.engineJsBrotli`. Every number is written to
 // `test-results/wasm/size.json` (raw and brotli per file) whatever the verdict. A size between warn

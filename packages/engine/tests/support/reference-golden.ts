@@ -64,7 +64,7 @@ export function divergenceMessage(d: ReturnType<typeof firstDivergence>): string
 }
 
 /** The log's bytes per active player-hour at the scripted play's rate: `logBytes` over `players *
- * ticks` player-ticks, scaled to one hour (`PRE-PLAN.md` section 7, "Action rate / log"). */
+ * ticks` player-ticks, scaled to one hour (ADR 0062, "Action rate / log"). */
 export function logBytesPerPlayerHour(logBytes: number, players: number, ticks: number): number {
   return (logBytes / (players * ticks)) * TICKS_PER_HOUR
 }

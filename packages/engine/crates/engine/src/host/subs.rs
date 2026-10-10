@@ -274,8 +274,7 @@ impl SubscriptionSet {
         self.entries.iter().map(|e| e.chunk)
     }
 
-    /// The rectangle to feed `host::warm::Warm::set_view` (docs/plan/
-    /// 15-connection-and-subscriptions.md Deviations 1): `visible` expanded by 2 rings, which
+    /// The rectangle to feed `host::warm::Warm::set_view` (M15 Deviations 1): `visible` expanded by 2 rings, which
     /// exactly contains ring 1 (expanded by 1) and every look-ahead chunk
     /// (`view::lookahead_chunks` places one at `visible.expanded(1)`'s edge plus one more chunk --
     /// `visible.expanded(2)`'s own edge), so the generation set this drives stays a superset of the

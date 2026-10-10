@@ -1,5 +1,4 @@
-// Canvas-presentation smoke test, extended to assert production phase order (docs/plan/
-// 09b-terrain-art-and-lifecycle.md, step 6; docs/decisions/0020-testing-strategy.md §6 layer c).
+// Canvas-presentation smoke test, extended to assert production phase order (M09b, step 6; docs/decisions/0020-testing-strategy.md §6 layer c).
 // Both tests drive `device.html` (step 7): the one page in this suite that runs the *production*
 // `createFrameLoop`/`createRealFrameLoop` against a real canvas, a real `Client`/`TerrainRenderer`
 // and a real `Scheduler`-driven `requestAnimationFrame` -- not the manual clock every other

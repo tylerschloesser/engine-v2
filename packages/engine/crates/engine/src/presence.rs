@@ -164,8 +164,7 @@ impl<G: Game> PresenceTable<G> {
         self.entries.iter().map(|(&who, entry)| (who, entry))
     }
 
-    /// Engine-internal (Provides): `Host::on_uplink`'s own call site (docs/plan/
-    /// 19-presence-channel.md step 3) records the latest sample here after its own 32-byte and
+    /// Engine-internal (Provides): `Host::on_uplink`'s own call site (M19 step 3) records the latest sample here after its own 32-byte and
     /// world-cap checks pass. Replaces any previously held sample for `who` unconditionally (0001:
     /// "keeps the latest sample per player ... never queued").
     pub fn on_sample(&mut self, who: PlayerId, sample: G::Presence, received_at: Tick) {

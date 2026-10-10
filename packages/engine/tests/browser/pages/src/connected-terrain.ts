@@ -1,5 +1,4 @@
-// `connected-terrain.html`: the renderer-backed sibling of `connected.html` (docs/plan/
-// 15b-ring-connection-and-replica-rendering.md, step 6) -- `hidden_tab_sends_no_camera_report`
+// `connected-terrain.html`: the renderer-backed sibling of `connected.html` (M15b, step 6) -- `hidden_tab_sends_no_camera_report`
 // needs a real `TerrainRenderer`/`FrameLoop`, which `connected.html`'s bare client deliberately has
 // none of. A real `createClient()` local topology over `fx-puts`, `host.connect: true`, driven
 // through `frame-loop.ts`'s `createRealFrameLoop` -- `viewport.ts`'s own precedent for a manual
@@ -130,8 +129,7 @@ window.__init = async () => {
   })
   attachViewportTestHooks(client, { viewport: real.viewport, loop: real.loop })
 
-  // `engine/test.untilQuiescent` no longer waits on `uploadRing` at all (docs/plan/
-  // 20c-client-ack-freeze-under-untilquiescent.md: it is a page-owned ring, never a worker's) --
+  // `engine/test.untilQuiescent` no longer waits on `uploadRing` at all (M20c: it is a page-owned ring, never a worker's) --
   // draining it is entirely this page's own job. The background interval keeps the renderer's
   // page/indirection textures converged for anyone just watching the page run; `__advance` (below)
   // additionally drains to empty, synchronously, every time, so a caller that reads pixels right

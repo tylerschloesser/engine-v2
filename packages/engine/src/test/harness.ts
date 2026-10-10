@@ -15,7 +15,7 @@ import {
   stepBlockView,
 } from './step-block.js'
 
-/** Busy-wait ceiling for an ack: the spike's ack-timeout guard (spikes/zero-gc-webgpu/public/main.js). */
+/** Busy-wait ceiling for an ack: the spike's ack-timeout guard (Phase 1 spike, tag `phase-3-complete`). */
 const SPIN_LIMIT = 2_000_000_000
 
 export type HarnessWorkerSpec = {

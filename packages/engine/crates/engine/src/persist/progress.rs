@@ -45,8 +45,7 @@ pub const PROGRESS_BYTES: u32 = 12;
 
 /// `record`'s meaning is phase-specific: an index into whatever's being iterated for `ApplyRecord`/
 /// `OnPlayer` while ticking live, but the **absolute byte offset of the record within its segment**
-/// (0005's `Skip { segment, offset }`) for `ApplyRecord` while replaying (docs/plan/
-/// 24-recovery-and-migration.md Seams) -- `0` for phases with nothing to name (`Tick`, `Idle`).
+/// (0005's `Skip { segment, offset }`) for `ApplyRecord` while replaying (M24 Seams) -- `0` for phases with nothing to name (`Tick`, `Idle`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ProgressCursor {
     pub phase: Phase,

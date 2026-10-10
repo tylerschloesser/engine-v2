@@ -40,8 +40,7 @@ pub struct OutOfRange;
 /// dense slab pool nothing outside this module can observe (0007 Consequences).
 pub struct TerrainStore {
     dims: ChunkDims,
-    /// `None` until a remote client's `Welcome` supplies the world (docs/plan/
-    /// 33f-client-world-config-from-welcome.md): every other role builds it with `new`.
+    /// `None` until a remote client's `Welcome` supplies the world (M33f): every other role builds it with `new`.
     source: Option<Box<dyn PristineSource>>,
     overlays: Overlays,
     modified_tiles: u32,
@@ -545,8 +544,7 @@ mod tests {
     /// M15c step 2: `replace_overlay`'s eviction (a host snapshot landing on an already-resident,
     /// pristine-generated chunk -- the exact race in "The bug, confirmed at M15b's gate") must
     /// still be observable through `cache_invalidation_seq` the same way `materialize`'s own LRU
-    /// eviction already is, even though M26's gate fix round 1 (docs/plan/
-    /// 26-prediction-rendering-and-clocks.md Deviations) now immediately re-materializes a chunk
+    /// eviction already is, even though M26's gate fix round 1 (M26 Deviations) now immediately re-materializes a chunk
     /// that was resident, so the slab itself never actually goes missing (0012/0018 §3: "a
     /// re-stage of a resident chunk must never pass through non-resident") -- `evict_if_present`
     /// still runs, still bumps the seq and still pushes its own `Evicted` event, exactly as before;

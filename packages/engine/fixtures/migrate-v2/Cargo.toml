@@ -17,8 +17,7 @@ ts-rs = "12"
 
 [dev-dependencies]
 engine = { path = "../../crates/engine", features = ["testing"] }
-# Test-only, to build real old-schema (v1) bytes for the migration tests (docs/plan/
-# 24b-upgrade-and-migration.md Order of work 3: "both game types in one test binary"). Never a
+# Test-only, to build real old-schema (v1) bytes for the migration tests (M24b Order of work 3: "both game types in one test binary"). Never a
 # [dependencies] entry: this crate's own `migrate()` keeps its own private copy of the old shapes
 # (Planning decisions 1, "new code cannot name old types") rather than importing this crate.
 fx-migrate-v1 = { path = "../migrate-v1", features = ["as_dependency"] }

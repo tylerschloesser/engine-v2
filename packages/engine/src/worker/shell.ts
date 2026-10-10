@@ -98,8 +98,7 @@ export interface WorkerShell {
    * starving `fn` forever) or from outside one (setup, a parked message handler) exactly as before.
    * A second `runAsync` call while one is already in flight is queued, FIFO, run after the first
    * settles -- never dropped or rejected. **`fn` is never dropped even when called before this
-   * worker's first `runBlockingLoop` has run** (gate fix, docs/plan/
-   * 23-persistence-opfs-and-lifecycle.md, "Open gate failures" 4): with no loop recorded yet to leave,
+   * worker's first `runBlockingLoop` has run** (gate fix, M23, "Open gate failures" 4): with no loop recorded yet to leave,
    * `fn` is queued and run the moment `setLoop` records the first one (see there) -- not thrown away,
    * and not run outside the loop's own leave/re-enter discipline.
    */

@@ -25,8 +25,7 @@ function everyViaSetTimer(ms: number, fn: () => void): () => void {
 }
 
 /**
- * `hostServices({ wasm, storage, onIdle?, onFatal? })` (docs/plan/
- * 27-server-entrypoint-and-netcode-harness.md, Scope): `createWorldServer`'s `HostServices`
+ * `hostServices({ wasm, storage, onIdle?, onFatal? })` (M27, Scope): `createWorldServer`'s `HostServices`
  * (0009), `clock`/`timer` supplied from `systemClock`/`systemScheduler` (M03) -- the real, wall-
  * clock-paced counterpart `engine/test`'s `VirtualClock`-backed harness never uses. The `ws`
  * attachment (a real socket `Connection` adapter) is M29; this only builds the object

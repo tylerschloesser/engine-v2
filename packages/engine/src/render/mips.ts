@@ -1,5 +1,4 @@
-// Mip generation (docs/decisions/0018-renderer.md §4: "generates mips to 1x1"; docs/plan/
-// 09b-terrain-art-and-lifecycle.md Scope): one blit pipeline shared by every (layer, level) pass,
+// Mip generation (docs/decisions/0018-renderer.md §4: "generates mips to 1x1"; M09b Scope): one blit pipeline shared by every (layer, level) pass,
 // reused colour-attachment/pass-descriptor objects mutated in place across the loop -- setup cost,
 // run once per `loadTileArt` call (exempt from `.claude/rules/hot-paths.md`'s per-frame budget),
 // but built the same disciplined way a hot path would be since nothing here needs the sloppier

@@ -1,5 +1,4 @@
-// Spawns the real `games/reference-server` process for the tests that need one (docs/plan/
-// 38-hosting-checks.md: `static-headers`, `sigterm-snapshots`; `reference-server-smoke` keeps its own).
+// Spawns the real `games/reference-server` process for the tests that need one (M38: `static-headers`, `sigterm-snapshots`; `reference-server-smoke` keeps its own).
 import type { ChildProcessByStdio } from 'node:child_process'
 import { spawn } from 'node:child_process'
 import type { Readable } from 'node:stream'

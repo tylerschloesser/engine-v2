@@ -105,8 +105,7 @@ pub enum Rejected<G: Game> {
 
 /// 0004 Decision, verbatim: `RateLimited` (admission, never reaches `apply`), `StateBudgetFull`
 /// (0007 §8's check), `EngineFault` (0005 skip-record recovery). None is produced by this
-/// milestone (M12b Non-scope). `Serialize` (docs/plan/
-/// 16-action-round-trip.md): a rejected action's result JSON (`client.onActionResult`) needs to
+/// milestone (M12b Non-scope). `Serialize` (M16): a rejected action's result JSON (`client.onActionResult`) needs to
 /// encode this half of `Rejected<G>`, tagged `{"Engine":<this>}` -- `game_instance::
 /// push_result_record` keeps `Rejected<G>`'s own `Game`/`Engine` level in the JSON rather than
 /// flattening it away (orchestrator ruling at the M16 gate): 0004's Decision defines `Rejected<G>`
@@ -185,8 +184,7 @@ impl<G: Game> Sim<G> {
         self.step_with_progress(records, out, &mut |_, _| {});
     }
 
-    /// [`Sim::step`]'s own body, plus a `Progress`-writing hook (docs/plan/
-    /// 24-recovery-and-migration.md) called `(Phase::OnPlayer | Phase::ApplyRecord, i)` right
+    /// [`Sim::step`]'s own body, plus a `Progress`-writing hook (M24) called `(Phase::OnPlayer | Phase::ApplyRecord, i)` right
     /// before each record at index `i` (within `records`) runs its own game-authored code, and
     /// once more as `(Phase::Tick, 0)` right before `Game::tick`. `Sim` itself has no region to
     /// write into (only `Host<G>` does, via `abi::RegionLayout`): the hook is how a caller with
@@ -219,8 +217,7 @@ impl<G: Game> Sim<G> {
                     on_phase(Phase::ApplyRecord, i as u32);
                     // 0004 "State-budget check" / 0023 "The check": host only, before `apply`,
                     // for game actions only. Reads only sim state and world params, so the live
-                    // host, replay and recovery decide identically (docs/plan/
-                    // 21-entities-and-timers.md Deviations: lives at `crate::budget`, not
+                    // host, replay and recovery decide identically (M21 Deviations: lives at `crate::budget`, not
                     // `host::budget`, since this runs from here -- the deterministic core).
                     let declared = G::growth(action);
                     if let Err(reject) = budget::check(&self.authority, declared) {
@@ -300,8 +297,7 @@ impl<G: Game> Sim<G> {
         Sim { authority }
     }
 
-    /// Mutable access, additive beyond this milestone's own Provides (docs/plan/
-    /// 15-connection-and-subscriptions.md Deviations): `host::Host::seal` clears the just-built
+    /// Mutable access, additive beyond this milestone's own Provides (M15 Deviations): `host::Host::seal` clears the just-built
     /// tick's `ChangeLog` (`Authority::clear_changes`) once every connection's frame has read it,
     /// which needs `&mut Authority<G>` from outside this module -- `Authority::clear_changes`
     /// itself was already `pub`, just previously unreachable from `Host` without this accessor.

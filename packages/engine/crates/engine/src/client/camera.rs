@@ -38,8 +38,7 @@ impl CameraBlock {
     /// A raw pointer into `layout`'s `Camera` region, or `None` when the region is absent (this
     /// role is not `Client`) or somehow too small. Raw, not `&CameraBlock`, so the caller can take
     /// it while still holding `layout` immutably borrowed elsewhere and defer the (safe, once
-    /// dereferenced) borrow to a point past any conflicting `&mut` use of `layout` (docs/plan/
-    /// 06b-workers-and-spawn.md, Deviations): the pointer itself borrows nothing.
+    /// dereferenced) borrow to a point past any conflicting `&mut` use of `layout` (M06b, Deviations): the pointer itself borrows nothing.
     ///
     /// The pointer is 8-aligned (`RegionLayout::region`'s own alignment), matching this struct's
     /// alignment (8, from its `f64` fields) exactly, and valid for `Self::BYTES` bytes.

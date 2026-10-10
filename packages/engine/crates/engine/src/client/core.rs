@@ -51,8 +51,7 @@ pub enum ActionError {
     /// dispatch fails locally"). Main-thread `dispatch` is expected to prevent this by
     /// construction (counting `seq - ack_seq` against the same capacity before ever calling
     /// this), so reaching it here is a defence-in-depth backstop, not the primary enforcement
-    /// point -- the one `engine/test.dispatchRaw` bypasses (docs/plan/
-    /// 26-prediction-rendering-and-clocks.md Post-`done` fix: "PendingQueue never drains under
+    /// point -- the one `engine/test.dispatchRaw` bypasses (M26 Post-`done` fix: "PendingQueue never drains under
     /// bench.frame_worstcase"), which is exactly why this backstop being checked against the
     /// right queue (`pending`, not the transient `outbox`) matters.
     Full,
@@ -112,8 +111,7 @@ pub struct ClientCore<G: Game> {
     /// comment where it is used.
     scratch_entity_ops: Vec<EntityDeltaOp<G>>,
     last_summary: FrameSummary,
-    /// Bumped every time [`Self::on_frame`] successfully applies a frame (docs/plan/
-    /// 16b-ui-observation-and-clock.md Scope: "iff a frame mutated the replica since the last
+    /// Bumped every time [`Self::on_frame`] successfully applies a frame (M16b Scope: "iff a frame mutated the replica since the last
     /// call"). `Self::apply` always calls `Replica::set_tick`, so "on_frame ran" and "the replica
     /// mutated" coincide for every real frame; a caller (`UiObserver::maybe_run`) compares two
     /// reads of this against its own last-seen value rather than re-deriving "did anything change"
@@ -180,8 +178,7 @@ pub struct ClientCore<G: Game> {
     rebase_pending: bool,
     /// The host clock has been fed a real host tick (the replica's tick is above 0): until then its
     /// samples are the empty replica's tick 0, and seeding the clock from one would leave it
-    /// `tick x tick_ms` behind for good, closing only at the 10 % dilation limit (docs/plan/
-    /// 39l-remote-motion-staircase.md).
+    /// `tick x tick_ms` behind for good, closing only at the 10 % dilation limit (M39l).
     host_clock_primed: bool,
     /// The client clock of the previous [`Self::tick_fraction`] call (`None` before the first).
     last_interp_ms: Option<f64>,
@@ -423,8 +420,7 @@ impl<G: Game> ClientCore<G> {
         &self.last_summary
     }
 
-    /// How many frames [`Self::on_frame`] has successfully applied, ever (docs/plan/
-    /// 16b-ui-observation-and-clock.md Scope): the `ui` call policy's "since the last call" signal.
+    /// How many frames [`Self::on_frame`] has successfully applied, ever (M16b Scope): the `ui` call policy's "since the last call" signal.
     pub fn mutations(&self) -> u64 {
         self.mutations
     }
@@ -674,8 +670,7 @@ impl<G: Game> ClientCore<G> {
         self.correction * frac
     }
 
-    /// How many pending actions the most recent [`Self::on_frame`] re-predicted (docs/plan/
-    /// 25-prediction-core.md Budgets).
+    /// How many pending actions the most recent [`Self::on_frame`] re-predicted (M25 Budgets).
     pub fn predict_replays_last_frame(&self) -> u32 {
         self.predict_replays_last_frame
     }
@@ -736,8 +731,7 @@ impl<G: Game> ClientCore<G> {
         }
     }
 
-    /// How many tiles the most recent replay's [`OverlayDiff`] found changed (docs/plan/
-    /// 26-prediction-rendering-and-clocks.md Budgets: `overlay_diff_entries`).
+    /// How many tiles the most recent replay's [`OverlayDiff`] found changed (M26 Budgets: `overlay_diff_entries`).
     pub fn overlay_diff_entries(&self) -> u32 {
         self.overlay_diff_entries_last
     }
@@ -930,8 +924,7 @@ impl<G: Game> ClientCore<G> {
 
     /// Writes at most one `UplinkBatch` into `out`, returning its length, or `0` if nothing is due
     /// yet (0010 "Rates": at most one batch per 50 ms; at least one batch per 1 s; the camera half
-    /// is included only on change, so a keepalive-only batch omits it). docs/plan/
-    /// 16-action-round-trip.md Scope: "`poll_uplink` flushes actions at once" -- a non-empty
+    /// is included only on change, so a keepalive-only batch omits it). M16 Scope: "`poll_uplink` flushes actions at once" -- a non-empty
     /// outbox bypasses both rate checks above (an action's own latency budget, 0004: "at most one
     /// tick plus the network", does not have a 50 ms pacing floor to spend), and every queued
     /// action goes out in the very next batch, whichever tick it is polled on.

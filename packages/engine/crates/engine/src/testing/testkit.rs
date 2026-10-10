@@ -26,8 +26,7 @@ use crate::world_access::{View, WorldRead};
 
 /// Fills `sim`'s world directly, bypassing `Sim::step`'s per-action overhead, to exactly
 /// `entities` entities (ids `1..=entities`, each `G::Entity::default()`) and `tiles` modified
-/// tiles (`TilePos::new(0..tiles, 0)`, each set to `Tile::new(1, 0, 0)`) -- docs/plan/
-/// 21-entities-and-timers.md Provides: "bench-style genesis M36's standard large save reuses".
+/// tiles (`TilePos::new(0..tiles, 0)`, each set to `Tile::new(1, 0, 0)`) -- M21 Provides: "bench-style genesis M36's standard large save reuses".
 /// Budget tests use this with small configured `max_entities`/`max_modified_tiles` (the Exit
 /// criteria's own "not the defaults"), not the full 0007 §8 defaults, to stay inside the fast
 /// tier: 262,144 real entities would still be several hundred thousand `BTreeMap` inserts.
@@ -86,8 +85,7 @@ where
     sim.state_hash()
 }
 
-/// Everything a renderer could show for a region (ported from the spike's own `Visible`, docs/plan/
-/// 25-prediction-core.md Seams: "a `visible(client, rect)` equality helper"): tiles, occupants BY
+/// Everything a renderer could show for a region (ported from the spike's own `Visible`, M25 Seams: "a `visible(client, rect)` equality helper"): tiles, occupants BY
 /// VALUE, and one player's own state. `PartialEq`/`Clone` need no extra bound (`Game::Entity`/
 /// `Game::Player` are already `Clone + PartialEq`, 0003); `Debug` is manual because neither is
 /// guaranteed `Debug` by the trait, so `#[derive(Debug)]`'s own blanket `G: Debug` bound (which no
@@ -182,8 +180,7 @@ where
         }
     }
 
-    /// Sends `action` as `who`'s next `seq`, through the real admit path (docs/plan/
-    /// 16-action-round-trip.md: an `UplinkBatch` of one action -> `Host::on_uplink` -> decode,
+    /// Sends `action` as `who`'s next `seq`, through the real admit path (M16: an `UplinkBatch` of one action -> `Host::on_uplink` -> decode,
     /// dedup, `G::admit`), delivered at the next `Loopback::step`/`Host::tick`. Auto-increments a
     /// per-player `seq`. `who.0 - 1` recovers the connection id: `Host::connect` always assigns
     /// `PlayerId(conn + 1)` (M15 Deviations), and this
@@ -228,8 +225,7 @@ where
         let _ = self.host.on_uplink(conn, &bytes);
     }
 
-    /// M25 (docs/decisions/0012-prediction-and-reconciliation.md; docs/plan/
-    /// 25-prediction-core.md Seams): dispatches through the real `ClientCore::on_action` path
+    /// M25 (docs/decisions/0012-prediction-and-reconciliation.md; M25 Seams): dispatches through the real `ClientCore::on_action` path
     /// (a Codec-encoded action re-wrapped as one action-ring record, `[seq u32 LE][len u32
     /// LE][UTF-8 JSON]`, M16 Scope) instead of [`Self::action`]'s own
     /// direct-to-host uplink shortcut, so prediction actually runs. Still delivered to the host at

@@ -1,5 +1,4 @@
-// Wheel accumulator (docs/decisions/0019-camera-input-and-overlay.md §3; docs/plan/
-// 11-camera-and-input.md Planning decisions "Wheel constants"): a listener only accumulates a
+// Wheel accumulator (docs/decisions/0019-camera-input-and-overlay.md §3; M11 Planning decisions "Wheel constants"): a listener only accumulates a
 // target log-zoom delta and remembers the cursor position; `camera/camera.ts` is what eases toward
 // it, once per rAF. `Δlog(tiles) = deltaY x k`, `k = 0.002` per pixel (d3-zoom's own constants, per
 // the brief -- 0019 fixes only the form), `x 25` for `deltaMode` line, `x 500` for page, `x 10` with

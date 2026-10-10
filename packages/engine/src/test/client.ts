@@ -58,9 +58,8 @@ import {
 } from './presence-samples.js'
 import { StepControl } from './step-block.js'
 
-/** The spike's ack-timeout guard (`spikes/zero-gc-webgpu/public/main.js`), reused by `stepFrame`
- * (Planning decisions "Stepped frames in tests"). Iteration-count only, not wall-clock (docs/plan/
- * 16e-park-timeout-diagnosis.md, CI round: a periodic `performance.now()` check -- even one gated
+/** The spike's ack-timeout guard (Phase 1 spike, tag `phase-3-complete`), reused by `stepFrame`
+ * (Planning decisions "Stepped frames in tests"). Iteration-count only, not wall-clock (M16e, CI round: a periodic `performance.now()` check -- even one gated
  * behind a coarse iteration mask, so it never fired on a *quiet* success path -- still fired, and
  * boxed, on a success path that was merely *slow*: a sibling isolate's own `burst` negative control
  * measurably delays this worker's ack without ever failing it, so the spin can legitimately cross a
@@ -243,8 +242,7 @@ function ringDrained(sab: SharedArrayBuffer): boolean {
  * once per call (not per tick) and uses a plain indexed loop, matching the rest of this file's own
  * discipline (`stepFrame`'s spin, `asHarness.stepTick`).
  *
- * **`parkWorkers` sends one `wake()` per worker, once, deliberately not retried** (M17c, docs/plan/
- * 17c-client-park-stall.md, fix round 2): a first attempt here re-woke every not-yet-parked worker
+ * **`parkWorkers` sends one `wake()` per worker, once, deliberately not retried** (M17c, M17c, fix round 2): a first attempt here re-woke every not-yet-parked worker
  * on every poll turn, which was the wrong layer to fix at -- a harness that keeps re-signalling
  * until a worker parks hides exactly the class of protocol defect this milestone actually found (a
  * park request the worker's own loop structurally could not observe, not a one-off dropped OS-level
@@ -305,8 +303,7 @@ export function parkWorkers(client: Client): Promise<void> {
   return pollUntil(() => allEqual(h, W_PARKED, 1), 'parkWorkers', h)
 }
 
-/** Like `allEqual` but treats a `net`-kind worker as always resumed (docs/plan/
- * 08b-gen-workers-and-queue.md, Deviations: found by this milestone's `gen.html`, the first page to
+/** Like `allEqual` but treats a `net`-kind worker as always resumed (M08b, Deviations: found by this milestone's `gen.html`, the first page to
  * combine a `net` worker -- `host: { kind: 'remote', ... }`, the only host kind `fx-worldgen` can
  * use, since it has no `Sim` role -- with a real `resumeWorkers()` call). `net` never enters
  * `runBlockingLoop` (`worker/net.ts`: `setup()` returns `null`, so it has no `#loop`), and
@@ -1007,8 +1004,7 @@ export function drawListHash(client: Client): string {
 
 /** The header `frame_seq` (offset 0) of the slot the last `drawListRecords`/`drawListHash` acquired, with
  * no new acquire: it changes only when the client worker published a new DrawList, so two rAFs that read
- * the same value saw the same picture (the check reporter's per-frame record, docs/plan/
- * 39l-remote-motion-staircase.md). Test-only. */
+ * the same value saw the same picture (the check reporter's per-frame record, M39l). Test-only. */
 export function drawListSeq(client: Client): number {
   return clientTestHandle(client).drawListSlot.frameSeq
 }

@@ -1,5 +1,4 @@
-// Shared TS reference for `terrain.wgsl`'s PCG3D-based variant hash (docs/plan/
-// 09b-terrain-art-and-lifecycle.md Planning decisions: "Reference implementation of the hash in the
+// Shared TS reference for `terrain.wgsl`'s PCG3D-based variant hash (M09b Planning decisions: "Reference implementation of the hash in the
 // test, not a golden image ... recomputes the PCG hash in TypeScript and predicts which variant cell
 // each probed tile shows; integer hashes are exact on every GPU (0018 §3), so this holds on Metal
 // and SwiftShader alike"). Mirrors `pcg3d`/`tile_hash`/`sample_tile_art`'s variant-selection line in

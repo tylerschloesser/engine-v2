@@ -1,7 +1,7 @@
 // `opfs-latency.html`'s script (M23 step 7): spawns
 // `opfs-latency-worker.ts` (all OPFS access happens there, matching where the real adapter runs) and
 // renders its result table for Tyler to read and copy (`M23-opfs-latency`,
-// `docs/plan/device-checks.md`). `window.__opfsLatencyResult` mirrors the same object for an
+// the `device-check` skill). `window.__opfsLatencyResult` mirrors the same object for an
 // automated confirmation of the page's own shape (`playwright-cli`/a quick fetch), never for the
 // pass/fail judgement itself -- that call is Tyler's, on a real iPhone (0005 Consequences: deferred
 // to Phase 2, needs a device).

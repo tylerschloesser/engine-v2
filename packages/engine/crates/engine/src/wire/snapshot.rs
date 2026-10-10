@@ -25,8 +25,7 @@ use super::{
 };
 
 /// Writes one chunk's snapshot *content*: `version u32 LE`, overlay runs, then every entity
-/// **overlapping** `chunk` (0007 §5, widened from M14's anchor-chunk-only filter: docs/plan/
-/// 21-entities-and-timers.md Scope, "`encode_chunk_snapshot`'s entity filter" widens together with
+/// **overlapping** `chunk` (0007 §5, widened from M14's anchor-chunk-only filter: M21 Scope, "`encode_chunk_snapshot`'s entity filter" widens together with
 /// `Authority`'s scope derivation and M15's frame builder) as `(EntityId varint, Codec entity)`.
 /// Does not write `chunk` itself (module doc comment); reused unmodified both by [`SnapshotWriter`]
 /// and by M31's per-chunk hash. Reads `Store::chunk_overlapping` (a `ChunkIndex` lookup, already

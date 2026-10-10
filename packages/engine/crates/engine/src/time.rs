@@ -106,8 +106,7 @@ impl TickRate {
 
     /// `1.0 / hz`, for continuous dynamics only (0006: never for stored durations). Named `DT` in
     /// 0006's Decision block; spelled as a lower-case method here since `TickRate` values vary per
-    /// game (`Game::TICK_RATE`), so it cannot be a single associated constant (docs/plan/
-    /// 12b-world-access-and-sim-driver.md Deviations).
+    /// game (`Game::TICK_RATE`), so it cannot be a single associated constant (M12b Deviations).
     #[inline]
     pub const fn dt(self) -> f32 {
         1.0 / self.0 as f32

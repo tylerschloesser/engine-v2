@@ -1,5 +1,4 @@
-// `reference_package_depends_only_on_engine` and `reference_bindings_have_no_bigint` (docs/plan/
-// 20-reference-game-v0.md Tests added).
+// `reference_package_depends_only_on_engine` and `reference_bindings_have_no_bigint` (M20 Tests added).
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'

@@ -13,8 +13,7 @@ import { INPUT_RECORD_BYTES } from './record.js'
 import { createSemanticRecognizer, type InputEventTs } from './semantic.js'
 import { WheelState } from './wheel.js'
 
-// Same wide, non-square viewport `camera.test.ts` uses, for the same reason (docs/plan/
-// 11-camera-and-input.md's own warning against a probe point where a swapped axis or a halved/
+// Same wide, non-square viewport `camera.test.ts` uses, for the same reason (M11's own warning against a probe point where a swapped axis or a halved/
 // doubled formula would still agree): `pxPerTile = 1600 / 20 = 80`.
 const viewport = { widthPx: 1600, heightPx: 800 }
 

@@ -1,5 +1,4 @@
-// Mip-chain blit (docs/decisions/0018-renderer.md §4: "generates mips to 1x1"; docs/plan/
-// 09b-terrain-art-and-lifecycle.md Scope: "render/mips.ts: mip chain to 1x1 for every array layer at
+// Mip-chain blit (docs/decisions/0018-renderer.md §4: "generates mips to 1x1"; M09b Scope: "render/mips.ts: mip chain to 1x1 for every array layer at
 // load, with one blit pipeline and reused descriptors"). One full-viewport triangle per (layer,
 // level) pass: the fragment bilinearly samples the previous mip level, at the array layer `mip_layer`
 // names, into the next level's own single-layer attachment.

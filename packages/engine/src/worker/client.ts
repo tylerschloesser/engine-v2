@@ -52,7 +52,7 @@ import { asNumberList, injectTrap } from './test-trap.js'
  * `Camera` region by `readCameraBlockInto` on the very same pass, so Rust can read it there
  * (`CameraBlock::frame_time_ms`, `client/camera.rs`) instead of receiving it a second time as a
  * boxed argument. The export keeps its declared shape (`frame(t_ms: f64) -> status`, unchanged ABI,
- * no `ABI_VERSION` bump) because docs/plan/{15b,17,18,19,26,30}.md and 08b's Consumes all cite
+ * no `ABI_VERSION` bump) because M15b, M17, M18, M19, M26, M30 and M08b's Consumes all cite
  * `frame(t_ms)` by this name; only what crosses as the argument changed, from memory. */
 const FRAME_ARG = 0
 
@@ -357,8 +357,7 @@ function assemble(
   }
 
   // `engine/test`'s `callParked` reaches `client_gen_stats`/`client_chunk_hash` (this instance's
-  // own non-shared WASM memory) through this, while parked only (docs/plan/
-  // 08b-gen-workers-and-queue.md, orchestrator decision 1 at the step-5 boundary): `worker.ts`
+  // own non-shared WASM memory) through this, while parked only (M08b, orchestrator decision 1 at the step-5 boundary): `worker.ts`
   // routes a `test-call` message here only when this worker's own setup carried `test`.
   return {
     body,
