@@ -42,8 +42,8 @@ You are the manager session for the belts effort: one long-running Opus or Fable
 ## Status
 
 - **Current milestone:** M40 (`docs/plan/40-item-representation-spike.md`)
-- **State:** not started. Planning complete (2026-10-11): ADRs 0076-0078, `PLAN.md`, briefs 40-58, the draft "Belts" requirements section with Tyler's Q4-Q7 answers recorded.
-- **Exact next step:** read `docs/plan/40-item-representation-spike.md` and its reading list; create the `fx-belts` fixture skeleton (order of work step 1); confirm `pnpm test` builds it.
+- **State:** in progress. Order-of-work step 1 done (2026-10-11): the `fx-belts` skeleton builds in `pnpm test`'s `fixtures` step, test and lint green.
+- **Exact next step:** steps 2-5 of the brief (bench world, rule cases, candidates A/B1/B2, the release timing run, the profile), delegated to one `general-purpose` sub-agent (`model: opus`) briefed with the brief; then the manager amends 0077 (step 6) and gates.
 - **Blockers:** none. Open with Tyler: none asked yet; the **(assumed)** lines in `games/reference/README.md` "Belts" are to be batched before M51 starts (M51, M52, M54, M55 are **T**).
 
 ## Exit criteria of the whole effort

@@ -1,0 +1,20 @@
+[package]
+name = "fx-belts"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"] # cdylib -> the .wasm; rlib -> the native tests
+
+[lints]
+workspace = true
+
+[dependencies]
+engine = { path = "../../crates/engine" }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+ts-rs = "12"
+
+[dev-dependencies]
+engine = { path = "../../crates/engine", features = ["testing"] }
+serde_json = "1"

@@ -45,3 +45,5 @@ crate that blesses it (`pnpm golden:bytes`, `../CLAUDE.md` Commands).
   (80 puts/s), dense chunks (200 dormant entities + 160 modified tiles, ~3.5 KB on the wire natively, 3.9 KB with a big world's 3-byte entity ids) via
   `Action::Fill { cx, cy }` or the native-only bench genesis `BusyField<true>` (121 chunks). A `Fill`
   needs `maxActionGrowth >= 28,288` and room in `maxEntities`.
+- `belts` (`fx-belts`, M40 onward): the engine's belt fixture for `engine::transport` (0076); M40's
+  skeleton `Game` plus the native item-representation spike (0077). Own `CLAUDE.md`.
