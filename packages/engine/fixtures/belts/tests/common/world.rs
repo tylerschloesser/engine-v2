@@ -16,6 +16,12 @@
 //!   Alternate belt chains carry one item kind (packed same-kind runs) or cycle `1..=6` (runs that
 //!   never merge).
 //! - `InserterLike`: `Mixed` plus [`INSERTER_CALLS`] `insert_at`/`remove_at` calls per tick.
+//! - `SaturatedView` (M41, its own world: [`saturated_view_world`]): a 256 x 144 viewport of belts,
+//!   every lane packed and fed to saturation, a share of the sinks closing and reopening.
+//!
+//! Tile coordinates (M41, plain data nothing in M40 reads): every line has a [`Span`] of tiles on
+//! one row. In the standard world belt chain `b` is row `b`, its front line at `x = 0` and each
+//! line behind it to the right (items move toward `-x`); both lanes share the span.
 #![allow(dead_code)]
 
 use engine::rng::SimRng;
@@ -56,6 +62,12 @@ pub enum Regime {
     Jammed,
     Mixed,
     InserterLike,
+    /// M41: [`saturated_view_world`]. `jam_pct` of the sinks close and reopen with `period` ticks
+    /// (0: never toggles).
+    SaturatedView {
+        jam_pct: u8,
+        period: u16,
+    },
 }
 
 impl Regime {
@@ -72,6 +84,7 @@ impl Regime {
             Regime::Jammed => "jammed",
             Regime::Mixed => "mixed",
             Regime::InserterLike => "inserter-like",
+            Regime::SaturatedView { .. } => "saturated-view",
         }
     }
 }
@@ -88,6 +101,35 @@ pub struct Spawner {
     pub cycle: bool,
 }
 
+/// A line's tiles: `w` tiles on row `y` from `x0` (front) to `x0 + w - 1` (back).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Span {
+    pub x0: u32,
+    pub y: u32,
+    pub w: u32,
+}
+
+impl Span {
+    /// Whether the span meets the tile rect `[x0, x1) x [y0, y1)`.
+    pub fn meets(&self, x0: u32, y0: u32, x1: u32, y1: u32) -> bool {
+        self.y >= y0 && self.y < y1 && self.x0 < x1 && self.x0 + self.w > x0
+    }
+}
+
+/// A sink that closes (`Out::Sink` -> `Out::DeadEnd`) and reopens: closed at tick `t` when
+/// `(t + phase) % period < period / 2` (see [`Toggle::closed`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Toggle {
+    pub line: LineIdx,
+    pub phase: u16,
+}
+
+impl Toggle {
+    pub fn closed(&self, tick: u32, period: u16) -> bool {
+        period > 0 && (tick + u32::from(self.phase)) % u32::from(period) < u32::from(period / 2)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BenchWorld {
     pub seed: u64,
@@ -98,6 +140,14 @@ pub struct BenchWorld {
     pub spawners: Vec<Spawner>,
     /// `insert_at`/`remove_at` calls per tick (0 except `InserterLike`).
     pub inserter_calls: u32,
+    /// Per line, its tiles (M41).
+    pub spans: Vec<Span>,
+    /// The world's tile extent: every span lies in `[0, width) x [0, height)`.
+    pub width: u32,
+    pub height: u32,
+    /// `SaturatedView` only: the sinks that close and reopen, with [`Regime::SaturatedView`]'s
+    /// `period`.
+    pub toggles: Vec<Toggle>,
 }
 
 impl BenchWorld {
@@ -121,6 +171,9 @@ pub fn bench_world(seed: u64, regime: Regime) -> BenchWorld {
 
 /// [`bench_world`] with tiles, items and inserter calls divided by `scale` (the fast tests use 64).
 pub fn bench_world_scaled(seed: u64, regime: Regime, scale: u32) -> BenchWorld {
+    if let Regime::SaturatedView { jam_pct, period } = regime {
+        return saturated_view_world(seed, jam_pct, period, (VIEW_H / scale).max(1));
+    }
     let mut rng = SimRng::new(seed);
     let belt_tiles = TILES / scale;
     let item_target = u64::from(ITEMS / scale);
@@ -181,6 +234,7 @@ pub fn bench_world_scaled(seed: u64, regime: Regime, scale: u32) -> BenchWorld {
                 same_kind: false,
                 shared: true,
             },
+            Regime::SaturatedView { .. } => unreachable!("built by saturated_view_world"),
             Regime::Mixed | Regime::InserterLike => {
                 let same_kind = b % 2 == 0;
                 if lane == 0 {
@@ -238,8 +292,9 @@ pub fn bench_world_scaled(seed: u64, regime: Regime, scale: u32) -> BenchWorld {
         .collect();
 
     let mut lines: Vec<LineSpec> = Vec::new();
+    let mut spans = Vec::new();
     let mut spawners = Vec::new();
-    for (k, ((&(segs, _, _), plan), &n)) in chains.iter().zip(&plans).zip(&counts).enumerate() {
+    for (k, ((&(segs, _, b), plan), &n)) in chains.iter().zip(&plans).zip(&counts).enumerate() {
         let kind0 = (k % KINDS as usize) as u16;
         let kind = |j: u64| -> Item {
             if plan.same_kind {
@@ -262,8 +317,15 @@ pub fn bench_world_scaled(seed: u64, regime: Regime, scale: u32) -> BenchWorld {
         }
         let mut offset = 0u64;
         let mut j = 0usize;
+        let mut x = 0u32;
         for (s, &t) in segs.iter().enumerate() {
             let len = t * TILE;
+            spans.push(Span {
+                x0: x,
+                y: b as u32,
+                w: t,
+            });
+            x += t;
             let mut items = Vec::new();
             while j < positions.len() && positions[j] < offset + u64::from(len) {
                 items.push((kind(j as u64), (positions[j] - offset) as u32));
@@ -292,6 +354,7 @@ pub fn bench_world_scaled(seed: u64, regime: Regime, scale: u32) -> BenchWorld {
     }
 
     let order = update_order(&lines);
+    let width = spans.iter().map(|s| s.x0 + s.w).max().unwrap_or(0);
     BenchWorld {
         seed,
         regime,
@@ -303,6 +366,144 @@ pub fn bench_world_scaled(seed: u64, regime: Regime, scale: u32) -> BenchWorld {
         } else {
             0
         },
+        spans,
+        width,
+        height: belts.len() as u32,
+        toggles: Vec::new(),
+    }
+}
+
+/// The viewport M41 stands in for (`docs/architecture/sync-and-netcode.md`: views clamp to 256
+/// tiles per axis; 256 x 144 is a 16:9 view at that width).
+pub const VIEW_W: u32 = 256;
+pub const VIEW_H: u32 = 144;
+
+/// Lines whose span meets a `VIEW_W x VIEW_H` rect at the world's centre (M41's visible set).
+pub fn visible_at_centre(w: &BenchWorld) -> Vec<bool> {
+    visible_in(w, VIEW_W, VIEW_H)
+}
+
+/// Lines whose span meets a `width x height` rect at the world's centre.
+pub fn visible_in(w: &BenchWorld, width: u32, height: u32) -> Vec<bool> {
+    let x0 = (w.width / 2).saturating_sub(width / 2);
+    let y0 = (w.height / 2).saturating_sub(height / 2);
+    w.spans
+        .iter()
+        .map(|s| s.meets(x0, y0, x0 + width, y0 + height))
+        .collect()
+}
+
+/// `Regime::SaturatedView` (M41): `rows` rows of [`VIEW_W`] belt tiles (144 at full scale: 36,864
+/// tiles, all of them in one viewport). Each row is filled from `x = 0` with belt chains of 1-6
+/// lines of 4-48 tiles (the standard world's distribution; the chain that reaches the row's end is
+/// cut there). Every belt chain gives two lane chains, packed full from the front (gap 0, so the
+/// stream is saturated from tick 0), its front line into a `Sink`, a spawner at `rate256 = 256` on
+/// its rear line; alternate belt chains carry one item kind or cycle `1..=KINDS`, as in `Mixed`.
+///
+/// Jams: `jam_pct` % of the lane-chain sinks (rounded down; chosen by a seeded shuffle) are
+/// [`Toggle`]s, each with a seeded phase in `0..period`: closed for half the period, open for the
+/// other half, staggered so the toggles spread evenly over time. `period = 0`: none toggles.
+pub fn saturated_view_world(seed: u64, jam_pct: u8, period: u16, rows: u32) -> BenchWorld {
+    let mut rng = SimRng::new(seed);
+    let mut belts: Vec<(u32, Vec<u32>)> = Vec::new(); // (row, segment tiles front first)
+    for y in 0..rows {
+        let mut x = 0;
+        while x < VIEW_W {
+            let n = 1 + rng.below(6);
+            let mut segs = Vec::new();
+            for _ in 0..n {
+                if x == VIEW_W {
+                    break;
+                }
+                let t = (4 + rng.below(45)).min(VIEW_W - x);
+                segs.push(t);
+                x += t;
+            }
+            belts.push((y, segs));
+        }
+    }
+    let mut lines = Vec::new();
+    let mut spans = Vec::new();
+    let mut spawners = Vec::new();
+    let mut sinks = Vec::new();
+    let mut row_x = vec![0u32; rows as usize];
+    for (b, (y, segs)) in belts.iter().enumerate() {
+        let x_start = row_x[*y as usize];
+        row_x[*y as usize] += segs.iter().sum::<u32>();
+        let same_kind = b % 2 == 0;
+        for lane in 0..2u32 {
+            let kind0 = ((2 * b as u32 + lane) % u32::from(KINDS)) as Item;
+            let kind = |j: u32| -> Item {
+                if same_kind {
+                    kind0 + 1
+                } else {
+                    ((u32::from(kind0) + j) % u32::from(KINDS)) as Item + 1
+                }
+            };
+            let first_line = lines.len() as u32;
+            let mut j = 0u32;
+            let mut x = x_start;
+            for (s, &t) in segs.iter().enumerate() {
+                let len = t * TILE;
+                let items = (0..len / SPACING)
+                    .map(|i| {
+                        let item = kind(j);
+                        j += 1;
+                        (item, i * SPACING)
+                    })
+                    .collect();
+                lines.push(LineSpec {
+                    len,
+                    speed: SPEED,
+                    out: if s == 0 {
+                        Out::Sink
+                    } else {
+                        Out::Next(first_line + s as u32 - 1)
+                    },
+                    items_at_rest: items,
+                });
+                spans.push(Span { x0: x, y: *y, w: t });
+                x += t;
+            }
+            sinks.push(first_line);
+            spawners.push(Spawner {
+                line: first_line + segs.len() as u32 - 1,
+                rate256: 256,
+                first: kind(j),
+                cycle: !same_kind,
+            });
+        }
+    }
+    // A seeded shuffle of the sinks; the first `jam_pct` % toggle.
+    for i in (1..sinks.len()).rev() {
+        let k = rng.below(i as u32 + 1) as usize;
+        sinks.swap(i, k);
+    }
+    let n_jam = if period == 0 {
+        0
+    } else {
+        sinks.len() * usize::from(jam_pct) / 100
+    };
+    let mut toggles: Vec<Toggle> = sinks[..n_jam]
+        .iter()
+        .map(|&line| Toggle {
+            line,
+            phase: rng.below(u32::from(period)) as u16,
+        })
+        .collect();
+    toggles.sort_unstable_by_key(|t| t.line);
+    let order = update_order(&lines);
+    BenchWorld {
+        seed,
+        regime: Regime::SaturatedView { jam_pct, period },
+        lines,
+        order,
+        spawners,
+        inserter_calls: 0,
+        spans,
+        width: VIEW_W,
+        height: rows,
+        toggles,
     }
 }
 

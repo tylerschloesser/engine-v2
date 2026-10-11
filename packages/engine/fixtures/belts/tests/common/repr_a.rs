@@ -73,6 +73,12 @@ impl ReprA {
         line.count += 1;
     }
 
+    /// M41: a structure change (a sink closing or reopening), for the forecast spike's agreement
+    /// check.
+    pub fn set_out(&mut self, l: LineIdx, out: Out) {
+        self.lines[l as usize].out = out;
+    }
+
     fn tail_pos(&self, l: LineIdx) -> Option<i32> {
         let t = self.lines[l as usize].tail;
         (t != NIL).then(|| self.nodes[t as usize].pos as i32)

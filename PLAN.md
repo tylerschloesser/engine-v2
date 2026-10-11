@@ -25,7 +25,7 @@ The plan is revised from measurements, at every phase end and whenever a milesto
 | | # | Brief | Lands | After | Marks |
 |---|---|---|---|---|---|
 | [x] | 40 | `40-item-representation-spike.md` | `fx-belts` fixture skeleton; native spike of the item representations of 0077 on the standard belt world (50,000 tiles, 250,000 items), four regimes; 0077 amended to Accepted with the winner | — | |
-| [ ] | 41 | `41-forecast-spike.md` | native spike of the dirty-marking and cheap forecast of 0078 on the spike sim: correction rate, estimated bytes, tracker cost; 0078 confirmed or revised | 40 | |
+| [x] | 41 | `41-forecast-spike.md` | native spike of the dirty-marking and cheap forecast of 0078 on the spike sim: correction rate, estimated bytes, tracker cost; 0078 confirmed or revised | 40 | |
 | [ ] | 42 | `42-transport-core.md` | `engine::transport` in `Store`: lines, runs (the winner), `advance`, `DeadEnd`/`Next`/`Sink`, update order, `insert_back`, codec/hash/snapshot, `WorldRead`/`WorldWrite` accessors, `max_lines`/`max_items`, `no_alloc_transport`, the snapshot bump | 40 | |
 | [ ] | 42b | `42b-transport-core-goldens.md` | `fx-belts` requests (`Action::Request(Op)`, the `Request` entity, spawner active list) and the first four goldens natively, under Node and Bun | 42 | |
 | [ ] | 43 | `43-transport-surgery-and-geometry.md` | `split`/`join`/`extend`/`shrink`/`rescale`/`destroy`, `insert_at`/`remove_at`/`front`, segment geometry, derived chunk set and tile index, edit-while-running goldens | 42b | |
@@ -49,5 +49,6 @@ The plan is revised from measurements, at every phase end and whenever a milesto
 
 - 2026-10-11: engine `Merge` and `Fork` primitives are built in the core phase (M44) because the line abstraction needs them to be right before replication; the reference game's splitter and underground entities follow playability (M54, M55).
 - 2026-10-11: the item representation and the forecast scheme are measured by native spikes (M40, M41) before any production code; the spikes ship nothing.
+- 2026-10-11: the forecast budget row (M47) gates the saturated viewport with a fifth of its lanes jamming and clearing every 5 s (0078 A5); the every-second stress cell is recorded, not gated, because M41 measured it over the cap under a byte model that double-counts the tick and makes jams by 19.6 structure edits a tick; the chain-level halt is the lever if M47 reads it above twice the soft cap.
 - 2026-10-11: M42 split into M42 (the engine crate, the TS params, the engine-side tests) and M42b (the `fx-belts` request pattern, scenarios and goldens) before it started: the original touched three areas and was estimated near 2,000 lines, over the sizing rule.
 - 2026-10-11: Tyler's Q4-Q7 defaults stand (placement, phone automation, art, numbers); recorded as dated lines in `games/reference/README.md` "Belts".

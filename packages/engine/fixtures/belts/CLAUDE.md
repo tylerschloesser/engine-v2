@@ -19,3 +19,15 @@ regime, also written to `test-results/rust/bench/spike-item-representation.json`
 a passing test's output; `SPIKE_ONLY=B1/mixed SPIKE_PROFILE_REPEAT=150` on the release test binary
 measures one cell and repeats it for a profiler). The numbers live in 0077's Amendment; the spike
 stays until M45 deletes it.
+
+**The forecast spike (M41, native only):** `tests/spike_forecast.rs` measures 0078's cheap forecast
+on B1 (`common/forecast.rs`: the `Tracker`, an `Observer` of `ReprB` whose hooks only observe; the
+forecast builder; the byte model). `Regime::SaturatedView { jam_pct, period }` is its own world
+(`saturated_view_world`: 256 x 144 belt tiles, every lane packed and fed, toggled sinks); every line
+has a tile `Span`, and `visible_at_centre` gives a regime's visible set. Commands:
+`pnpm test rust -t forecast_`, `pnpm test rust -t saturated_view`,
+`pnpm test:slow rust -t slow_spike_forecast_cells` (one `BENCH_SAMPLE` per world x depth with the
+variants inside (`variants_at`), plus the tracker's tick cost; also in `test-results/rust/bench/spike-forecast.json`).
+`forecast_client_matches_advance` is the arbiter: a client that follows only the messages must
+draw every visible item where the advance puts it. The numbers live in M41's Deviations and 0078's
+Amendment.

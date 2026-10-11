@@ -15,6 +15,10 @@
 //! The two stores differ only in where runs live: B1 a doubly linked list per line in one global
 //! arena ([`Linked`]), B2 a per-line ring buffer carved from one array ([`Ring`], contiguous reads;
 //! a mid-line insert or remove shifts the shorter side).
+//!
+//! M41: [`ReprB`] carries an [`Observer`] (default [`NoObs`], whose empty hooks compile away) that
+//! sees each front-item step, hand-off, sink, insert, refusal and structure change; the hooks only
+//! observe. `common/forecast.rs`'s tracker is the one observer.
 #![allow(dead_code)]
 
 use super::repr::{Refused, Repr, SP, front_leader};
@@ -55,6 +59,39 @@ pub trait RunStore: Clone {
     fn clear_jam(&mut self, l: LineIdx);
 }
 
+/// What the advance and the edit primitives report (M41's dirty-event instrumentation, 0078 §3).
+/// Every hook observes; none can change the outcome. Positions are in the line's own coordinates.
+pub trait Observer: Clone {
+    /// The line's front item moves from `pos0` to `p` (`p == pos0`: it held; `p < 0`: it crosses the
+    /// front, then [`Observer::handoff`] or [`Observer::sunk`] follows). Called once per item that
+    /// reaches the front this tick, in order.
+    #[inline]
+    fn front(&mut self, _l: LineIdx, _pos0: i32, _p: i32) {}
+    /// The item that just crossed `from`'s front landed on `to` at `pos`.
+    #[inline]
+    fn handoff(&mut self, _from: LineIdx, _to: LineIdx, _pos: i32) {}
+    /// The item that just crossed `l`'s front left through its `Sink`.
+    #[inline]
+    fn sunk(&mut self, _l: LineIdx) {}
+    /// `insert_back` landed an item at `pos`.
+    #[inline]
+    fn inserted(&mut self, _l: LineIdx, _pos: i32) {}
+    /// `insert_back` was refused; `tail` is the rearmost item's position.
+    #[inline]
+    fn refused(&mut self, _l: LineIdx, _tail: i32) {}
+    /// `insert_at` (`delta = 1`) or `remove_at` (`delta = -1`) changed the line.
+    #[inline]
+    fn edited(&mut self, _l: LineIdx, _delta: i32) {}
+    /// The line's output changed to `out`.
+    #[inline]
+    fn structure(&mut self, _l: LineIdx, _out: Out) {}
+}
+
+/// The observer that sees nothing (M40's candidates).
+#[derive(Clone, Copy, Default)]
+pub struct NoObs;
+impl Observer for NoObs {}
+
 #[derive(Clone, Copy)]
 struct Line {
     len: i32,
@@ -66,13 +103,105 @@ struct Line {
 }
 
 #[derive(Clone)]
-pub struct ReprB<S: RunStore> {
+pub struct ReprB<S: RunStore, O: Observer = NoObs> {
     lines: Vec<Line>,
     s: S,
     sunk: u64,
+    obs: O,
 }
 
-impl<S: RunStore> ReprB<S> {
+/// Read access to a [`ReprB`]'s lines while its observer is borrowed mutably ([`ReprB::split`]).
+pub struct LinesView<'a, S: RunStore> {
+    lines: &'a [Line],
+    s: &'a S,
+}
+
+impl<S: RunStore> LinesView<'_, S> {
+    pub fn count(&self) -> u32 {
+        self.lines.len() as u32
+    }
+    pub fn items(&self, l: LineIdx) -> u32 {
+        self.lines[l as usize].items
+    }
+    pub fn runs(&self, l: LineIdx) -> u32 {
+        self.s.runs(l)
+    }
+    /// `f(item, count, first item's position)` per run, front to back.
+    #[inline]
+    pub fn for_each_run(&self, l: LineIdx, mut f: impl FnMut(Item, u16, i32)) {
+        let mut prev_last: Option<i32> = None;
+        let mut cur = self.s.first(l);
+        while let Some(c) = cur {
+            let r = self.s.get(l, c);
+            let first = match prev_last {
+                None => r.gap as i32,
+                Some(p) => p + SP + r.gap as i32,
+            };
+            f(r.item, r.count, first);
+            prev_last = Some(first + SP * (i32::from(r.count) - 1));
+            cur = self.s.next(l, c);
+        }
+    }
+}
+
+impl<S: RunStore, O: Observer> ReprB<S, O> {
+    /// [`Repr::build`] with an observer.
+    pub fn build_with(specs: &[LineSpec], obs: O) -> Self {
+        let caps: Vec<u32> = specs.iter().map(|s| s.len.div_ceil(SPACING)).collect();
+        let mut r = ReprB {
+            lines: specs
+                .iter()
+                .map(|s| Line {
+                    len: s.len as i32,
+                    speed: i32::from(s.speed),
+                    out: s.out,
+                    tail: 0,
+                    items: 0,
+                })
+                .collect(),
+            s: S::new(&caps),
+            sunk: 0,
+            obs,
+        };
+        for (l, s) in specs.iter().enumerate() {
+            for &(item, pos) in &s.items_at_rest {
+                r.land(l as LineIdx, item, pos as i32);
+            }
+        }
+        r
+    }
+
+    pub fn obs(&self) -> &O {
+        &self.obs
+    }
+
+    pub fn obs_mut(&mut self) -> &mut O {
+        &mut self.obs
+    }
+
+    /// The observer and a read-only view of the lines, borrowed together.
+    pub fn split(&mut self) -> (&mut O, LinesView<'_, S>) {
+        (
+            &mut self.obs,
+            LinesView {
+                lines: &self.lines,
+                s: &self.s,
+            },
+        )
+    }
+
+    /// M41: a structure change (a sink closing or reopening). Drops the line's `jam` cache, which
+    /// only ever costs a re-walk.
+    pub fn set_out(&mut self, l: LineIdx, out: Out) {
+        self.lines[l as usize].out = out;
+        self.s.clear_jam(l);
+        self.obs.structure(l, out);
+    }
+
+    pub fn out(&self, l: LineIdx) -> Out {
+        self.lines[l as usize].out
+    }
+
     /// Appends an item at `pos` (already `>= tail + SPACING`), merging into the back run.
     fn land(&mut self, l: LineIdx, item: Item, pos: i32) {
         let line = self.lines[l as usize];
@@ -131,16 +260,21 @@ impl<S: RunStore> ReprB<S> {
             } else {
                 (pos0 - speed).max(bound)
             };
+            self.obs.front(l, pos0, p);
             if p >= 0 {
                 self.s.get_mut(l, h).gap = p as u32;
                 break pos0 - p;
             }
             leader = p;
             match out {
-                Out::Sink => self.sunk += 1,
+                Out::Sink => {
+                    self.sunk += 1;
+                    self.obs.sunk(l);
+                }
                 Out::Next(t) => {
                     let tlen = self.lines[t as usize].len;
                     self.land(t, r.item, tlen + p);
+                    self.obs.handoff(l, t, tlen + p);
                 }
                 Out::DeadEnd => unreachable!("a dead end bounds p at 0"),
             }
@@ -227,31 +361,11 @@ impl<S: RunStore> ReprB<S> {
     }
 }
 
-impl<S: RunStore> Repr for ReprB<S> {
+impl<S: RunStore, O: Observer + Default> Repr for ReprB<S, O> {
     const NAME: &'static str = S::NAME;
 
     fn build(specs: &[LineSpec]) -> Self {
-        let caps: Vec<u32> = specs.iter().map(|s| s.len.div_ceil(SPACING)).collect();
-        let mut r = ReprB {
-            lines: specs
-                .iter()
-                .map(|s| Line {
-                    len: s.len as i32,
-                    speed: i32::from(s.speed),
-                    out: s.out,
-                    tail: 0,
-                    items: 0,
-                })
-                .collect(),
-            s: S::new(&caps),
-            sunk: 0,
-        };
-        for (l, s) in specs.iter().enumerate() {
-            for &(item, pos) in &s.items_at_rest {
-                r.land(l as LineIdx, item, pos as i32);
-            }
-        }
-        r
+        Self::build_with(specs, O::default())
     }
 
     fn advance(&mut self, order: &[LineIdx]) {
@@ -268,9 +382,11 @@ impl<S: RunStore> Repr for ReprB<S> {
             (line.len - line.speed).max(line.tail + SP)
         };
         if land > line.len - 1 {
+            self.obs.refused(l, line.tail);
             return Err(Refused::NoRoom);
         }
         self.land(l, item, land);
+        self.obs.inserted(l, land);
         Ok(())
     }
 
@@ -358,6 +474,7 @@ impl<S: RunStore> Repr for ReprB<S> {
         }
         self.lines[l as usize].items += 1;
         self.s.clear_jam(l);
+        self.obs.edited(l, 1);
         Ok(())
     }
 
@@ -427,6 +544,7 @@ impl<S: RunStore> Repr for ReprB<S> {
         }
         self.lines[l as usize].items -= 1;
         self.s.clear_jam(l);
+        self.obs.edited(l, -1);
         Some(r.item)
     }
 
