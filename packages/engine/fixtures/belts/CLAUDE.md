@@ -14,5 +14,8 @@ world. `tests/common/world.rs` builds that world (`bench_world(seed, regime)`: 5
 ~250,000 items, `speed = 24`, four regimes) as plain `LineSpec` data, reused by M45's gated benchmark.
 `tests/common/bench_run.rs` is a copy of the reference game's release re-run helper (M45 moves it
 into `engine::testing`). Commands: `pnpm test rust -t repr_`, `pnpm test rust -t bench_world`,
-`pnpm test:slow rust -t slow_spike_item_representation` (release, prints one `BENCH_SAMPLE` per
-candidate x regime). The numbers live in 0077's Amendment; the spike stays until M45 deletes it.
+`pnpm test:slow rust -t slow_spike_item_representation` (release, one `BENCH_SAMPLE` per candidate x
+regime, also written to `test-results/rust/bench/spike-item-representation.json` since nextest hides
+a passing test's output; `SPIKE_ONLY=B1/mixed SPIKE_PROFILE_REPEAT=150` on the release test binary
+measures one cell and repeats it for a profiler). The numbers live in 0077's Amendment; the spike
+stays until M45 deletes it.

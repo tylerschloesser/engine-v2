@@ -1,6 +1,6 @@
 # 0077: How items on a transport line are stored
 
-Status: Proposed (2026-10-11). Implements [0076](0076-transport-lines-engine-game-split.md) §1-§3; decided by measurement in milestone 40 (`docs/plan/40-item-representation-spike.md`), which amends this ADR to Accepted with the winner and the numbers, or supersedes it.
+Status: Accepted (2026-10-11, by the Amendment below: **B1, gap-encoded runs in a linked arena**, wins). Implements [0076](0076-transport-lines-engine-game-split.md) §1-§3; decided by the measurement of milestone 40 (`docs/plan/40-item-representation-spike.md`).
 
 ## Context
 
@@ -42,4 +42,43 @@ Both keep `0 <= pos <= len - 1`, the spacing invariant on a line and across plai
 
 - [0076](0076-transport-lines-engine-game-split.md) §1-§3, §8.
 - Prior project: `PLAN.md` D3, D5, D16 (its 5,000-tile budget, never measured in WASM); `docs/12-belt-physics-measurements.md` §3a-§3c, §6 (quoted Factorio statements on aggregate movement).
-- Factorio FFF-176 "Belt optimisation" (https://www.factorio.com/blog/post/fff-176) describes the gap representation and the "segments" merged across tiles; cited from memory of the prior project's reading list, to be re-read and dated by milestone 40.
+- Factorio FFF-176 "Belts optimization for 0.15" (https://www.factorio.com/blog/post/fff-176, published 2017-02-03, re-read 2026-10-11): "We no longer store absolute coordinates of items, instead we store the distance between items"; a free-flowing stretch updates only its terminal gaps ("you only increment/decrement those terminal gap sizes, and do not touch items at all"); a compressed belt "will stay that way forever", so the index of the last positive gap only decreases; adjacent belts are merged into one transport line. Candidate B is this scheme with runs of same-kind items collapsed to a count.
+- Milestone 40's spike: `packages/engine/fixtures/belts/tests/spike_repr.rs` (until milestone 45 deletes it), its Deviations in `docs/plan/40-item-representation-spike.md`, the record `test-results/rust/bench/spike-item-representation.json` (not tracked).
+
+## Amendment (2026-10-11, milestone 40): the measurement and the winner
+
+**A1. The table.** Native release on Tyler's MacBook Pro (Apple M3 Max, the bench-gate fingerprint machine), the standard belt world of milestone 40 (seed 7: 3,810 lines, 50,000 belt tiles, 250,000 items at build; `speed = 24`), 200 warm-up ticks then 1,200 measured; each cell the median of three runs by the implementer, confirmed within 2 % by the manager's own run. "Tick" is the game phase (spawners, the inserter-like calls) plus `advance`; "advance" is `advance` alone. Encode: the whole world once into a `SliceSink`. Allocation: `thread_live_bytes` delta over the 1,200 ticks.
+
+| Candidate | Regime | Tick median µs | p99 µs | Advance median µs | Encode bytes | Encode µs | Alloc B |
+|---|---|---|---|---|---|---|---|
+| A | flowing | 1,390 | 1,729 | 1,387 | 753,957 | 2,076 | 0 |
+| B1 | flowing | 25.9 | 36.3 | 23.3 | 1,004,006 | 3,140 | 0 |
+| B2 | flowing | 26.0 | 32.7 | 24.5 | 1,004,006 | 3,140 | 0 |
+| A | jammed | 516 | 549 | 516 | 754,520 | 2,059 | 0 |
+| B1 | jammed | 9.5 | 11.7 | 9.5 | 1,004,520 | 3,102 | 0 |
+| B2 | jammed | 12.1 | 15.5 | 12.0 | 1,004,520 | 3,136 | 0 |
+| A | mixed | 647 | 774 | 645 | 979,155 | 2,759 | 0 |
+| **B1** | **mixed** | **20.1** | **36.2** | **16.8** | 714,520 | 2,252 | 0 |
+| B2 | mixed | 24.0 | 37.0 | 21.1 | 714,520 | 2,253 | 0 |
+| A | inserter-like | 1,868 | 2,256 | 1,431 | 604,889 | 1,688 | 0 |
+| B1 | inserter-like | 408 | 467 | 51.8 | 692,278 | 2,057 | 0 |
+| B2 | inserter-like | 153 | 184 | 39.7 | 692,278 | 2,192 | 0 |
+
+**A2. The rule of §3 applied.** Lowest mixed median: B1 at 20.1 µs; B2 is 19 % above it, outside the 10 % band, so the simplicity tie-break does not apply and **B1 wins**. B1's mixed advance (16.8 µs median, 36 µs p99) is 0.6 % of the 3 ms budget, so the budget holds with two orders of magnitude to spare. Every candidate passed the shared rule cases (`repr_rule_cases`, 17 cases) and gave identical `(item, position)` lists tick by tick (`repr_candidates_agree`), and none allocated per tick.
+
+**A3. Against the pre-registered expectations.** B beats A by 54x flowing and 43-54x jammed (expected: more than 5x). In mixed B beats A by 32x, not the expected 2-3x: the expectation assumed compression fronts cost B something comparable to A's per-item walk, but B's cost is per line (about 4.4 ns per line: the line header and its front run; profile in A5) plus the runs a front actually touches, and A's is per item. B does not lose in inserter-like: at 2,000 `insert_at`/`remove_at` calls per tick B1 is 4.6x and B2 12x faster than A, because the per-call scan over runs is shorter than A's scan over items.
+
+**A4. What the spike found that the ADR did not predict.**
+- *B2 is 2.7x faster than B1 under inserter load* (153 versus 408 µs): the per-call scan reads a contiguous ring instead of chasing links. B1 is kept because the rule as written selects it, because 408 µs at 2,000 calls per tick is still 14 % of the 3 ms budget for a load far above anything 2 to 8 players' inserters produce (inserters are designed for, not built, in this effort), and because B1's surgery (`join`, `split`, milestone 43) relinks nodes in O(1) where B2 must move runs between fixed-capacity rings and re-size a ring when `len` grows. The trigger in Consequences stands with B2 as the measured fallback; a B1 store can also place one line's runs contiguously by allocation policy if the scan ever matters.
+- *Encode size depends on kind alternation, not on the store.* Where kinds alternate every item is its own run and B's bytes are 33 % above A's (flowing, jammed); where same-kind runs pack, B is 27 % below (mixed). A real game's belts carry mostly same-kind streams; the forecast encoder of [0078](0078-transport-forecast-replication.md) groups the same way.
+- *The inserter-like regime drains*: random `remove_at` calls succeed more often than random `insert_at` calls (682k removed versus 400k inserted over 1,400 ticks; 186,750 items at the end against 315,444 in mixed), so its per-call numbers are measured on a thinning world. Kept as §2 words it; milestone 45's gated benchmark is the mixed regime.
+- *The B1-over-B2 margin is partly implementation.* B2's ring re-reads its line header (`base`, `head`, `mask`) on every run access (`Ring::slot`, 10.6 % of B2's mixed samples); hoisting it might bring B2 inside the 10 % band, where §3's tie-break would pick B2. Not measured: B1 is chosen for the surgery reason above, which §3's simplicity order did not weigh, and both are two orders of magnitude inside the budget. B1's arena is also fresh in the spike (nodes laid out in line order at build; the free list scatters them only slowly), locality a production arena loses with age; milestone 45's gated benchmark runs the production store and is where ageing would show.
+- *Spawners keep their fractional rate* (`acc += rate256`, success subtracts 256, a refusal holds `acc` at 256); the prior project's `min(256, ..)` cap dropped the fraction and starved the flowing world to 216k items.
+
+**A5. Profile of B1, mixed.** Instruments Time Profiler (`xctrace` 27.0), release with symbols, the measured window repeated 150 times: 88 % of samples in `advance`; self time `advance_line` 44.5 %, `Linked::get` 6.4 %, `Vec<Line>` indexing 5.4 %, the order loop 4.2 %, `Linked::first` 3.9 %. The cost is the per-line visit, not the items. (B2 for comparison: `advance_line` 56.2 %, the ring's index arithmetic `Ring::slot` 10.6 %.)
+
+**A6. What the winner fixes for milestone 42** (adds to §4). The production store is B1's shape: `Run { item: u16, count: u16, gap: u32 }` nodes in one budget-sized arena with a doubly linked list per line; positions are prefix sums, never stored; canonical form (two adjacent runs with gap 0 and the same item merge, so a same-kind jam is one run); a free-moving line costs O(1) because once a run moves the full `speed` every run behind it does too with unchanged gaps; a stopped line costs O(1) through a per-line cache of the first run that may still have a gap (the "jam" cursor, invalidated by a mid-line insert or remove); only the compression front is walked. Hand-offs, `insert_back`, `insert_at` and `remove_at` are as the spike's `common/repr_b.rs` does them; milestone 42 writes them again as production code against `engine::transport`'s arena and `Codec`, not by copying the spike.
+
+**A6b. Two rules the spike settled for milestones 42 and 43.** (i) A squashed pair across a plain hand-off is legal and handled by the squash rule: `insert_at` and `insert_back` check spacing on their own line only (an item inserted at the back of a target line may sit under `SPACING` from the feeder's front item, as 12 §3c's "however it arose" pair; the feeder's item then holds and closes to `SPACING` by `min(speed, gap_after - SPACING)`), so §1's "spacing invariant across plain hand-offs" holds for items that *moved* there, not for inserts, and the `codec` decode check of milestone 42 validates spacing within a line only. (ii) Every run merge guards `count` against `u16` overflow (the spike's `insert_at` merges do not; a merged line long enough to pack 65,536 same-kind items is 1,024 tiles, legal under `max_lines`).
+
+**A7. Deferred to milestone 45.** The WASM-under-Node ratio of the winner on the production module, and the whole-tick number that `belts-tick.json` gates.

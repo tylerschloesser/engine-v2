@@ -2,7 +2,7 @@
 
 ## Your job
 
-You are the manager session for the belts effort: one long-running Opus or Fable session that reads briefs, delegates or does the work, reviews, gates, commits and pushes, and revises the plan from measurements. The plan is `PLAN.md`; one brief per milestone is in `docs/plan/`; the decisions are ADRs [0076](docs/decisions/0076-transport-lines-engine-game-split.md) (the engine/game split), [0077](docs/decisions/0077-transport-item-representation.md) (item representation, Proposed until M40) and [0078](docs/decisions/0078-transport-forecast-replication.md) (forecasts, Proposed until M41); the requirements are Tyler's in `games/reference/README.md` "Belts" and `docs/architecture/README.md`. Nothing that exists only in this conversation is relied on: it is written to a brief, a Deviations section, an ADR or a doc first. A fresh session on any machine continues from this file alone.
+You are the manager session for the belts effort: one long-running Opus or Fable session that reads briefs, delegates or does the work, reviews, gates, commits and pushes, and revises the plan from measurements. The plan is `PLAN.md`; one brief per milestone is in `docs/plan/`; the decisions are ADRs [0076](docs/decisions/0076-transport-lines-engine-game-split.md) (the engine/game split), [0077](docs/decisions/0077-transport-item-representation.md) (item representation, Accepted in M40: B1 runs) and [0078](docs/decisions/0078-transport-forecast-replication.md) (forecasts, Proposed until M41); the requirements are Tyler's in `games/reference/README.md` "Belts" and `docs/architecture/README.md`. Nothing that exists only in this conversation is relied on: it is written to a brief, a Deviations section, an ADR or a doc first. A fresh session on any machine continues from this file alone.
 
 ## Read first, in this order
 
@@ -41,9 +41,9 @@ You are the manager session for the belts effort: one long-running Opus or Fable
 
 ## Status
 
-- **Current milestone:** M40 (`docs/plan/40-item-representation-spike.md`)
-- **State:** in progress. Order-of-work step 1 done (2026-10-11): the `fx-belts` skeleton builds in `pnpm test`'s `fixtures` step, test and lint green.
-- **Exact next step:** steps 2-5 of the brief (bench world, rule cases, candidates A/B1/B2, the release timing run, the profile), delegated to one `general-purpose` sub-agent (`model: opus`) briefed with the brief; then the manager amends 0077 (step 6) and gates.
+- **Current milestone:** M41 (`docs/plan/41-forecast-spike.md`)
+- **State:** M40 done (2026-10-11): `fx-belts` skeleton, the spike, 0077 Accepted with B1 (linked runs) and its Amendment (A1-A7); M41 not started.
+- **Exact next step:** read `docs/plan/41-forecast-spike.md` and its reading list; order of work step 1 (`Regime::SaturatedView` in `bench_world`, its determinism and count tests); delegate the spike (steps 1-4) to one `general-purpose` sub-agent (`model: opus`) with a file brief; the manager amends 0078 (step 5). Before starting: read the CI run of the M40 commit (the step-1 commit's slow tier had one `remote-fade` real-socket red, rerun requested 2026-10-11; a second red needs a base rate before anything is charged, 0069 §10).
 - **Blockers:** none. Open with Tyler: none asked yet; the **(assumed)** lines in `games/reference/README.md` "Belts" are to be batched before M51 starts (M51, M52, M54, M55 are **T**).
 
 ## Exit criteria of the whole effort
