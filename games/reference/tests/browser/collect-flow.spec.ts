@@ -152,22 +152,29 @@ test('reference_collect_flow', async ({ page }) => {
   expect(animationsAfter, 'the fill animation is gone once the collect completes').toBe(0)
 })
 
-// `sim/examples`'s own throwaway scan (this cut, deleted after use -- Deviations): two wood tiles,
-// `(58, 55)` and `(57, 56)`, under `TEST_SEED`, isolated (the next-nearest resource is over 9 tiles
-// from their midpoint) so exactly two buttons -- never a third -- can appear from one camera
-// position.
-const WOOD_A = { x: 58, y: 55 }
-const WOOD_B = { x: 57, y: 56 }
+// Two resource tiles under `TEST_SEED`, isolated (the next-nearest resource is over 9 tiles from their
+// midpoint) so exactly two buttons -- never a third -- can appear from one camera position. They are
+// iron (58, 55) and coal (57, 56); M20b's throwaway scan called both wood, which is why `collectN`
+// (counting wood) never saw a collect complete at (58, 55). The test checks the resources.
+const IRON_TILE = { x: 58, y: 55 }
+const COAL_TILE = { x: 57, y: 56 }
+const IRON = 16 // `content::IRON`
+const COAL = 25 // `content::COAL`
 
 test('reference_several_buttons', async ({ page }) => {
   await openGame(page, { path: '/test.html' })
   await uiState(page) // primes the `lastUi` subscription (see `reference_collect_flow`'s comment).
   await panTo(page, { x: 58, y: 56 })
 
-  await settleCollectButtons(page, [WOOD_A, WOOD_B])
-  await expect(page.locator(`[data-collect-tile="${WOOD_A.x},${WOOD_A.y}"]`)).toBeVisible()
-  await expect(page.locator(`[data-collect-tile="${WOOD_B.x},${WOOD_B.y}"]`)).toBeVisible()
+  await settleCollectButtons(page, [IRON_TILE, COAL_TILE])
+  await expect(page.locator(`[data-collect-tile="${IRON_TILE.x},${IRON_TILE.y}"]`)).toBeVisible()
+  await expect(page.locator(`[data-collect-tile="${COAL_TILE.x},${COAL_TILE.y}"]`)).toBeVisible()
   await expect(page.locator('[data-collect-tile]')).toHaveCount(2)
+  const inRange = (await uiState(page))?.in_range ?? []
+  const resourceAt = (t: { x: number; y: number }) =>
+    inRange.find((e) => e.tile.x === t.x && e.tile.y === t.y)?.resource
+  expect(resourceAt(IRON_TILE), 'iron at (58, 55)').toBe(IRON)
+  expect(resourceAt(COAL_TILE), 'coal at (57, 56)').toBe(COAL)
 })
 
 test('reference_pan_out_cancels', async ({ page }) => {

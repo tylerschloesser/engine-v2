@@ -310,6 +310,33 @@ test('integrity/hash-bytes-per-second', async () => {
   }
 })
 
+test('integrity/hash-bytes-per-second-far-from-origin', async () => {
+  // Production cadence, a quiet `fx-puts` world with one client: what the `Hashes` section costs per
+  // second (0013: one chunk per 4 ticks, `Global`/`OwnPlayer` every 5 s, ~60 B/s).
+  const harness = await createNetHarness({
+    fixture: await putsFixture(),
+    seed: 4108,
+    clients: 1,
+    world: PRODUCTION,
+  })
+  try {
+    // Chunk coordinates past 63 on both axes: two-byte varints in every `Chunk` hash entry.
+    harness.clients[0]?.setCamera({ x: 40_000, y: 40_000, tilesAcross: 20 })
+    await harness.advanceTicks(40)
+    await harness.settle()
+    const before = harness.counters(0).sections.Hashes ?? 0
+    const SECONDS = 20
+    await harness.advanceTicks(SECONDS * 20)
+    const after = harness.counters(0).sections.Hashes ?? 0
+    assertBudget(
+      { hashesBytesPerS: Math.round((after - before) / SECONDS) },
+      'net.hashesBytesPerSFarFromOrigin',
+    )
+  } finally {
+    await harness.dispose()
+  }
+})
+
 test('integrity/hash-never-forces-a-frame', async () => {
   // A due hash rides the next frame sent anyway: an idle world (`fx-machines`, nothing placed) sends
   // its heartbeats, one per 500 ms, and the hashes ride them; hashing adds no frame.
