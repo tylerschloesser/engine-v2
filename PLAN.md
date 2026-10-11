@@ -26,8 +26,9 @@ The plan is revised from measurements, at every phase end and whenever a milesto
 |---|---|---|---|---|---|
 | [x] | 40 | `40-item-representation-spike.md` | `fx-belts` fixture skeleton; native spike of the item representations of 0077 on the standard belt world (50,000 tiles, 250,000 items), four regimes; 0077 amended to Accepted with the winner | — | |
 | [ ] | 41 | `41-forecast-spike.md` | native spike of the dirty-marking and cheap forecast of 0078 on the spike sim: correction rate, estimated bytes, tracker cost; 0078 confirmed or revised | 40 | |
-| [ ] | 42 | `42-transport-core.md` | `engine::transport` in `Store`: lines, runs (the winner), `advance`, `DeadEnd`/`Next`/`Sink`, update order, `insert_back`, codec/hash/snapshot, `WorldRead`/`WorldWrite` accessors, `max_lines`/`max_items`, `no_alloc_transport`, first `fx-belts` goldens | 40 | |
-| [ ] | 43 | `43-transport-surgery-and-geometry.md` | `split`/`join`/`extend`/`shrink`/`rescale`/`destroy`, `insert_at`/`remove_at`/`front`, segment geometry, derived chunk set and tile index, edit-while-running goldens | 42 | |
+| [ ] | 42 | `42-transport-core.md` | `engine::transport` in `Store`: lines, runs (the winner), `advance`, `DeadEnd`/`Next`/`Sink`, update order, `insert_back`, codec/hash/snapshot, `WorldRead`/`WorldWrite` accessors, `max_lines`/`max_items`, `no_alloc_transport`, the snapshot bump | 40 | |
+| [ ] | 42b | `42b-transport-core-goldens.md` | `fx-belts` requests (`Action::Request(Op)`, the `Request` entity, spawner active list) and the first four goldens natively, under Node and Bun | 42 | |
+| [ ] | 43 | `43-transport-surgery-and-geometry.md` | `split`/`join`/`extend`/`shrink`/`rescale`/`destroy`, `insert_at`/`remove_at`/`front`, segment geometry, derived chunk set and tile index, edit-while-running goldens | 42b | |
 | [ ] | 44 | `44-transport-merge-and-fork.md` | `Output::Merge` and `Output::Fork`, big-step crossings (`speed >= SPACING`), side-load and splitter goldens, conservation and throughput properties | 43 | |
 | [ ] | 45 | `45-transport-scale-benchmark.md` | `slow_tick_belts_large` at the stated scale with baseline `belts-tick.json` (limit 5 ms), the Node twin (WASM ratio, warn-only), `max_lines`/`max_items` defaults checked on the phone split. **Core complete.** | 41, 44 | |
 | [ ] | 46 | `46-line-structure-replication.md` | section `LineStructs` (12), chunk-snapshot membership by anchor, replica structure store, chunk hash of structures only, netcode convergence with belts, `no_alloc_wire` extended | 45 | |
@@ -48,4 +49,5 @@ The plan is revised from measurements, at every phase end and whenever a milesto
 
 - 2026-10-11: engine `Merge` and `Fork` primitives are built in the core phase (M44) because the line abstraction needs them to be right before replication; the reference game's splitter and underground entities follow playability (M54, M55).
 - 2026-10-11: the item representation and the forecast scheme are measured by native spikes (M40, M41) before any production code; the spikes ship nothing.
+- 2026-10-11: M42 split into M42 (the engine crate, the TS params, the engine-side tests) and M42b (the `fx-belts` request pattern, scenarios and goldens) before it started: the original touched three areas and was estimated near 2,000 lines, over the sizing rule.
 - 2026-10-11: Tyler's Q4-Q7 defaults stand (placement, phone automation, art, numbers); recorded as dated lines in `games/reference/README.md` "Belts".

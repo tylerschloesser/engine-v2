@@ -1,6 +1,6 @@
 # M43: Transport surgery and geometry
 
-Status: not started · After: 42 · Tyler-dependent: no
+Status: not started · After: 42b · Tyler-dependent: no
 
 ## Goal
 Lines can be edited while items are on them, and the engine knows where a line is: `split`, `join`, `extend_front`/`extend_back`, `shrink_front`/`shrink_back`, `rescale` and `destroy` keep items and spacing; `insert_at`, `remove_at` and `front` are the inserter-shaped primitives; the game registers each line's segments and the engine derives its chunk set, anchor chunk and a tile index. Goldens pin edits during flow.
