@@ -24,8 +24,8 @@ fn new_sim(seed: u64, max_entities: u32) -> Sim<Machines> {
 }
 
 /// Mirrors `golden/scenario.json`'s script exactly (`connect: true` at tick 1 is `Host::connect`'s
-/// own `Record::Player{Joined}` -- assigning `PlayerId(1)` to `sim_connect(0)`, `host/mod`
-/// Deviations).
+/// own `Record::Player{Joined}` then `{Connected}` -- assigning `PlayerId(1)` to `sim_connect(0)`,
+/// `host/mod` Deviations).
 fn script_place_border() -> Vec<(Tick, Record<Machines>)> {
     vec![
         (
@@ -33,6 +33,15 @@ fn script_place_border() -> Vec<(Tick, Record<Machines>)> {
             Record::Player {
                 who: PlayerId(1),
                 ev: PlayerEvent::Joined,
+            },
+        ),
+        // `Host::connect` logs `Connected` after `Joined`; `Sim::step` sets the roster bit on it
+        // (0024 §8), so it is part of the hash the `.wasm` leg writes.
+        (
+            Tick(1),
+            Record::Player {
+                who: PlayerId(1),
+                ev: PlayerEvent::Connected,
             },
         ),
         (
@@ -131,6 +140,15 @@ fn script_full_world() -> Vec<(Tick, Record<Machines>)> {
                 ev: PlayerEvent::Joined,
             },
         ),
+        // `Host::connect` logs `Connected` after `Joined`; `Sim::step` sets the roster bit on it
+        // (0024 §8), so it is part of the hash the `.wasm` leg writes.
+        (
+            Tick(1),
+            Record::Player {
+                who: PlayerId(1),
+                ev: PlayerEvent::Connected,
+            },
+        ),
         (
             Tick(1),
             Record::Action {
@@ -195,6 +213,15 @@ fn script_smelt_cycle() -> Vec<(Tick, Record<Machines>)> {
             Record::Player {
                 who: PlayerId(1),
                 ev: PlayerEvent::Joined,
+            },
+        ),
+        // `Host::connect` logs `Connected` after `Joined`; `Sim::step` sets the roster bit on it
+        // (0024 §8), so it is part of the hash the `.wasm` leg writes.
+        (
+            Tick(1),
+            Record::Player {
+                who: PlayerId(1),
+                ev: PlayerEvent::Connected,
             },
         ),
         (
@@ -267,6 +294,15 @@ fn script_idle_world_costs_zero() -> Vec<(Tick, Record<Machines>)> {
             Record::Player {
                 who: PlayerId(1),
                 ev: PlayerEvent::Joined,
+            },
+        ),
+        // `Host::connect` logs `Connected` after `Joined`; `Sim::step` sets the roster bit on it
+        // (0024 §8), so it is part of the hash the `.wasm` leg writes.
+        (
+            Tick(1),
+            Record::Player {
+                who: PlayerId(1),
+                ev: PlayerEvent::Connected,
             },
         ),
         (

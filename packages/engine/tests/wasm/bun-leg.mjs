@@ -2,6 +2,7 @@
 // same driver and the same golden as `determinism.test.ts`, under JavaScriptCore. Run by the
 // `script` adapter of `pnpm test wasm`, which reads the one JSON line printed last:
 // `{ tests: [{ name, ok, message? }], ... }`. By hand: `bun packages/engine/tests/wasm/bun-leg.mjs`.
+import { existsSync, readdirSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,7 +19,13 @@ import { worldKeys } from '../../dist/storage/types.js'
 import { createNetHarness, replayLog, replayWorld, worldServerTestHandle } from '../../dist/test.js'
 import { divergenceMessage, firstDivergence, readFullGame } from '../support/reference-golden.ts'
 import { saveToServer, stateBudgetFull } from '../support/reference-single-player.ts'
-import { diffCheckpoints, roleOf, runHashScenario } from '../support/scenario.ts'
+import {
+  diffCheckpoints,
+  REPLAYED_BY_NAME,
+  roleOf,
+  runGoldenScenario,
+  runHashScenario,
+} from '../support/scenario.ts'
 import { adapterLoopback } from './adapter-loopback.mjs'
 
 const NAME = 'determinism: bun matches golden'
@@ -99,6 +106,36 @@ function manualTimer() {
       if (fn) fn()
     },
   }
+}
+
+/** M42b: every fixture's `golden/scenario*.json` against its `golden*.json` under JavaScriptCore,
+ * one result per (fixture, scenario): the discovery of `fixtures.ts`'s `goldenScenarios` (Node's
+ * `determinism.test.ts`), written here on `node:fs` so this leg keeps its `dist/` module graph. */
+async function runScenarioLegs() {
+  const root = new URL('../../fixtures/', import.meta.url)
+  const results = []
+  for (const name of readdirSync(root).sort()) {
+    const dir = new URL(`${name}/golden/`, root)
+    if (!existsSync(dir)) continue
+    const files = readdirSync(dir).filter(
+      (f) => /^scenario(-.*)?\.json$/.test(f) && !REPLAYED_BY_NAME.bun.has(`${name}/${f}`),
+    )
+    if (files.length === 0) continue
+    const { wasm } = await loadGame(new URL(`${name}/target/engine/dev`, root).pathname)
+    for (const file of files.sort()) {
+      const testName = `determinism: bun matches golden ${name}/${file}`
+      try {
+        const scenario = await json(file, dir)
+        const golden = await json(file.replace(/^scenario/, 'golden'), dir)
+        const got = runGoldenScenario(instantiate, wasm, scenario)
+        const message = diffCheckpoints(got, golden.checkpoints)
+        results.push({ name: testName, ok: message === null, message })
+      } catch (e) {
+        results.push({ name: testName, ok: false, message: String(e?.stack ?? e) })
+      }
+    }
+  }
+  return results
 }
 
 /** `fx-puts`'s own idle-100 golden (M13 step 3). M27, Order of work 1 ("Bun: M02's plain script,
@@ -314,6 +351,7 @@ try {
   const reference = await runReferenceGoldenLeg()
   const harnessLegs = await runReferenceHarnessLegs()
   const adapter = await runBunAdapterLeg()
+  const scenarios = await runScenarioLegs()
   result = {
     tests: [
       { name: NAME, ok: message === null, message },
@@ -324,6 +362,7 @@ try {
       reference,
       ...harnessLegs,
       adapter,
+      ...scenarios,
     ],
     checkpoints,
   }

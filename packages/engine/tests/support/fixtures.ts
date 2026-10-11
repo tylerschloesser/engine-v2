@@ -68,3 +68,16 @@ export function fixtureBytes(name: string): Uint8Array<ArrayBuffer> {
 export function readGolden<T>(name: string, file: string): T {
   return JSON.parse(readFileSync(join(root, name, 'golden', file), 'utf8')) as T
 }
+
+/** Every `golden/scenario*.json` of every fixture (`scripts/golden.mjs`'s discovery), as
+ * `{ fixture, scenario, golden }` file names: the cross-runtime golden legs replay them all. */
+export function goldenScenarios(): { fixture: string; scenario: string; golden: string }[] {
+  return fixtureNames().flatMap((fixture) => {
+    const dir = join(root, fixture, 'golden')
+    if (!existsSync(dir)) return []
+    return readdirSync(dir)
+      .filter((f) => /^scenario(-.*)?\.json$/.test(f))
+      .sort()
+      .map((scenario) => ({ fixture, scenario, golden: scenario.replace(/^scenario/, 'golden') }))
+  })
+}

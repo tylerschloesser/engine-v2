@@ -41,10 +41,10 @@ You are the manager session for the belts effort: one long-running Opus or Fable
 
 ## Status
 
-- **Current milestone:** M42b (`docs/plan/42b-transport-core-goldens.md`)
-- **State:** M40, M41, M42 done (2026-10-11). `engine::transport` is in `Store` (B1 runs, `advance`, order, codec, caps, accessors, container version 2); ADR 0079 holds the decisions M42 moved. M42b not started.
-- **Exact next step:** delegate M42b to one `general-purpose` sub-agent (`model: opus`) with the file brief drafted at `scratchpad/m42b-implementer-brief.md` (if the scratchpad is gone, rewrite it from the brief's Read-first list and M42's Deviations: the real `TransportWrite`/`TransportRead` API, the request pattern of `fx-machines`, `pnpm golden belts`); gate, review, commit. Then M43 (its brief already notes `insert_at`/`remove_at` landed in M42).
-- **Blockers:** none. Open with Tyler (batched in the session messages of 2026-10-11, defaults proceeding): the six **(assumed)** rule lines plus the client-side spawner replay (`games/reference/README.md` "Belts"); told this milestone: old saves refuse to load (0079 §6), 7.5 MiB per host world at the default belt caps (0079 §5). CI: the run on `198a221f` (the M41 tree) was green including the slow tier.
+- **Current milestone:** M43 (`docs/plan/43-transport-surgery-and-geometry.md`)
+- **State:** M40, M41, M42, M42b done (2026-10-11). `fx-belts` drives `engine::transport` through requests; four belt goldens hold natively, under Node and under Bun (the `wasm` suite's discovery leg replays every fixture's scenarios). M43 not started; M43 was split (M43 engine, M43b fixture goldens).
+- **Exact next step:** delegate M43 to one `general-purpose` sub-agent (`model: opus`) with the file brief at `scratchpad/m43-implementer-brief.md` (if the scratchpad is gone: rewrite it from the brief's Read-first list, 0079 §8-§11 and M42's Deviations); gate, review, commit; then M43b (fixture ops and goldens), then M44.
+- **Blockers:** none. Open with Tyler (batched in the session messages of 2026-10-11, defaults proceeding): the six **(assumed)** rule lines plus the client-side spawner replay (`games/reference/README.md` "Belts"); told: old saves refuse to load (0079 §6), 7.5 MiB per host world at the default belt caps (0079 §5). CI: read the run of the M42b commit before starting M43b.
 
 ## Exit criteria of the whole effort
 

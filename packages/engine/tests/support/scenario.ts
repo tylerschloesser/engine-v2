@@ -141,9 +141,10 @@ const scriptEncoder = new TextEncoder()
  * that applies it (idle ticks in between are filled with a bare `sim_tick()`), `connect` and every
  * `actions` entry for that tick are queued (`sim_connect`/`sim_admit`) *before* that tick's own
  * `sim_tick()` call, so they land in the same batch a native `Sim::step(batch)` call would apply
- * together -- `Host::connect`'s own extra `Record::Player{Connected}` (beyond `script_a()`'s single
- * `Joined` entry) is a no-op for any `Game::on_player` that only handles `Joined`, so this reaches
- * the identical `state_hash()` regardless. One checkpoint, at `checkpointAt`.
+ * together. `connect` is `Host::connect`'s `Record::Player{Joined}` then `{Connected}`, and the
+ * second one changes `state_hash()` even for a `Game::on_player` that only handles `Joined`:
+ * `Sim::step` sets the player's roster bit on `Connected` (0024 §8), so a native leg replays both
+ * (`fixtures/belts/tests/golden_scenarios.rs`). One checkpoint, at `checkpointAt`.
  */
 export function runScriptScenario(
   sim: EngineInstance,
@@ -234,3 +235,44 @@ export function diffCheckpoints(actual: string[], golden: string[]): string | nu
   }
   return null
 }
+
+/** The checkpoints of any `golden/scenario*.json` (`scripts/golden.mjs`'s own dispatch): a `script`
+ * scenario on a sim instance plus a client-role encoder, every other kind on one instance of its
+ * role. `instantiate` is passed in so each runtime keeps its own module graph (`src/` under Vitest,
+ * `dist/` under Bun). */
+export function runGoldenScenario(
+  instantiate: (
+    wasm: WebAssembly.Module,
+    role: Role,
+    config: InstanceConfig,
+    hooks?: { onLog?: () => void },
+  ) => EngineInstance,
+  wasm: WebAssembly.Module,
+  scenario: HashScenario,
+): string[] {
+  if (scenario.kind === 'script') {
+    const sim = instantiate(wasm, Role.Sim, scenario.config, { onLog() {} })
+    const encoder = instantiate(wasm, Role.Client, scenario.encoderConfig, { onLog() {} })
+    return runScriptScenario(sim, encoder, scenario)
+  }
+  return runHashScenario(
+    instantiate(wasm, roleOf(scenario), scenario.config, { onLog() {} }),
+    scenario,
+  )
+}
+
+/** `<fixture>/<scenario file>` pairs a named test already replays from the `.wasm`, per runtime: the
+ * discovery legs (`determinism.test.ts` under Node, `bun-leg.mjs`'s `runScenarioLegs` under Bun)
+ * skip them, so no golden runs twice. Node: `determinism: node matches golden` (hash),
+ * `worldgen.test.ts`, `puts.test.ts` (idle, connected, script-a). Bun: `bun-leg.mjs`'s hash,
+ * worldgen and puts legs (idle only). A new named replay adds its pair here. */
+export const REPLAYED_BY_NAME = {
+  node: new Set([
+    'hash/scenario.json',
+    'worldgen/scenario.json',
+    'puts/scenario.json',
+    'puts/scenario-connected.json',
+    'puts/scenario-script-a.json',
+  ]),
+  bun: new Set(['hash/scenario.json', 'worldgen/scenario.json', 'puts/scenario.json']),
+} as const

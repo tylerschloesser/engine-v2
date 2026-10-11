@@ -1,0 +1,112 @@
+{
+  "kind": "script",
+  "role": "sim",
+  "config": {
+    "arenaBytes": 100663296,
+    "game": {
+      "seed": "0x4",
+      "params": null,
+      "maxEntities": 4096,
+      "maxModifiedTiles": 4096,
+      "maxActionGrowth": 4096,
+      "maxLines": 64,
+      "maxItems": 4096,
+      "cacheChunks": 1024
+    }
+  },
+  "encoderConfig": {
+    "arenaBytes": 50331648,
+    "game": {
+      "seed": "0x4",
+      "params": null,
+      "genWorkers": 1,
+      "cacheChunks": 1024
+    }
+  },
+  "genesis": true,
+  "checkpointAt": 60,
+  "script": [
+    {
+      "tick": 1,
+      "connect": true,
+      "actions": [
+        {
+          "seq": 1,
+          "action": {
+            "Request": {
+              "Chain": {
+                "from": {
+                  "x": 2,
+                  "y": 0
+                },
+                "dir": "East",
+                "tiles": 2,
+                "speed": 72
+              }
+            }
+          }
+        },
+        {
+          "seq": 2,
+          "action": {
+            "Request": {
+              "Chain": {
+                "from": {
+                  "x": 0,
+                  "y": 0
+                },
+                "dir": "East",
+                "tiles": 2,
+                "speed": 72,
+                "items_at_rest": [[1, 0], [2, 64], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0], [0, 0]]
+              }
+            }
+          }
+        },
+        {
+          "seq": 3,
+          "action": {
+            "Request": {
+              "Sink": {
+                "line": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "tick": 5,
+      "actions": [
+        {
+          "seq": 4,
+          "action": {
+            "Request": {
+              "Link": {
+                "from_line": 1,
+                "to_line": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "tick": 10,
+      "actions": [
+        {
+          "seq": 5,
+          "action": {
+            "Request": {
+              "Spawner": {
+                "line": 1,
+                "item": 3,
+                "period": 256
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

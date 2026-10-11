@@ -53,14 +53,14 @@ Set in `[profile.dev]` of the root `Cargo.toml` next to `debug = "line-tables-on
 [0002](../decisions/0002-determinism-same-wasm-everywhere.md) makes the `.wasm` run under Node authoritative. A scenario is replayed with state hashes compared at several checkpoints (the first divergent tick is reported) in:
 
 - native nextest (`scenario_matches_golden` and the reference `golden_replay`),
-- the `.wasm` under Node and Bun (`wasm` suite, including release builds and, in the slow tier, `feature-matrix`: plain, `wasm-opt`, `+simd128`),
+- the `.wasm` under Node and Bun (`wasm` suite: `determinism.test.ts` and `bun-leg.mjs` replay every fixture's `golden/scenario*.json` against its `golden*.json`, discovered, skipping the pairs a named test already replays (`REPLAYED_BY_NAME` in `tests/support/scenario.ts`); plus release builds and, in the slow tier, `feature-matrix`: plain, `wasm-opt`, `+simd128`),
 - a worker in Chromium, WebKit and Firefox (`determinism.spec.ts`, `@engines`; the fast tier runs only Chromium, the engines leg runs all three; Firefox and WebKit need no GPU for a sim hash).
 
 CI on x86-64 matched the Apple-silicon goldens in every runtime ([0068](../decisions/0068-phase-3-decisions-testing-and-tooling.md) §1). A mismatch is a finding against 0002: report the first divergent checkpoint and write an ADR before touching a golden. `scripts/lib/no-usize.test.mjs` forbids `usize`/`isize` in hashed or serialized state.
 
 ### Goldens
 
-- `pnpm golden [fixture]` is the only writer of `packages/engine/fixtures/<name>/golden/golden.json` (beside a checked-in `scenario.json`). It rebuilds, then writes what the `.wasm` produces under Node. Review the diff: a changed golden is a changed sim; never regenerate to make a red test pass.
+- `pnpm golden [fixture]` is the only writer of `packages/engine/fixtures/<name>/golden/golden*.json` (one per checked-in `scenario*.json`, same suffix). It rebuilds, then writes what the `.wasm` produces under Node. A fixture's native golden test must make the same calls (a `connect` is `Joined` then `Connected`), or it agrees only with itself. Review the diff: a changed golden is a changed sim; never regenerate to make a red test pass.
 - `pnpm golden:bytes [-- filter]` is the only writer of the native byte-format goldens (`crates/engine/tests/golden/*.hex|.hash`, via `GOLDEN_BLESS=1`).
 - `pnpm --filter reference golden:record` regenerates the reference game's full-game golden.
 
