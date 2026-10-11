@@ -37,6 +37,24 @@ A deliberately small game that exercises every engine feature, single-player and
 - Any player can use any furnace. "Take all" moves the ingots out; ore and fuel stay in. Taking is predicted like every other action (Tyler, 2026-10-10, R2).
 - An empty furnace (no ore, fuel, lit fuel or ingots) can be picked up by any player: it despawns and returns to that player's inventory. (Added by Tyler, 2026-09-19, so the game exercises entity removal.)
 
+### Belts
+
+Draft (2026-10-11): Factorio-inspired belts, planned in `PLAN.md` and decided in [0076](../../docs/decisions/0076-transport-lines-engine-game-split.md). Lines marked **(Tyler, 2026-10-11)** are his answers; lines marked **(assumed)** are the planner's simplifications, standing until he gives a dated answer. Units: positions of 1/256 tile; items keep a spacing of 64 positions (4 per tile per lane); the engine ticks at 20 Hz.
+
+- **Feature set (Tyler, 2026-10-11).** Straight belts, curves, side-loading onto a straight belt, undergrounds with one maximum span, splitters that alternate items 50/50 per lane with no priority or filter, spawner and despawner belts, one belt speed. Out: splitter priority and filters, inserters (designed for, not built), belt stacking, blueprints, ghosts beyond the placement ghost, Factorio-exact numbers. Belts do not feed or drain furnaces in this effort.
+- **Numbers (Tyler, 2026-10-11).** One speed, 24 positions per tick (1.875 tiles/s, 7.5 items/s per lane, 15 per belt). A straight belt lane is 256 positions; a curve's inner lane 106 and outer lane 295 (items keep even visual spacing); an underground's visible halves are 128 each and its hidden stretch `(gap + 1) x 256`, pairing over at most 4 empty tiles. The engine carries all of these as parameters.
+- **Lanes (assumed, Factorio's rule).** Two lanes per belt; items keep their lane through straights, curves, undergrounds and splitters. Side-loading puts both lanes of the feeder onto the target's near lane.
+- **Shape (assumed, Factorio's measured rules R1-R7).** A belt with no input or an input from behind is straight; exactly one side input and none from behind makes it a curve toward that side; two side inputs make it straight with both side-loading. The tile in front never affects shape. Head-on belts do not connect; items stop at each belt's front. Underground exits and splitter halves count as inputs. A reshaped belt keeps its items, scaled to the new lane length.
+- **Side-loading (assumed, simplified).** A belt pointing into the side of a straight belt that has another input side-loads onto the near lane at the geometric lane centres: the feeder lane nearer the target's back lands 64 positions from the target's back edge, the other 64 from its front edge. An item transfers when it would cross the feeder's front and there is a free spacing at the landing; otherwise it waits. An entry point that falls inside an underground's hidden half connects to nothing (the lane-filter trick falls out of geometry). Factorio's 68-position offsets, its push-back rule and its same-tick tie are dropped.
+- **Splitters (assumed, simplified).** A 2x1 entity; each lane runs an independent sub-splitter with input halves of 128 and output halves of 128 positions; each input alternates between the two outputs, flipping only when an item is delivered to the preferred side; a blocked side sends the item to the other; both blocked, it waits. Factorio's 51-position buffer, input priority, output priority and filter are dropped. A belt into a splitter's long side connects to nothing.
+- **Undergrounds (assumed, Factorio's rule at one span).** An entrance pairs with the nearest same-facing exit within the span; a closer new end steals the partner; an unpaired entrance backs up at its hood and an unpaired exit accepts nothing from behind. Travel takes the same time as the surface belt it replaces. Rotating an underground rotates that end only (assumed; Factorio flips both).
+- **Spawner and despawner (Tyler, 2026-10-11).** A spawner is a belt that creates a configured item on a configured lane at a configured rate at its back end, waiting while there is no room (an integer accumulator per lane, never a burst). A despawner is a belt that deletes whatever would leave its front. Items are the existing resources and products: coal, iron, wood, stone, ingot, furnace.
+- **Placement (Tyler, 2026-10-11, Q4 default).** Belts, splitters and undergrounds cost nothing and need no unlock; placed from the existing construction mode with a rotate control; spawner and despawner configured from a panel like the furnace's; pick-up returns nothing to the inventory and destroys the items on the tile. Placement asks the tiles (`NOT_BUILDABLE`); belts may not cover resources (assumed; a furnace may).
+- **Art (Tyler, 2026-10-11, Q6 default).** Generated placeholder belt art (direction and lane marks, animated by the global tick) from `scripts/gen-assets.mjs`; items are bordered flat squares, one colour per item kind; no Factorio assets.
+- **Motion on the client (Tyler, 2026-10-11).** The client runs no belt logic: the host forecasts each visible run's motion and corrects it when wrong ([0078](../../docs/decisions/0078-transport-forecast-replication.md)); 60 fps motion follows the forecast.
+- **Scale (Tyler, 2026-10-11).** 50,000 belt tiles and 250,000 items in one world tick in at most 5 ms on desktop; a dense viewport at maximum zoom-out under the frame budgets; belt replication for one subscribed viewport under 16 KB/s with every visible belt saturated.
+- **Phone measurements (Tyler, 2026-10-11, Q5 default).** Taken through `pnpm device:serve` and the bench page, read by hand or by a throwaway script; the deleted phone-round tool is not revived.
+
 ### UI
 
 - Framework-free TypeScript (`src/ui/`); the engine does not care.
@@ -44,7 +62,7 @@ A deliberately small game that exercises every engine feature, single-player and
 
 ### Not implemented
 
-None: every requirement above is met by the code.
+The Belts section: planned (`PLAN.md`), not yet built. Every other requirement above is met by the code.
 
 ### Open questions
 
