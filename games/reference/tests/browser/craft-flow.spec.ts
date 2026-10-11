@@ -35,9 +35,11 @@ test('reference_craft_flow', async ({ page }) => {
   // Craft: the button disables and fills until the authoritative clock reaches `done_at` (`own-timer.ts`).
   await button.click()
   await page.evaluate((dtMs) => window.__stepFrame?.(dtMs), 16)
+  // `Ui.crafting` is predicted (ADR 0073) and shows at the tap; the inventory is the replica's, so the
+  // cost shows once the host has applied the craft. Wait for both.
   const crafting = await pumpUntil(
     page,
-    (ui) => ui?.crafting !== null && ui?.crafting !== undefined,
+    (ui) => ui?.crafting !== null && ui?.crafting !== undefined && ui?.inventory[ITEM.stone] === 0,
   )
   expect(crafting?.inventory[ITEM.stone], 'cost paid at StartCraft').toBe(0)
   await expect(button).toBeDisabled()
