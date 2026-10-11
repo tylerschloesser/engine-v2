@@ -33,7 +33,6 @@ test('reference_craft_flow', async ({ page }) => {
   await expect(button).toBeEnabled()
 
   // Craft: the button disables and fills until the authoritative clock reaches `done_at` (`own-timer.ts`).
-  const clockBefore = await page.evaluate(() => window.__clock?.()) // see collect-flow.spec.ts
   await button.click()
   await page.evaluate((dtMs) => window.__stepFrame?.(dtMs), 16)
   const crafting = await pumpUntil(
@@ -48,11 +47,10 @@ test('reference_craft_flow', async ({ page }) => {
   )
   const clock = await page.evaluate(() => window.__clock?.())
   if (!crafting?.crafting || !clock) throw new Error('missing crafting/clock state')
-  // Bounded as in `collect-flow.spec.ts`: at most `done_at` less the authoritative tick before the
-  // tap, longer than the unstretched `done_at - predicted`.
+  // Bounded as in `collect-flow.spec.ts`: longer than the unstretched `done_at - predicted`, no longer
+  // than the duration plus the largest lead.
   const tickMs = 1000 / clock.ticksPerSecond
-  if (!clockBefore) throw new Error('missing clock state before the tap')
-  const longestMs = (crafting.crafting.done_at - clockBefore.authoritative) * tickMs
+  const longestMs = (CRAFT_TICKS + 40) * tickMs // duration + the largest lead (40 ticks, 0064 §3)
   const unstretchedMs = (crafting.crafting.done_at - clock.predicted) * tickMs
   const durations = await button.evaluate((el) =>
     el

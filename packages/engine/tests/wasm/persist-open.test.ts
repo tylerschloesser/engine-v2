@@ -122,6 +122,36 @@ describe('Persistence.open (fx-persist, real pipeline)', () => {
     expect(sim.readU64Hex(RegionId.Result, 0)).toBe(wantHash)
   })
 
+  /** ADR 0065 §14: a clean load instantiates the module once. The `chunk_bits` probe used to be a
+   * second instance next to the restore's (peak two arenas; 0051's Durable Object no-go). Both a
+   * restore from a snapshot and a genesis replay. Inject-fail-revert: `open` passing `newInstance`
+   * itself to `loadLatest` makes both counts 2. */
+  test('open_instantiates_once_on_a_clean_load', async () => {
+    for (const withSnapshot of [true, false]) {
+      const storage = memoryStorage()
+      const inst = instantiate(await wasm(), Role.Sim, buildSimInstanceConfig(CFG))
+      const persistence = Persistence.create(storage, CFG, inst)
+      const host = createSimHostFromInstance(
+        wrapEngineInstance(inst),
+        { clock: { now: () => 0 }, timer: manualTimer().services },
+        persistence,
+      )
+      expect(inst.call1(inst.x.sim_connect, 0)).toBe(Status.Ok)
+      host.stepTick(1)
+      if (withSnapshot) persistence.snapshotNow()
+      host.stepTick(1)
+      await persistence.flush()
+      const ni = await makeNewInstance()
+      let made = 0
+      const { outcome } = await Persistence.open(storage, CFG, () => {
+        made++
+        return ni()
+      })
+      expect(outcome, `snapshot: ${withSnapshot}`).toBe('loaded')
+      expect(made, `snapshot: ${withSnapshot}: instances`).toBe(1)
+    }
+  })
+
   /** 0009 `WorldConfig.params`: "WORLD PARAMS: read only when storage holds no world, then stored
    * with genesis and fixed for the world's life; a stored world ignores this block". Builds a world
    * under one seed (real `Roll` actions, so the seed genuinely drives state through `SimRng` -- a

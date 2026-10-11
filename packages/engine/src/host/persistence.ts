@@ -420,8 +420,10 @@ export class Persistence {
     // Scope: "Persistence.open compares [chunkBits] with the running build before any load" -- a
     // pure manifest/config comparison, no ABI call and no write, so a mismatch here can never leave
     // storage touched.
+    // The probe is handed to `loadLatest` as its first instance (it has only answered `chunk_bits()`):
+    // a restore instantiates the module once, not twice (ADR 0065 §14, the cause of 0051's no-go).
+    const probe = newInstance()
     {
-      const probe = newInstance()
       const runningChunkBits = probe.call0(probe.x.chunk_bits) || DEFAULT_CHUNK_BITS
       const storedChunkBits = manifest.params.chunkBits ?? DEFAULT_CHUNK_BITS
       if (runningChunkBits !== storedChunkBits) {
@@ -435,7 +437,13 @@ export class Persistence {
       }
     }
 
-    const loaded = await Persistence.loadLatest(storage, keys, manifest, newInstance)
+    let spare: EngineInstance | null = probe
+    const takeInstance = (): EngineInstance => {
+      const inst = spare ?? newInstance()
+      spare = null
+      return inst
+    }
+    const loaded = await Persistence.loadLatest(storage, keys, manifest, takeInstance)
     const healedManifest = loaded.upgrade
       ? loaded.upgrade.manifest
       : await Persistence.healManifest(storage, keys, manifest, loaded)

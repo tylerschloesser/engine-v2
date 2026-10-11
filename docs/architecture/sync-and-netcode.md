@@ -116,7 +116,8 @@ never encode a provisional id, a predicted status is a hint.
   idle world sends a heartbeat only every 500 ms, so the latest frame tick stands still for 10 ticks). Predicted = authoritative + lead.
   `clock/lead.rs` `LeadEstimator`: median of the last 8 ack samples (`ack.tick - auth_now` at dispatch), clamped to 1..=40 ticks, seeded
   `ceil(rtt / tick)` from the `Hello`-`Welcome` RTT, timed from the socket's real `open`. `clock/host_clock.rs` `HostClock` takes the
-  windowed maximum offset over 2 s, slews at 10 %, steps only on `rebase()`. The client worker rewrites the clock block every wake. A
+  windowed maximum offset over 2 s, slews at 10 %, steps only on `rebase()`; while the host stalls (or a test steps it by hand) the
+  estimate keeps running ahead until that window clears. The client worker rewrites the clock block every wake. A
   player's own timer bar runs over `duration + lead`: it ends when the authoritative clock reaches a predicted `done_at`
   ([0064](../decisions/0064-phase-3-decisions-sync-and-netcode.md) §2, [0073](../decisions/0073-own-timer-bars-on-the-host-clock.md)).
 - **Provisional ids.** Real `EntityId`s are allocated only by the host, monotonic, never reused. `Predicting::spawn` returns an id with

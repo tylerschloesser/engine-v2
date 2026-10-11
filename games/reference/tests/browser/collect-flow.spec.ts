@@ -92,9 +92,6 @@ test('reference_collect_flow', async ({ page }) => {
     'anchored y within 1 CSS px of the tile centre',
   ).toBeLessThanOrEqual(1)
 
-  // Read before the tap: the authoritative clock moves with real time, so the bar can be no longer
-  // than `done_at` less this earlier tick (ADR 0073).
-  const clockBefore = await page.evaluate(() => window.__clock?.())
   await clickCollect(page, STONE)
   // `apply` needs a couple of ticks plus a further `stepFrame` for the client's own replica/onUi
   // drain to see `collecting` set (`ui-smoke.spec.ts`'s own precedent, same reasoning) -- polled,
@@ -124,12 +121,12 @@ test('reference_collect_flow', async ({ page }) => {
   // The own-timer formula (`src/ui/own-timer.ts`, 0064 §2: the bar ends when the authoritative clock
   // reaches `done_at`, i.e. `duration + lead` from the tap) -- read back from the real CSS animation
   // `collect.ts` started, not merely asserted in the abstract.
-  // The clock follows wall time between the tap, the bar's start and this read, so the bar is bounded,
-  // not pinned: at most `done_at` less the authoritative tick before the tap, and longer than
-  // `done_at - predicted` read after it (the unstretched bar, `lead` >= 1 tick shorter).
+  // Bounded, not pinned: the authoritative clock is a wall-time estimate (ADR 0073), and on this stepped
+  // page the host ticks only when the test says so. The bar is longer than `done_at - predicted` read
+  // after it (the unstretched bar, `lead` >= 1 tick shorter) and no longer than the duration plus the
+  // largest lead.
   const tickMs = 1000 / clock.ticksPerSecond
-  if (!clockBefore) throw new Error('missing clock state before the tap')
-  const longestMs = (collecting.done_at - clockBefore.authoritative) * tickMs
+  const longestMs = (COLLECT_TICKS + 40) * tickMs // duration + the largest lead (40 ticks, 0064 §3)
   const unstretchedMs = (collecting.done_at - clock.predicted) * tickMs
   // The animation targets `.collect-fill`, a child `<span>` of the button (`collect.ts`'s own CSS:
   // `.collect-button.is-filling .collect-fill`), not the button element itself -- `{ subtree: true }`

@@ -56,7 +56,7 @@ ADR Sources sections link into `docs/research/`, `spikes/`, `docs/spec/` and `do
 | [0048](0048-fast-tier-budgets-dev-loop-and-wire-measurements.md) | Fast-tier budgets, dev loop and wire measurements | Fast-tier budgets and the dev loop are set from measurements, with `split-debuginfo = "packed"`. | |
 | [0049](0049-compile-budget-45s.md) | The incremental-rebuild budget is 45 s | The incremental-rebuild budget is 45 seconds. | 0068 |
 | [0050](0050-engine-failure-surface.md) | Engine failure surface | Engine failures surface as typed events, and a Rust edit snapshots, reloads and restores the world. | |
-| [0051](0051-durable-objects-no-go.md) | Durable Objects: no-go | Durable Objects are not a hosting target. | |
+| [0051](0051-durable-objects-no-go.md) | Durable Objects: no-go | Durable Objects are not a hosting target. | 0074 |
 | [0052](0052-zero-gc-warmup-4000-frames.md) | Zero-GC warm-up is 4000 frames in 8 passes | Zero-GC warm-up runs 4000 frames in 8 passes. | |
 | [0053](0053-connection-slots-and-full-admission.md) | Sixteen connection slots; `Full` counts attached players | The host has sixteen connection slots, and `Full` counts only attached players. | |
 | [0054](0054-tools-suite.md) | A `tools` suite for the device-walk tool's tests | The device-walk tool's tests get their own `tools` suite. | 0070 |
@@ -70,7 +70,7 @@ ADR Sources sections link into `docs/research/`, `spikes/`, `docs/spec/` and `do
 | [0062](0062-budgets-as-measured-at-phase-3-exit.md) | Budgets as measured at Phase 3 exit | The permanent record of the performance budgets and what Phase 3 measured against them. | |
 | [0063](0063-phase-3-decisions-world-and-simulation.md) | Phase 3 decisions: world and simulation | Records world and simulation decisions made in Phase 3 that no earlier ADR held. | |
 | [0064](0064-phase-3-decisions-sync-and-netcode.md) | Phase 3 decisions: sync, prediction and netcode | Records sync, prediction and netcode decisions made in Phase 3 that no earlier ADR held. | 0073 |
-| [0065](0065-phase-3-decisions-persistence.md) | Phase 3 decisions: persistence and recovery | Records persistence and recovery decisions made in Phase 3 that no earlier ADR held. | |
+| [0065](0065-phase-3-decisions-persistence.md) | Phase 3 decisions: persistence and recovery | Records persistence and recovery decisions made in Phase 3 that no earlier ADR held. | 0074 |
 | [0066](0066-phase-3-decisions-client-renderer-input.md) | Phase 3 decisions: client, renderer and input | Records client, renderer and input decisions made in Phase 3 that no earlier ADR held. | |
 | [0067](0067-phase-3-decisions-runtime-packaging-hosting.md) | Phase 3 decisions: runtime, packaging and hosting | Records runtime, packaging and hosting decisions made in Phase 3 that no earlier ADR held. | 0072 |
 | [0068](0068-phase-3-decisions-testing-and-tooling.md) | Phase 3 decisions: testing, CI and tooling | Records testing, CI and tooling decisions made in Phase 3 that no earlier ADR held. | 0071 |
@@ -79,3 +79,4 @@ ADR Sources sections link into `docs/research/`, `spikes/`, `docs/spec/` and `do
 | [0071](0071-gc-burst-controls-one-ci-worker.md) | Gc burst controls on CI run on one worker | CI runs the `gc` and `gc-reference` projects with one worker each; `gcTimeoutMs` stays 90 s. | |
 | [0072](0072-static-host-verified-build-time-server-url.md) | Static host verified on Cloudflare Pages; the server URL is set at build time | The release page's server is `VITE_SERVER_URL` at build time; `_headers` and `404.html` ship in every build; Pages passes `check-coi.mjs` and reaches `online` cross-origin. | |
 | [0073](0073-own-timer-bars-on-the-host-clock.md) | Own-timer bars end when the result can arrive | Own timers in the reference `Ui` are predicted; a bar runs until the host-clock authoritative tick reaches `done_at`; `auth_now` feeds the clocks and the lead sample; link up on socket `open`; seed `ceil(rtt / tick)`. | |
+| [0074](0074-persistence-open-instantiates-once.md) | `Persistence.open` instantiates the module once on a clean load | The `chunk_bits` probe is reused as `loadLatest`'s first instance; a restore no longer peaks at two arenas. | |

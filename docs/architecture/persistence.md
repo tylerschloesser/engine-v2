@@ -74,7 +74,7 @@ Two Web Locks (`world-lock.ts`, [0050](../decisions/0050-engine-failure-surface.
 
 ## Gotchas
 
-- Instantiate cost on restore: `Persistence.open` creates a probe instance for the `chunk_bits` check and `loadLatest` creates a second for the restore, neither released before the first GC. Peak is two arenas. It is the cause of the Durable Object no-go and a startup memory spike on tight hosts; diagnosis and fix owed ([0065](../decisions/0065-phase-3-decisions-persistence.md) §14).
+- Instantiate cost on restore: one instance on a clean load. `Persistence.open`'s `chunk_bits` probe becomes `loadLatest`'s first instance ([0074](../decisions/0074-persistence-open-instantiates-once.md); before it, two arenas at peak, the cause of the Durable Object no-go, [0065](../decisions/0065-phase-3-decisions-persistence.md) §14). A recovery takes a fresh instance per rejected snapshot candidate.
 - No byte golden pins a log that crosses two segments; the tick-reference reset in `sim_segment_header` is required but untestable by hash (§12).
 - Presence is not logged or replayable; nothing is reserved for it (§13).
 - Untrusted stored bytes go through `decode_canonical` (`persist::read_sized`), never `decode`. Never iterate an unordered container in a writer ([determinism](../../.claude/rules/determinism.md)). `appendFrame`, `afterTick` and OPFS `append` are tick path: [hot-paths](../../.claude/rules/hot-paths.md).
