@@ -12,7 +12,6 @@ Work every item below; Tyler's answers are recorded on each. Record technical ch
 
 ## Tyler's items (answered 2026-10-10)
 
-- **Desktop criteria:** M16's ten-press Paint HUD in desktop Chrome (`slice.html`); M34's two windows on the invite link plus "Slow 4G" own bars. Automate in Playwright before asking him to look.
 - **Android** is not run anywhere since late Phase 3. The Pixel 5 is on USB (`adb devices`); drive it from the Mac (Chrome over `adb` / CDP), never ask Tyler to tap.
 
 ## Technical (yours)

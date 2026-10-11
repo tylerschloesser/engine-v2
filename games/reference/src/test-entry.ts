@@ -165,7 +165,12 @@ declare global {
     __statusRendererLost?: (reason: 'no-adapter' | 'repeated-loss') => void
     __showStartFailure?: (code: string) => boolean
     __startFailureOps?: () => { exports: number; deletes: number }
-    __clock?: () => { authoritative: number; predicted: number; ticksPerSecond: number }
+    __clock?: () => {
+      authoritative: number
+      predicted: number
+      ticksPerSecond: number
+      tickFraction: number
+    }
   }
 }
 
@@ -497,6 +502,7 @@ window.__clock = () => {
     authoritative: c.authoritative,
     predicted: c.predicted,
     ticksPerSecond: c.ticksPerSecond,
+    tickFraction: c.tickFraction,
   }
 }
 

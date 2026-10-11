@@ -899,13 +899,15 @@ where
                 // feeds `HostClock` from this wake's own real local wall time, `camera.
                 // frame_time_ms`) -- read before `core.view()`'s own immutable borrow below, which
                 // every field of `clocks` after this point is built from instead.
+                let tick_fraction = core.tick_fraction(camera.frame_time_ms);
+                // After `tick_fraction`: both read `auth_now`, which it just advanced (ADR 0073).
+                let authoritative = core.auth_now().0;
                 let predicted = core.predicted_tick();
                 let lead = core.lead();
-                let tick_fraction = core.tick_fraction(camera.frame_time_ms);
                 let correction = core.own_correction();
                 let replica = core.view();
                 let clocks = Clocks {
-                    authoritative: replica.tick(),
+                    authoritative,
                     predicted,
                     tick_fraction,
                     ticks_per_second: G::TICK_RATE.hz_value(),
@@ -1154,13 +1156,14 @@ where
                         // borrow. No `CameraBlock` here (`Instance::on_frame`'s own signature is
                         // `bytes` only), so `tick_fraction` reuses `camera_view.time_ms`, the same
                         // one-wake-stale reuse `FrameView`'s own fields below already rely on.
+                        let tick_fraction = core.tick_fraction(camera_view.time_ms);
+                        let authoritative = core.auth_now().0;
                         let predicted = core.predicted_tick();
                         let lead = core.lead();
-                        let tick_fraction = core.tick_fraction(camera_view.time_ms);
                         let correction = core.own_correction();
                         let replica = core.view();
                         let clocks = Clocks {
-                            authoritative: replica.tick(),
+                            authoritative,
                             predicted,
                             tick_fraction,
                             ticks_per_second: G::TICK_RATE.hz_value(),
@@ -1597,11 +1600,12 @@ where
     /// bytes, same call signature (`params: 0`) -- a fifth LE `u32`, `ClientCore::revealed
     /// (camera_view.visible)` as `0`/`1` (`revealed`'s own doc comment: steps 3-5 consume it, this
     /// milestone only lands the field). An old caller reading only the first 16 bytes is
-    /// unaffected; there is no old caller in this monorepo (TS and WASM ship together).
+    /// unaffected; there is no old caller in this monorepo (TS and WASM ship together). ADR 0073
+    /// (`ABI_VERSION` 39 -> 40): widened to 24 bytes, a sixth LE `u32`, `ClientCore::auth_now`'s tick.
     fn client_clock_stats(&mut self, result: &mut [u8]) -> Status {
         match self {
             GameInstance::Client(c) => {
-                let Some(out) = result.get_mut(..20) else {
+                let Some(out) = result.get_mut(..24) else {
                     return Status::BadLength;
                 };
                 let s = c.core.last_summary();
@@ -1611,6 +1615,10 @@ where
                 out[12..16].copy_from_slice(&c.core.last_tick_fraction().to_le_bytes());
                 let revealed = c.core.revealed(c.camera_view.visible);
                 out[16..20].copy_from_slice(&(revealed as u32).to_le_bytes());
+                // ADR 0073 (`ABI_VERSION` 39 -> 40): `auth_now`'s tick, the clock block's
+                // `authoritative_tick` (paired with the fraction at 12); the last frame's tick at 0
+                // stands still between an idle world's heartbeats.
+                out[20..24].copy_from_slice(&c.core.auth_now().0.0.to_le_bytes());
                 Status::Ok
             }
             _ => Status::Unsupported,
@@ -2133,9 +2141,8 @@ mod tests {
     #[test]
     fn client_clock_stats_reports_last_applied_tick_and_ack_seq() {
         let mut inst = client_instance();
-        // M28: widened to 20 bytes (a fifth LE `u32`,
-        // `revealed`).
-        let mut out = [0u8; 20];
+        // M28: widened to 20 bytes (a fifth LE `u32`, `revealed`); ADR 0073: 24 (a sixth, `auth_now`).
+        let mut out = [0u8; 24];
         assert_eq!(inst.client_clock_stats(&mut out), Status::Ok);
         assert_eq!(u32::from_le_bytes(out[0..4].try_into().unwrap()), 0);
         assert_eq!(u32::from_le_bytes(out[4..8].try_into().unwrap()), 0);
@@ -2148,6 +2155,9 @@ mod tests {
         // A fresh instance holds no chunks at all, so its default (single-point, origin) visible
         // rectangle is never revealed.
         assert_eq!(u32::from_le_bytes(out[16..20].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(out[20..24].try_into().unwrap()), 0);
+        let mut short = [0u8; 20];
+        assert_eq!(inst.client_clock_stats(&mut short), Status::BadLength);
 
         let mut buf = [0u8; 512];
         let mut sink = crate::bytes::SliceSink::new(&mut buf);
@@ -2170,6 +2180,8 @@ mod tests {
         // No pending action was ever dispatched, so no ack sample ever fed `LeadEstimator`: lead
         // is still the default 1, predicted = authoritative(7) + lead(1) = 8.
         assert_eq!(u32::from_le_bytes(out[8..12].try_into().unwrap()), 8);
+        // `auth_now` with no `frame` call yet: the replica's own tick (the host clock has no sample).
+        assert_eq!(u32::from_le_bytes(out[20..24].try_into().unwrap()), 7);
     }
 
     /// `Rejected` outcome, byte for byte -- `[kind u8 = 2][len u32 LE][JSON]`.

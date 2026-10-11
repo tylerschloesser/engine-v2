@@ -1,7 +1,9 @@
 //! [`LeadEstimator`] (M26 Planning decisions "Lead
 //! estimation"): "Sample per ack = `ack.tick − auth_tick_at_dispatch`: pure tick arithmetic, no
 //! wall clock. Lead = median of the last 8 samples, clamped to 1..=40 ticks. Before the first
-//! sample: 1, or `ceil(rtt / tick) + 1` once seeded." Drives `ClientCore::set_lead` (Seams).
+//! sample: 1, or `ceil(rtt / tick) + 1` once seeded." Drives `ClientCore::set_lead` (Seams). ADR 0073
+//! drops the `+ 1`: with the RTT measured from the socket's real `open`, `ceil(rtt / tick)` is what the
+//! samples converge to (a 620 ms round trip: 13), and the `+ 1` made the first bar run a tick long.
 //!
 //! Allocation: [`Self::samples`] is a fixed `[i64; HISTORY]` ring, never a `Vec` -- `on_ack_sample`
 //! runs from inside `ClientCore::on_frame`'s own ack-pop loop (`client::core`, under
@@ -22,7 +24,8 @@ pub struct LeadEstimator {
     count: usize,
     next: usize,
     /// Set once by [`Self::seed_rtt_ms`]; used only before the first real ack sample (Planning
-    /// decisions: "Before the first sample: 1, or `ceil(rtt / tick) + 1` once seeded").
+    /// decisions: "Before the first sample: 1, or `ceil(rtt / tick) + 1` once seeded"; ADR 0073:
+    /// `ceil(rtt / tick)`).
     seeded_lead: Option<i64>,
 }
 
@@ -40,7 +43,7 @@ impl LeadEstimator {
     /// The `Hello`→`Welcome` RTT seed (M28/M29's own call into this, Seams): only takes effect
     /// while [`Self::count`] is still `0` -- a real ack sample always wins once one exists.
     pub fn seed_rtt_ms(&mut self, rtt_ms: f64) {
-        let lead = (rtt_ms / self.tick_ms).ceil() as i64 + 1;
+        let lead = (rtt_ms / self.tick_ms).ceil() as i64;
         self.seeded_lead = Some(lead.clamp(LEAD_MIN, LEAD_MAX));
     }
 
@@ -58,7 +61,7 @@ impl LeadEstimator {
     }
 
     /// Median of the last (up to 8) samples, clamped to `1..=40` (module doc comment). `1` (never
-    /// seeded) or `ceil(rtt / tick) + 1` (seeded) before the first real sample.
+    /// seeded) or `ceil(rtt / tick)` (seeded, ADR 0073) before the first real sample.
     pub fn lead(&self) -> Ticks {
         if self.count == 0 {
             return Ticks(self.seeded_lead.unwrap_or(LEAD_MIN) as u32);
@@ -122,17 +125,17 @@ mod tests {
         assert_eq!(e.lead(), Ticks(4), "the 10s must have been fully evicted");
     }
 
-    /// Before any sample: `1` unseeded, `ceil(rtt / tick) + 1` seeded (Planning decisions,
-    /// verbatim). At 20 Hz (`tick_ms = 50`), an RTT of 120 ms is `ceil(120/50) = 3`, `+1 = 4`.
-    ///
-    /// Inject-fail-revert: dropping the `+ 1` makes the seeded assertion read `3`, not `4`;
-    /// reverted before commit.
+    /// Before any sample: `1` unseeded, `ceil(rtt / tick)` seeded (ADR 0073; Planning decisions had
+    /// `+ 1`). At 20 Hz (`tick_ms = 50`), an RTT of 120 ms is `ceil(120/50) = 3`; a 10 ms one clamps
+    /// up to `1`.
     #[test]
     fn lead_seed_from_rtt() {
         let mut e = LeadEstimator::new(TickRate::HZ_20);
         assert_eq!(e.lead(), Ticks(1), "unseeded, no sample yet");
+        e.seed_rtt_ms(10.0);
+        assert_eq!(e.lead(), Ticks(1), "ceil(10/50) = 1");
         e.seed_rtt_ms(120.0);
-        assert_eq!(e.lead(), Ticks(4), "ceil(120/50) + 1 = 4");
+        assert_eq!(e.lead(), Ticks(3), "ceil(120/50) = 3");
 
         // A real sample always wins over the seed, even a single one.
         e.on_ack_sample(Tick(0), Tick(9));

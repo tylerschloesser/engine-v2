@@ -591,8 +591,8 @@ impl ClientSide<RefGame> for RefClient {
     }
 
     /// `Ui { me, inventory, collecting, in_range, spawn }` (Scope; module doc comment "M20b step
-    /// 3", spawn added step 5): `me`/`inventory`/`collecting` read straight off
-    /// `view.world().player(view.me())`; `in_range` from a bounding-box scan around the spring
+    /// 3", spawn added step 5): `me`/`inventory` read straight off `view.world().player(view.me())`,
+    /// `collecting`/`crafting` off `view.predicted_player` (own timers, 0064 §2); `in_range` from a bounding-box scan around the spring
     /// position, diffed against [`Self::tracked_range`] so each entry's own `from` only changes
     /// when that tile's own membership does; `spawn` is copied from [`Self::spawn`] unchanged (never
     /// recomputed here). `out` is cleared and refilled, never grown past `Ui::default`'s own
@@ -609,7 +609,12 @@ impl ClientSide<RefGame> for RefClient {
         out.can_build = false;
         if let Ok(player) = world.player(view.me()) {
             out.inventory = player.inventory;
-            out.collecting = player.collecting.map(|c| UiCollecting {
+            // The own timers (`collecting`, `crafting`) come from the predicted player, so a collect or
+            // craft the player just started shows at once, its `done_at` on the predicted clock; the
+            // page's bar then runs over `duration + lead` from the tap (`src/ui/own-timer.ts`, 0064 §2).
+            // Everything else stays the replica's: a predicted status is a hint until the host acks it.
+            let own = view.predicted_player(view.me()).unwrap_or(player);
+            out.collecting = own.collecting.map(|c| UiCollecting {
                 tile: c.tile,
                 done_at: c.done_at.0,
             });
@@ -619,7 +624,7 @@ impl ClientSide<RefGame> for RefClient {
             if !out.can_build {
                 self.placing.set(false);
             }
-            out.crafting = player.crafting.map(|c| UiCrafting {
+            out.crafting = own.crafting.map(|c| UiCrafting {
                 recipe: c.recipe,
                 done_at: c.done_at.0,
             });

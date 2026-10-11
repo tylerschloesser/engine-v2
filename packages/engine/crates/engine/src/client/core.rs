@@ -370,7 +370,7 @@ impl<G: Game> ClientCore<G> {
         // `seq`, and sent" -- the sending half is the outbox above (unchanged, M16); this predicts
         // it once against the current overlay and remembers the frozen predicted tick.
         let predicted_tick = self.predicted_tick();
-        let auth_tick_at_dispatch = self.replica.tick();
+        let auth_tick_at_dispatch = self.auth_now().0;
         let who = self.replica.own_player();
         // Taint rule R1 (M25; the replay loop in `on_frame` applies the
         // same rule): while any pending action is `NotPredictable`, every later one is too, and it is
@@ -575,9 +575,20 @@ impl<G: Game> ClientCore<G> {
     }
 
     /// The clock a player's own predicted timers are written and rendered in (0012 "Two clocks":
-    /// "Predicted = authoritative + lead").
+    /// "Predicted = authoritative + lead"), on [`Self::auth_now`]'s authoritative tick.
     pub fn predicted_tick(&self) -> Tick {
-        self.replica.tick() + self.lead
+        self.auth_now().0 + self.lead
+    }
+
+    /// The authoritative clock now, whole tick and fraction (ADR 0073): `HostClock`'s estimate of the
+    /// host tick as of the last [`Self::tick_fraction`], never behind the replica's own tick. The
+    /// replica's tick moves only when a frame lands, and an idle world sends one only every 500 ms
+    /// (0010): read alone, it stood still for up to 10 ticks, so a lead sample taken against it came
+    /// out up to 10 ticks long and an own bar timed from it ran that much past its result.
+    pub fn auth_now(&self) -> (Tick, f32) {
+        let pos = self.host_now.max(self.replica.tick().0 as f64);
+        let whole = pos.floor();
+        (Tick(whole as u32), (pos - whole) as f32)
     }
 
     /// M26: this client's own wall-clock estimate of progress into the *current* tick (`Clocks::
@@ -598,9 +609,11 @@ impl<G: Game> ClientCore<G> {
             self.rebase_pending = false;
             self.host_clock.rebase();
         }
-        let f = self.host_clock.now(local_ms).1;
-        self.last_tick_fraction = f;
         self.step_interp(local_ms);
+        // The fraction of [`Self::auth_now`]'s tick (`step_interp` just set `host_now` at `local_ms`):
+        // `0` while the replica's own tick is ahead of the estimate.
+        let f = self.auth_now().1;
+        self.last_tick_fraction = f;
         f
     }
 
@@ -1725,5 +1738,39 @@ mod tests {
         // first one now is.
         let two_chunks = TileRect::new(TilePos::new(0, 0), TilePos::new(1000, 0));
         assert!(!c.revealed(two_chunks));
+    }
+
+    /// ADR 0073: between frames (an idle world sends a heartbeat only every 500 ms, 0010) the
+    /// replica's tick stands still, `auth_now` does not, and the predicted tick and the lead sample's
+    /// dispatch tick are built on `auth_now`. Inject-fail-revert: `auth_now` returning the replica's
+    /// tick alone fails the `106` assertion with `100`.
+    #[test]
+    fn auth_now_advances_between_heartbeats() {
+        let mut c = client();
+        let mut buf = [0u8; 128];
+        let mut sink = SliceSink::new(&mut buf);
+        let mut fw = FrameWriter::new(
+            &mut sink,
+            FrameHeader {
+                tick: 100,
+                ack_seq: 0,
+            },
+        );
+        fw.section(SectionId::ActionResults, |s| {
+            ActionResultsWriter::write::<CGame>(s, [].iter());
+        });
+        let n = sink.finish().unwrap();
+        c.on_frame(&buf[..n]).unwrap();
+        c.tick_fraction(1000.0); // the frame lands at 1000 ms
+        assert_eq!(c.auth_now().0, Tick(100));
+        // 300 ms (six 50 ms ticks) on, no frame since.
+        c.tick_fraction(1300.0);
+        assert_eq!(
+            c.last_summary().tick,
+            Tick(100),
+            "the replica has not moved"
+        );
+        assert_eq!(c.auth_now().0, Tick(106), "the authoritative clock has");
+        assert_eq!(c.predicted_tick(), Tick(106) + c.lead());
     }
 }

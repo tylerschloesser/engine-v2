@@ -151,7 +151,7 @@ test('dispatch_returns_monotonic_seq_from_seed', async () => {
     sessionState: SessionState.Online,
     seqSeed: 5,
     ackSeq: 5,
-    tickFraction: 0,
+    tickFractionBits: 0,
     revealed: 0,
   })
   await client.ready
@@ -173,7 +173,7 @@ test('dispatch_when_queue_full_fails_locally', async () => {
     sessionState: SessionState.Online,
     seqSeed: 0,
     ackSeq: 0,
-    tickFraction: 0,
+    tickFractionBits: 0,
     revealed: 0,
   })
   await client.ready
@@ -199,7 +199,7 @@ test('dispatch_when_queue_full_fails_locally', async () => {
     sessionState: SessionState.Online,
     seqSeed: 0,
     ackSeq: 1,
-    tickFraction: 0,
+    tickFractionBits: 0,
     revealed: 0,
   })
   expect(client.dispatch({ Paint: {} })).toBe(33)
@@ -361,7 +361,7 @@ test('clock_returns_same_object', async () => {
     sessionState: SessionState.Online,
     seqSeed: 0,
     ackSeq: 0,
-    tickFraction: 0,
+    tickFractionBits: 0,
     revealed: 0,
   })
   await client.ready
@@ -379,7 +379,7 @@ test('clock_returns_same_object', async () => {
     sessionState: SessionState.Online,
     seqSeed: 0,
     ackSeq: 0,
-    tickFraction: 0,
+    tickFractionBits: 0,
     revealed: 0,
   })
   const c = client.clock()

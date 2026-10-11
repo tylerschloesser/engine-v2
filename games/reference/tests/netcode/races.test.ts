@@ -143,9 +143,15 @@ test.each(LATENCIES.flatMap((l) => ([0, 1] as const).map((w) => [l, w] as const)
           `${tag}: the last unit is there`,
         ).toContainEqual(tile)
 
-        // Nothing for the loser's `Ui` to show but its own inventory and timer: never the unit.
+        // Nothing for the loser's `Ui` to show but its own inventory and its own predicted timer, the
+        // latter only until the host's verdict (own timers are predicted, 0064 §2): never the unit.
+        const seen = recordResults(r, second)
+        const firstSeen = recordResults(r, first)
         const invariant = (who: 0 | 1) => (ui: Ui) => {
-          if (who === second && (ui.inventory[STONE] !== 0 || ui.collecting !== null)) {
+          if (
+            who === second &&
+            (ui.inventory[STONE] !== 0 || (ui.collecting !== null && seen.length > 0))
+          ) {
             throw new Error(
               `${tag}: the loser's Ui shows ${JSON.stringify(ui.collecting)} / ${ui.inventory}`,
             )
@@ -155,14 +161,14 @@ test.each(LATENCIES.flatMap((l) => ([0, 1] as const).map((w) => [l, w] as const)
           }
         }
         const probes = [0, 1].map((i) => tornStateProbe(h.clients[i]!, invariant(i as 0 | 1)))
-        const seen = recordResults(r, second)
-        // The winner starts; once its timer shows, the loser dispatches on the tick before the
-        // host finishes it: the loser's replica still has the unit, the host will not.
+        // The winner starts; once the host confirms it (so `done_at` is the host's own), the loser
+        // dispatches on the tick before the host finishes it: the loser's replica still has the
+        // unit, the host will not.
         const w = startCollect(r, first, tile)
         let done = -1
         for (let i = 0; i < 60 && done < 0; i++) {
           await advanceProbed(h, probes, 1)
-          done = uiOf(h, first).collecting?.done_at ?? -1
+          if (firstSeen.includes('Confirmed')) done = uiOf(h, first).collecting?.done_at ?? -1
         }
         expect(done, `${tag}: the winner's collect began`).toBeGreaterThan(0)
         while (h.hostTick() < done - 1) await advanceProbed(h, probes, 1)

@@ -93,6 +93,8 @@ export interface ViewReport {
 
 export interface HeadlessClientStatus {
   live: boolean
+  /** The last frame's own host tick (ADR 0073: not the authoritative clock, which advances between
+   * frames). */
   tick: number
   predictedTick: number
   ackSeq: number
@@ -681,9 +683,16 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     },
     status() {
       readClock()
+      // `tick` is the last frame's own tick (`client_clock_stats` offset 0): what a test means by "it
+      // still hears frames". The clock block's authoritative tick is `auth_now`'s and advances between
+      // frames (ADR 0073).
+      const frameTick =
+        inst.call0(inst.x.client_clock_stats) === Status.Ok
+          ? readU32LE(resultRegion.u8, 0)
+          : (clockScratch[CLOCK_FIELD.AuthoritativeTick] as number)
       return {
         live: clockScratch[CLOCK_FIELD.SessionState] === SessionState.Online,
-        tick: clockScratch[CLOCK_FIELD.AuthoritativeTick] as number,
+        tick: frameTick,
         predictedTick: clockScratch[CLOCK_FIELD.PredictedTick] as number,
         ackSeq: clockScratch[CLOCK_FIELD.AckSeq] as number,
         ownPlayerId,

@@ -24,7 +24,7 @@ test('clock_block: write then read round-trips every field', () => {
     sessionState: 1,
     seqSeed: 3,
     ackSeq: 3,
-    tickFraction: 0.25,
+    tickFractionBits: new Uint32Array(new Float32Array([0.25]).buffer)[0] as number,
     revealed: 0,
   })
   const out = new Uint32Array(8)
@@ -61,7 +61,7 @@ test('clock_block: a read that never sees an even seq word exhausts its retries 
     sessionState: 1,
     seqSeed: 0,
     ackSeq: 0,
-    tickFraction: 0,
+    tickFractionBits: 0,
     revealed: 0,
   })
   // Force the seq word odd, simulating a writer paused between its own `begin`/`end` (a real
@@ -84,7 +84,7 @@ test('clock_block: a second write is what a second read sees', () => {
     sessionState: 0,
     seqSeed: 0,
     ackSeq: 0,
-    tickFraction: 0,
+    tickFractionBits: 0,
     revealed: 0,
   })
   writeClockBlock(writer, {
@@ -94,7 +94,7 @@ test('clock_block: a second write is what a second read sees', () => {
     sessionState: 1,
     seqSeed: 5,
     ackSeq: 8,
-    tickFraction: 0,
+    tickFractionBits: 0,
     revealed: 0,
   })
   const out = new Uint32Array(8)

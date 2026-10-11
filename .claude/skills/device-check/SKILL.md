@@ -76,7 +76,7 @@ First time engine code runs on the phone; do the M03, M08 and M09b sections in t
 
 ## M16: Vertical slice on the phone
 
-First on-device run of the slice. Last results: iPhone coexist and round-trip pass 2026-10-08, background pass 2026-10-10, low-power pass 2026-10-07.
+First on-device run of the slice. Last results: iPhone coexist and round-trip pass 2026-10-08, background pass 2026-10-10, low-power pass 2026-10-07. Desktop Chrome 154 (the Phase 3 desktop criterion: ten presses of `slice.html`'s Paint control) pass 2026-10-10, driven by Playwright with real clicks on `pnpm device:serve`: `confirmed 10`, `rejected 0`, `ring drops 0`, `engine_mem_grows` 0 on every instance, `tick` advancing, each result 28-67 ms after its click.
 
 **Open:** `slice.html` (single-player: main + client + sim + gen, fixture `puts`; HUD fields `confirmed`, `rejected`, `ring drops`, `engine_mem_grows`, `tick`); `determinism.html` for the first item.
 
@@ -135,7 +135,7 @@ Closes the iOS worker-socket resume item (ADR 0013 Consequences); it tunes only 
 
 ## M34: Reference multiplayer on real devices
 
-Holds the own-timer feel and remote motion items. Last results: iPhone two-devices pass 2026-10-07, remote-motion pass 2026-10-08 (driverless), own-timer-bar pass 2026-10-10.
+Holds the own-timer feel and remote motion items. Last results: iPhone two-devices pass 2026-10-07, remote-motion pass 2026-10-08 (driverless), own-timer-bar pass 2026-10-10 (judged by eye). Desktop Chrome 154, two windows on the invite link (`pnpm device:serve --app reference --bench --ws`, the check build's `__check`), pass 2026-10-10 after the fixes of ADR 0073: remote motion changed on 0.998 of moving frames, never still over 8 ms, no backstep, no snap, gone 63 ms after its window closed; own bars full within -16..+25 ms of the result unthrottled and 9-83 ms under "Slow 4G" from page load (ten collects and a craft). DevTools throttling does not reach a WebSocket: "Slow 4G" was a TCP proxy delaying each direction 281 ms. Before ADR 0073 the bars were full 250-350 ms early and the timing that the iPhone pass judged by eye could not have shown it. Walk the remote within the watcher's subscription: a remote that leaves it holds, then jumps when it returns.
 
 **Open:** on the Mac `pnpm device:serve --tunnel --app reference --ws`; the reference game on the phone on the printed URL, joined through the invite link (the URL **with its `#k=` fragment**; without it the page is a local single-player world); the same world in desktop Chrome on the Mac.
 

@@ -17,13 +17,7 @@
 // frame at `tick == 0, ack_seq == 0`) -- so `session_state`/`seq_seed` bookkeeping lives here, not
 // in a separate always-on pump.
 import { Status } from '../abi.js'
-import {
-  ClockBlockView,
-  type ClockFields,
-  F32Reader,
-  SessionState,
-  writeClockBlock,
-} from '../clock-block.js'
+import { ClockBlockView, type ClockFields, SessionState, writeClockBlock } from '../clock-block.js'
 import { type DesyncReport, readDesyncCounts, readDesyncReport } from '../desync.js'
 import type { EngineInstance, RegionView } from '../loader.js'
 import { readU32LE } from '../sab/bytes.js'
@@ -162,7 +156,6 @@ export function createNetPump(
     index: WORKER_HOST,
   })
   const clockView = new ClockBlockView(clockBlockSab)
-  const tickFractionReader = new F32Reader()
   // Preallocated once (`.claude/rules/hot-paths.md`): mutated in place on every clock-block write
   // instead of a fresh object literal per wake.
   const clockFields: ClockFields = {
@@ -172,7 +165,7 @@ export function createNetPump(
     sessionState: SessionState.Handshaking,
     seqSeed: 0,
     ackSeq: 0,
-    tickFraction: 0,
+    tickFractionBits: 0,
     revealed: 0,
   }
   let live = false
@@ -352,14 +345,19 @@ export function createNetPump(
         uplinkProducer.recordDrop()
       }
     }
-    if (sawFrame && result && inst.call0(inst.x.client_clock_stats) === Status.Ok) {
-      const tick = readU32LE(result.u8, 0)
+    // Every wake once live, not only when a frame landed (ADR 0073): the authoritative tick is
+    // `auth_now`'s estimate, which advances between an idle world's heartbeats (500 ms apart, 0010);
+    // a block refreshed per frame only showed it up to 10 ticks stale.
+    if ((sawFrame || live) && result && inst.call0(inst.x.client_clock_stats) === Status.Ok) {
+      // ADR 0073 (`ABI_VERSION` 39 -> 40): the authoritative tick is `auth_now`'s (offset 20), which
+      // advances between heartbeats; offset 0 is the last frame's own tick.
+      const tick = readU32LE(result.u8, 20)
       const ackSeq = readU32LE(result.u8, 4)
       // M26 steps 4-6 (`ABI_VERSION` 23 -> 24):
       // `client_clock_stats`'s own widened result -- `predicted_tick` (real from this milestone,
       // 0012 "Two clocks") and `tick_fraction` (`ClientCore::last_tick_fraction`'s bits).
       const predictedTick = readU32LE(result.u8, 8)
-      const tickFraction = tickFractionReader.read(result.u8, 12)
+      const tickFractionBits = readU32LE(result.u8, 12) // the f32's bits, not decoded (no box)
       const revealed = readU32LE(result.u8, 16)
       // M28: `live`/`seqSeed`/`sessionState` are now seeded by
       // `seedFromWelcome` (below), called once by the caller right after a successful `Welcome`,
@@ -375,7 +373,7 @@ export function createNetPump(
       clockFields.authoritativeTick = tick
       clockFields.predictedTick = predictedTick
       clockFields.ackSeq = ackSeq
-      clockFields.tickFraction = tickFraction
+      clockFields.tickFractionBits = tickFractionBits
       clockFields.revealed = revealed
       writeClockBlock(clockView, clockFields)
     }

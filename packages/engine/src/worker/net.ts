@@ -162,11 +162,29 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
   // new `Link`, so a `retry`'s first dial read the same generation the client worker had already
   // sent its `Hello` for, and it never sent one on the new socket.
   let dialSeq = 0
+  // The dial whose socket is current: its `open` publishes `CB_LINK_STATE_UP` (below), so an `open`
+  // of a socket the link has since replaced publishes nothing.
+  let currentDial = 0
+  function publishUp(): void {
+    dialSeq++
+    Atomics.store(shell.control.words, CB_LINK_STATE, CB_LINK_STATE_UP)
+    Atomics.store(shell.control.words, CB_LINK_GEN, dialSeq)
+    // The client worker's own `worker/client-net.ts` reads these two words to decide when it
+    // is safe to send `client_hello()` for the first time (`SetupMessage.remoteLinked`) -- it
+    // must actually wake to notice the new value, since it may already be parked in
+    // `Atomics.wait`.
+    shell.control.wake(WORKER_CLIENT)
+  }
   function buildLink(): Link {
     return createLink({
       dial: () => {
+        const dialNo = ++currentDial
         if (noDial) return noDialConnection()
-        const conn = wsConnection(dialUrl)
+        // Up on the real `open` (ADR 0073), not at dial: the client's `Hello`->`Welcome` RTT then
+        // measures one round trip, not the WebSocket upgrade's as well.
+        const conn = wsConnection(dialUrl, () => {
+          if (dialNo === currentDial) publishUp()
+        })
         return injectParse ? injectParseConnection(conn) : conn
       },
       clock: systemClock,
@@ -174,14 +192,7 @@ export function setup(shell: Shell, message: SetupMessage): Promise<LoopState | 
       seed: LINK_JITTER_SEED,
       onUp(conn) {
         pump.attach(conn)
-        dialSeq++
-        Atomics.store(shell.control.words, CB_LINK_STATE, CB_LINK_STATE_UP)
-        Atomics.store(shell.control.words, CB_LINK_GEN, dialSeq)
-        // The client worker's own `worker/client-net.ts` reads these two words to decide when it
-        // is safe to send `client_hello()` for the first time (`SetupMessage.remoteLinked`) -- it
-        // must actually wake to notice the new value, since it may already be parked in
-        // `Atomics.wait`.
-        shell.control.wake(WORKER_CLIENT)
+        if (noDial) publishUp() // no socket, no `open` event
         shell.post({ type: 'link', state: 'up' })
       },
       onDown(why: DownReason, code?: number) {

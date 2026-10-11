@@ -21,7 +21,12 @@ declare global {
     __cameraState?: () => { x: number; y: number; tilesAcross: number }
     __stepFrame?: (dtMs: number) => Promise<void>
     __stepTick?: (n: number) => Promise<void>
-    __clock?: () => { authoritative: number; predicted: number; ticksPerSecond: number }
+    __clock?: () => {
+      authoritative: number
+      predicted: number
+      ticksPerSecond: number
+      tickFraction: number
+    }
   }
 }
 
@@ -87,6 +92,9 @@ test('reference_collect_flow', async ({ page }) => {
     'anchored y within 1 CSS px of the tile centre',
   ).toBeLessThanOrEqual(1)
 
+  // Read before the tap: the authoritative clock moves with real time, so the bar can be no longer
+  // than `done_at` less this earlier tick (ADR 0073).
+  const clockBefore = await page.evaluate(() => window.__clock?.())
   await clickCollect(page, STONE)
   // `apply` needs a couple of ticks plus a further `stepFrame` for the client's own replica/onUi
   // drain to see `collecting` set (`ui-smoke.spec.ts`'s own precedent, same reasoning) -- polled,
@@ -113,9 +121,16 @@ test('reference_collect_flow', async ({ page }) => {
     () => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))),
   )
 
-  // The Scope formula, verbatim: `(done_at - clock().predicted) / ticksPerSecond`, in ms -- read
-  // back from the real CSS animation `collect.ts` started, not merely asserted in the abstract.
-  const expectedDurationMs = ((collecting.done_at - clock.predicted) / clock.ticksPerSecond) * 1000
+  // The own-timer formula (`src/ui/own-timer.ts`, 0064 §2: the bar ends when the authoritative clock
+  // reaches `done_at`, i.e. `duration + lead` from the tap) -- read back from the real CSS animation
+  // `collect.ts` started, not merely asserted in the abstract.
+  // The clock follows wall time between the tap, the bar's start and this read, so the bar is bounded,
+  // not pinned: at most `done_at` less the authoritative tick before the tap, and longer than
+  // `done_at - predicted` read after it (the unstretched bar, `lead` >= 1 tick shorter).
+  const tickMs = 1000 / clock.ticksPerSecond
+  if (!clockBefore) throw new Error('missing clock state before the tap')
+  const longestMs = (collecting.done_at - clockBefore.authoritative) * tickMs
+  const unstretchedMs = (collecting.done_at - clock.predicted) * tickMs
   // The animation targets `.collect-fill`, a child `<span>` of the button (`collect.ts`'s own CSS:
   // `.collect-button.is-filling .collect-fill`), not the button element itself -- `{ subtree: true }`
   // reaches it.
@@ -127,7 +142,8 @@ test('reference_collect_flow', async ({ page }) => {
   )
   expect(animations.length, 'exactly one running fill animation').toBe(1)
   expect(typeof animations[0]).toBe('number')
-  expect(Math.abs((animations[0] as number) - expectedDurationMs)).toBeLessThan(1)
+  expect(animations[0] as number).toBeLessThanOrEqual(longestMs + 1)
+  expect(animations[0] as number, 'stretched over duration + lead').toBeGreaterThan(unstretchedMs)
 
   const finalUi = await pumpUntil(page, (ui) => ui?.collecting === null, {
     maxSteps: COLLECT_TICKS + 20,

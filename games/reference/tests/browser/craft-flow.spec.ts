@@ -32,7 +32,8 @@ test('reference_craft_flow', async ({ page }) => {
   await expect(menu).toBeVisible()
   await expect(button).toBeEnabled()
 
-  // Craft: the button disables and fills over `done_at - clock.predicted`.
+  // Craft: the button disables and fills until the authoritative clock reaches `done_at` (`own-timer.ts`).
+  const clockBefore = await page.evaluate(() => window.__clock?.()) // see collect-flow.spec.ts
   await button.click()
   await page.evaluate((dtMs) => window.__stepFrame?.(dtMs), 16)
   const crafting = await pumpUntil(
@@ -47,7 +48,12 @@ test('reference_craft_flow', async ({ page }) => {
   )
   const clock = await page.evaluate(() => window.__clock?.())
   if (!crafting?.crafting || !clock) throw new Error('missing crafting/clock state')
-  const expectedMs = ((crafting.crafting.done_at - clock.predicted) / clock.ticksPerSecond) * 1000
+  // Bounded as in `collect-flow.spec.ts`: at most `done_at` less the authoritative tick before the
+  // tap, longer than the unstretched `done_at - predicted`.
+  const tickMs = 1000 / clock.ticksPerSecond
+  if (!clockBefore) throw new Error('missing clock state before the tap')
+  const longestMs = (crafting.crafting.done_at - clockBefore.authoritative) * tickMs
+  const unstretchedMs = (crafting.crafting.done_at - clock.predicted) * tickMs
   const durations = await button.evaluate((el) =>
     el
       .getAnimations({ subtree: true })
@@ -55,7 +61,8 @@ test('reference_craft_flow', async ({ page }) => {
       .map((a) => (a.effect as KeyframeEffect | null)?.getTiming().duration ?? null),
   )
   expect(durations.length, 'exactly one running fill animation').toBe(1)
-  expect(Math.abs((durations[0] as number) - expectedMs)).toBeLessThan(1)
+  expect(durations[0] as number).toBeLessThanOrEqual(longestMs + 1)
+  expect(durations[0] as number, 'stretched over duration + lead').toBeGreaterThan(unstretchedMs)
 
   // Step the duration: one furnace, stone spent.
   await page.evaluate((k) => window.__stepTick?.(k), CRAFT_TICKS)

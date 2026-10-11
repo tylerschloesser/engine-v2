@@ -230,6 +230,9 @@ export function installCheck(game: StartedGame, bench?: BenchApi): void {
       in_range_n: u?.in_range.length ?? 0,
       spawn_x: u?.spawn.x ?? null,
       spawn_y: u?.spawn.y ?? null,
+      // The two clocks (0012): `clock_pred - clock_auth` is the lead an own timer's bar stretches over.
+      clock_auth: client.clock().authoritative,
+      clock_pred: client.clock().predicted,
       centre_x: +client.cameraState.centreX.toFixed(3),
       centre_y: +client.cameraState.centreY.toFixed(3),
       tiles_across: +client.cameraState.tilesAcross.toFixed(2),

@@ -11,7 +11,7 @@ Read only what the task needs. A sub-agent is briefed with files: its goal, one 
 | Path | What it holds |
 |---|---|
 | `docs/architecture/<subsystem>.md` | How each subsystem works now: world and worldgen, simulation, sync and netcode, persistence, threads and the JS/WASM boundary, renderer, camera/input/overlay, client API, runtime and hosting, testing and tooling |
-| `docs/decisions/NNNN-<slug>.md` | ADRs 0001–0072 (index: `docs/decisions/README.md`): what was chosen and the *why* that can't be read from code. Supersede, don't rewrite |
+| `docs/decisions/NNNN-<slug>.md` | ADRs 0001–0073 (index: `docs/decisions/README.md`): what was chosen and the *why* that can't be read from code. Supersede, don't rewrite |
 | `packages/engine/` | The engine package: TypeScript in `src/`, the Rust crate in `crates/engine/`, fixture games in `fixtures/`, suites in `tests/`; nested `CLAUDE.md` files hold commands, layout and test placement |
 | `games/reference/`, `games/reference-server/` | The reference game (its rules: `games/reference/README.md`) and its dedicated server; each has a `CLAUDE.md` |
 | `scripts/` | `pnpm test` / `lint` / `setup:tools` runners (plain Node `.mjs`); `scripts/suites.mjs` registers suites and build steps |

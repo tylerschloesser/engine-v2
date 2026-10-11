@@ -112,9 +112,13 @@ never encode a provisional id, a predicted status is a hint.
   gets no result (§11).
 - The client runs no tick rules. `w.tick()` under prediction returns the tick stored per pending action at submit time (frozen), so
   replays do not rewrite timers.
-- **Two clocks.** Authoritative = latest frame tick. Predicted = authoritative + lead. `clock/lead.rs` `LeadEstimator`: median of the last
-  8 ack samples, clamped to 1..=40 ticks, seeded from the `Welcome` RTT. `clock/host_clock.rs` `HostClock` takes the windowed maximum offset
-  over 2 s, slews at 10 %, steps only on `rebase()`. A player's own timer bar runs over `duration + lead` (§2).
+- **Two clocks.** Authoritative = `ClientCore::auth_now`: `HostClock`'s estimate of the host tick, never behind the replica's tick (an
+  idle world sends a heartbeat only every 500 ms, so the latest frame tick stands still for 10 ticks). Predicted = authoritative + lead.
+  `clock/lead.rs` `LeadEstimator`: median of the last 8 ack samples (`ack.tick - auth_now` at dispatch), clamped to 1..=40 ticks, seeded
+  `ceil(rtt / tick)` from the `Hello`-`Welcome` RTT, timed from the socket's real `open`. `clock/host_clock.rs` `HostClock` takes the
+  windowed maximum offset over 2 s, slews at 10 %, steps only on `rebase()`. The client worker rewrites the clock block every wake. A
+  player's own timer bar runs over `duration + lead`: it ends when the authoritative clock reaches a predicted `done_at`
+  ([0064](../decisions/0064-phase-3-decisions-sync-and-netcode.md) §2, [0073](../decisions/0073-own-timer-bars-on-the-host-clock.md)).
 - **Provisional ids.** Real `EntityId`s are allocated only by the host, monotonic, never reused. `Predicting::spawn` returns an id with
   bit 31 set from the pending action's `seq` and spawn index, identical on every replay (`EntityId::is_provisional`). Actions address
   anything the sender may have predicted by tile (`entity_at`), never by id. `Replica::entity` returns `Err(Unknown)` for an unseen real id

@@ -2,8 +2,8 @@
 // `Ui.recipes` is non-empty (the unlock is sim state, `rules::craft::update_unlocks`); one button
 // per listed recipe; a button is disabled while a craft runs or the recipe is unaffordable; while
 // `Ui.crafting` names a button's recipe it fills over the remaining time -- one CSS animation,
-// started once from `done_at` and `client.clock()` (`collect.ts`'s own idiom, 0003 "How the UI
-// observes state"). A rejected `StartCraft` flashes its button with `reject-<reason>`.
+// started once from `done_at` and `client.clock()` over `duration + lead` (`own-timer.ts`, 0064 §2; 0003
+// "How the UI observes state"). A rejected `StartCraft` flashes its button with `reject-<reason>`.
 //
 // DOM identity: a button carries `data-craft-recipe="<id>"`; the menu root is `.craft-menu`.
 import type { ActionOutcome, Client } from 'engine'
@@ -12,6 +12,7 @@ import type { RefReject } from '../bindings/RefReject.js'
 import type { RefUi } from '../bindings/RefUi.js'
 import { diffKeyed, el } from './dom.js'
 import { ITEM_LABELS } from './inventory.js'
+import { ownTimerMs } from './own-timer.js'
 
 type RecipeEntry = RefUi['recipes'][number]
 
@@ -148,9 +149,7 @@ export function createCraftUi(client: Client, doc: Document = document): CraftUi
         e.button.disabled = crafting || !r.affordable
         if (ui.crafting !== null && ui.crafting.recipe === r.recipe) {
           if (!e.filling) {
-            const clock = client.clock()
-            const remaining = ui.crafting.done_at - clock.predicted
-            startFilling(e, (remaining / Math.max(1, clock.ticksPerSecond)) * 1000)
+            startFilling(e, ownTimerMs(ui.crafting.done_at, client.clock()))
           }
         } else {
           stopFilling(e)

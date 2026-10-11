@@ -1,6 +1,6 @@
 // `createCollectUi` (M20b Scope): one `<button>` per
 // `Ui.in_range` entry, anchored over its tile; a click dispatches `StartCollect`; while
-// `Ui.collecting` names this button's own tile it fills over the collect duration and every other
+// `Ui.collecting` names this button's own tile it fills over the collect duration plus lead (`own-timer.ts`) and every other
 // button disables; a button whose tile drops out of `in_range` while it is the collecting one gets
 // `CancelCollect` sent once ("panning out of range cancels a collect", `games/reference/
 // README.md`); a rejected `StartCollect` flashes its own button with the reject reason as a
@@ -14,6 +14,7 @@ import type { RefAction } from '../bindings/RefAction.js'
 import type { RefReject } from '../bindings/RefReject.js'
 import type { RefUi } from '../bindings/RefUi.js'
 import { diffKeyed, el } from './dom.js'
+import { ownTimerMs } from './own-timer.js'
 
 type InRangeEntry = RefUi['in_range'][number]
 type AnchorHandle = ReturnType<Client['overlay']['anchor']>
@@ -171,10 +172,7 @@ export function createCollectUi(client: Client, doc: Document = document): Colle
       if (collectingKey !== null && key === collectingKey) {
         entry.button.disabled = true
         if (!entry.filling && ui.collecting) {
-          const clock = client.clock()
-          const remainingTicks = ui.collecting.done_at - clock.predicted
-          const durationMs = (remainingTicks / Math.max(1, clock.ticksPerSecond)) * 1000
-          startFilling(entry, durationMs)
+          startFilling(entry, ownTimerMs(ui.collecting.done_at, client.clock()))
         }
       } else {
         entry.button.disabled = collectingKey !== null

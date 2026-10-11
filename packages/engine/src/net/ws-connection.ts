@@ -34,7 +34,10 @@ function sendBytes(ws: WebSocket, bytes: Uint8Array): void {
   ws.send(bytes as Uint8Array<ArrayBuffer>)
 }
 
-export function wsConnection(url: string): Connection {
+/** `onOpen` (ADR 0073): called once, on the socket's real `open` event. The net worker lets the client
+ * send its `Hello` only then, so the `Hello`->`Welcome` round trip that seeds the lead does not include
+ * the WebSocket upgrade's own round trip (the queued `Hello` was sent at `open` either way). */
+export function wsConnection(url: string, onOpen?: () => void): Connection {
   const ws = new WebSocket(url)
   ws.binaryType = 'arraybuffer'
   let open = false
@@ -72,6 +75,7 @@ export function wsConnection(url: string): Connection {
     open = true
     for (let i = 0; i < pending.length; i++) sendBytes(ws, pending[i] as Uint8Array)
     pending.length = 0
+    onOpen?.()
   }
   ws.onmessage = (ev: MessageEvent) => {
     conn.onMessage?.(new Uint8Array(ev.data as ArrayBuffer))

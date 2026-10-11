@@ -47,11 +47,16 @@ async function edgeRun(seed: number, latencyMs: number, withEdge: boolean) {
     // B starts collecting the iron at (0,0) and A dispatches on the tick the host finishes it.
     const entry = uiOf(h, 1).in_range.find((e) => e.tile.x === 0 && e.tile.y === 0)
     if (!entry) throw new Error(`${tag}: B has no iron in range`)
+    // `done_at` once the host has confirmed it: before that, `Ui.collecting` is B's own prediction.
+    let bConfirmed = false
+    b.onActionResult((_s, res) => {
+      if (res === 'Confirmed') bConfirmed = true
+    })
     b.dispatch({ StartCollect: { tile: { x: 0, y: 0 }, from: entry.from } })
     let done = -1
     for (let i = 0; i < 60 && done < 0; i++) {
       await h.advanceTicks(1)
-      done = uiOf(h, 1).collecting?.done_at ?? -1
+      if (bConfirmed) done = uiOf(h, 1).collecting?.done_at ?? -1
     }
     expect(done, `${tag}: B's collect began`).toBeGreaterThan(0)
     while (h.hostTick() < done) await h.advanceTicks(1)

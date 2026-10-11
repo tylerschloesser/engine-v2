@@ -28,6 +28,16 @@ const IRON = LANDMARKS.resources.iron
 const sprites = (c: { draws(): Array<{ kind: number; flags: number }> }) =>
   c.draws().filter((d) => d.kind === 0)
 
+/** Client `i`'s verdicts by seq. A drop test waits on the host's `Confirmed`, not on `Ui`: the own timers
+ * there are predicted (0064 §2), so they show before the host has the action. */
+function verdicts(r: RefHarness, i: number): Map<number, unknown> {
+  const m = new Map<number, unknown>()
+  r.h.clients[i]?.onActionResult((s, res) => {
+    if (res !== 'NotPredictable') m.set(s, res)
+  })
+  return m
+}
+
 /** Ticks until `done()`; the message names the seed. */
 async function until(r: RefHarness, what: string, done: () => boolean, max = 300): Promise<void> {
   for (let i = 0; i < max && !done(); i++) await r.h.advanceTicks(1)
@@ -102,8 +112,9 @@ test('reference_short_drop_keeps_collect', async () => {
   })
   try {
     const { h } = r
-    startCollect(r, 0, STONE)
-    await until(r, 'the collect shows', () => uiOf(h, 0).collecting !== null)
+    const v = verdicts(r, 0)
+    const seq = startCollect(r, 0, STONE)
+    await until(r, 'the host confirms the collect', () => v.get(seq) === 'Confirmed')
     const log = logRecords(h)
     h.link(0).disconnect()
     h.link(0).reconnect()
@@ -135,13 +146,15 @@ test('reference_long_drop_cancels_collect_keeps_craft', async () => {
     await runScript(script().collect('stone', 5), r.drivers[0]!)
     // Phase 1, a drop longer than the 10 s grace: `Disconnected` is logged, and both timers (collect
     // 40 ticks, craft 100) finished inside the grace, so nothing is left to cancel: both completed.
-    h.clients[0]!.dispatch({ StartCraft: { recipe: 0 } })
+    const v = verdicts(r, 0)
+    const craft = h.clients[0]!.dispatch({ StartCraft: { recipe: 0 } })
     const log = logRecords(h)
-    startCollect(r, 0, STONE)
-    await until(r, 'craft and collect shown', () => {
-      const u = uiOf(h, 0)
-      return u.crafting !== null && u.collecting !== null
-    })
+    const collect = startCollect(r, 0, STONE)
+    await until(
+      r,
+      'the host confirms craft and collect',
+      () => v.get(craft) === 'Confirmed' && v.get(collect) === 'Confirmed',
+    )
     h.link(0).disconnect()
     await h.advanceTicks(260)
     const dropTick = h.hostTick()
@@ -167,12 +180,13 @@ test('reference_long_drop_cancels_collect_keeps_craft', async () => {
     expect(uiOf(h, 0).inventory[0]).toBe(5)
     a.setCamera({ x: IRON.x, y: IRON.y, tilesAcross: 20 })
     await h.advanceTicks(30)
-    a.dispatch({ StartCraft: { recipe: 0 } })
-    startCollect(r, 0, IRON)
-    await until(r, 'craft and collect shown', () => {
-      const u = uiOf(h, 0)
-      return u.crafting !== null && u.collecting !== null
-    })
+    const craft2 = a.dispatch({ StartCraft: { recipe: 0 } })
+    const collect2 = startCollect(r, 0, IRON)
+    await until(
+      r,
+      'the host confirms craft and collect',
+      () => v.get(craft2) === 'Confirmed' && v.get(collect2) === 'Confirmed',
+    )
     a.leave()
     await h.advanceTicks(130)
     const back = h.addClient(secret) // a new client is what returning after a `Bye` means (index 2)

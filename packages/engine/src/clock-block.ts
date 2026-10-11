@@ -60,8 +60,9 @@ export type ClockFields = {
   sessionState: number
   seqSeed: number
   ackSeq: number
-  /** M26 steps 4-6: real from this milestone on (`ClientCore::last_tick_fraction`). */
-  tickFraction: number
+  /** M26 steps 4-6: `ClientCore::last_tick_fraction`, as the raw bits of its `f32` (ADR 0073: the
+   * block is written every wake, and decoding the float there boxed a double per wake). */
+  tickFractionBits: number
   /** M28: `0`/`1`, `ClientCore::revealed()`'s own value. */
   revealed: number
 }
@@ -76,9 +77,9 @@ export class ClockBlockView {
   private readonly sessionState: Uint32Array
   private readonly seqSeed: Uint32Array
   private readonly ackSeq: Uint32Array
-  /** M26 steps 4-6: the one non-`u32` field here -- a plain `Float32Array` view over the same SAB
-   * bytes, same construction shape as every other field. */
-  private readonly tickFraction: Float32Array
+  /** M26 steps 4-6: the one non-`u32` field, an `f32`, written as its raw bits through a `u32` view
+   * (ADR 0073). */
+  private readonly tickFractionBits: Uint32Array
   /** M28: `ClientCore::revealed()`'s own `u32` (`0`/`1`). */
   private readonly revealed: Uint32Array
   private readonly bytes: Uint8Array
@@ -100,7 +101,7 @@ export class ClockBlockView {
     this.sessionState = new Uint32Array(sab, base + CLOCK_OFF_SESSION_STATE, 1)
     this.seqSeed = new Uint32Array(sab, base + CLOCK_OFF_SEQ_SEED, 1)
     this.ackSeq = new Uint32Array(sab, base + CLOCK_OFF_ACK_SEQ, 1)
-    this.tickFraction = new Float32Array(sab, base + CLOCK_OFF_TICK_FRACTION, 1)
+    this.tickFractionBits = new Uint32Array(sab, base + CLOCK_OFF_TICK_FRACTION, 1)
     this.revealed = new Uint32Array(sab, base + CLOCK_OFF_REVEALED, 1)
     this.bytes = new Uint8Array(sab, 0, base + CLOCK_FIELDS_BYTES)
     this.scratch = new Uint8Array(base + CLOCK_FIELDS_BYTES)
@@ -142,11 +143,10 @@ export class ClockBlockView {
   scratchFieldsView(): Uint32Array {
     return this.scratchFields
   }
-  /** M26 steps 4-6: reads `scratchFields`'s own slot 6 back out as the `f32` it actually is (the
-   * same underlying bytes `readClockBlockInto` already copied there this call, reinterpreted, not
-   * converted) -- call *after* a successful `readClockBlockInto`, never on its own. */
-  tickFractionView(): Float32Array {
-    return this.tickFraction
+  /** The writer's view of slot 6: `tickFraction`'s raw `f32` bits, written as a `u32` (a reader takes
+   * them back out as a float through `scratchFieldsFloatView`). */
+  tickFractionBitsView(): Uint32Array {
+    return this.tickFractionBits
   }
   scratchFieldsFloatView(): Float32Array {
     return this.scratchFieldsFloat
@@ -156,9 +156,9 @@ export class ClockBlockView {
   }
 }
 
-/** Writer: the client worker, after each `on_frame` that actually produced a fresh summary (not
- * every wake -- Scope: "written by the client worker after each `on_frame`"). Not concurrent with
- * itself (one writer), so the seq word only needs `Atomics` for the cross-thread fence. */
+/** Writer: the client worker, every wake once live (ADR 0073; until then, after each `on_frame`). Not
+ * concurrent with itself (one writer), so the seq word only needs `Atomics` for the cross-thread
+ * fence. */
 export function writeClockBlock(block: ClockBlockView, f: ClockFields): void {
   Atomics.add(block.seqWord(), 0, 1) // begin: odd
   block.authoritativeTickView()[0] = f.authoritativeTick
@@ -167,7 +167,7 @@ export function writeClockBlock(block: ClockBlockView, f: ClockFields): void {
   block.sessionStateView()[0] = f.sessionState
   block.seqSeedView()[0] = f.seqSeed
   block.ackSeqView()[0] = f.ackSeq
-  block.tickFractionView()[0] = f.tickFraction
+  block.tickFractionBitsView()[0] = f.tickFractionBits
   block.revealedView()[0] = f.revealed
   Atomics.add(block.seqWord(), 0, 1) // end: even, published
 }
@@ -197,27 +197,6 @@ export function readClockBlockInto(block: ClockBlockView, out: Uint32Array): boo
 
 /** Field indices into `readClockBlockInto`'s own `out` (same order `ClockFields` declares them,
  * and the same order `writeClockBlock` writes them). */
-/** A little-endian `f32` read from `u8[off..off+4)`, bit-reinterpreted, no `DataView`
- * (`.claude/rules/hot-paths.md`): `client-net.ts`'s own reader for `client_clock_stats`'s widened
- * result (M26 steps 4-6, `tick_fraction`). Built once
- * per owner (its own constructor, the same "created at setup" shape every SAB view in this file
- * already uses) and reused on every call; not in `sab/bytes.ts` alongside `readU32LE` because
- * `sab.no_alloc_syntax` (M06 bans a bare top-level `new`
- * anywhere under `src/sab/**` outside a constructor/`create*` factory, and a scratch `Float32Array`
- * view has nowhere to live there except as exactly that -- this file is outside that scan. */
-export class F32Reader {
-  private readonly scratch = new Uint8Array(4)
-  private readonly view = new Float32Array(this.scratch.buffer)
-
-  read(u8: Uint8Array, off: number): number {
-    this.scratch[0] = at(u8, off)
-    this.scratch[1] = at(u8, off + 1)
-    this.scratch[2] = at(u8, off + 2)
-    this.scratch[3] = at(u8, off + 3)
-    return at(this.view, 0)
-  }
-}
-
 export const CLOCK_FIELD = {
   AuthoritativeTick: 0,
   PredictedTick: 1,
