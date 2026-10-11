@@ -158,7 +158,12 @@ export type StatusOptions = {
   reload?: () => void
   /** Dev builds: the desync counter. */
   dev?: boolean
+  /** Where the one `WorldMismatch` reload is remembered (`sessionStorage`). */
+  session?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 }
+
+/** `sessionStorage` key: this tab already reloaded once for a `WorldMismatch` (ADR 0075). */
+export const WORLD_MISMATCH_RELOAD_KEY = 'reference.worldMismatchReload'
 
 export type StatusUi = {
   onLink(e: { state: LinkState; reason?: LinkReason }): void
@@ -187,6 +192,21 @@ export function createStatusUi(
 ): StatusUi {
   const scheduler = opts.scheduler ?? systemScheduler
   const reload = opts.reload ?? (() => location.reload())
+  const session =
+    opts.session ?? (typeof sessionStorage === 'undefined' ? undefined : sessionStorage)
+  /** ADR 0075: the server now runs another world (a restart on another seed). A fresh page takes its
+   * world from the first `Welcome`, so reload, once per tab until it is online again; a second
+   * mismatch in a row stays on screen. Storage that throws (private mode) reloads every time. */
+  function reloadOnceForWorldMismatch(): boolean {
+    let already = false
+    try {
+      already = session?.getItem(WORLD_MISMATCH_RELOAD_KEY) === '1'
+      session?.setItem(WORLD_MISMATCH_RELOAD_KEY, '1')
+    } catch {}
+    if (already) return false
+    reload()
+    return true
+  }
   const line = doc.createElement('div')
   line.className = 'link-status'
   line.hidden = true
@@ -329,6 +349,13 @@ export function createStatusUi(
     showStartFailure,
     onLink(e) {
       clearTimeout(timer)
+      if (e.state === 'online') {
+        try {
+          session?.removeItem(WORLD_MISMATCH_RELOAD_KEY)
+        } catch {}
+      }
+      if (e.state === 'rejected' && e.reason === 'WorldMismatch' && reloadOnceForWorldMismatch())
+        return
       linkState = e.state
       linkText = statusText(e.state, e.reason)
       if (resyncTimer !== undefined) return // the resync notice ends on its own and restores this

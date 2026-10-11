@@ -16,6 +16,5 @@ Work every item below; Tyler's answers are recorded on each. Record technical ch
 
 ## Technical (yours)
 
-- `WorldMismatch` has no reload policy (ADR 0064).
 - Reference game, never diagnosed: tile (58, 55) (wood, `collect-flow.spec.ts`) never completed a `collectN` in one observed run; `net.hashesBytesPerS` read 68.6 B/s against a 66 B/s ceiling once.
 - Known, no action unless it moves (not an open item): `slow_tick_large_save` sits at 2.87-3.0 ms against the 3 ms desktop proxy (a quiet red is a regression, a loaded red is not; ADR 0063).

@@ -24,6 +24,8 @@ export type StartReferenceServerOptions = {
   seed?: string
   joinKey?: string
   maxPlayers?: number
+  /** A fixed port (a restart on the same address); default OS-assigned. */
+  port?: number
   /** Always `true` today: the test drives every tick (`stepTick`). */
   manualTimer: true
 }
@@ -36,6 +38,7 @@ export function startReferenceServer(opts: StartReferenceServerOptions): Promise
     params: { seed: opts.seed ?? WORLD.seed, worldgen: WORLD.worldgen },
     ...(opts.joinKey !== undefined ? { joinKey: opts.joinKey } : {}),
     ...(opts.maxPlayers !== undefined ? { maxPlayers: opts.maxPlayers } : {}),
+    ...(opts.port !== undefined ? { port: opts.port } : {}),
   })
 }
 

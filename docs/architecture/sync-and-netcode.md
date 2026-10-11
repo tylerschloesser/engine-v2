@@ -71,8 +71,8 @@ allocate nothing; readers borrow and never panic.
   hash; then join key, secret, `CameraReport`, optional resume hint) answered by `Welcome` (player id, epoch, tick, tick rate, seed and
   params, view clamps, `last_processed_action_seq`, flags `WELCOME_PRESENCE`/`WELCOME_HASH_ALL`, last presence) or `Reject{VersionMismatch |
   BadKey | Full}`. `Bye{Leave | Superseded}`. Strict build equality; no ranges. A remote client takes its world seed and params from
-  `Welcome` (0042); `WorldMismatch` shows `onLink rejected` and has no reload policy
-  ([0064](../decisions/0064-phase-3-decisions-sync-and-netcode.md) §16).
+  `Welcome` (0042); `WorldMismatch` shows `onLink rejected`, with no engine reload policy; the reference page reloads once
+  ([0075](../decisions/0075-reference-page-reloads-once-on-world-mismatch.md)).
 - **Server side** (`server.ts`): `accept` queues each `Hello` and `pumpHandshakes` settles them at the tick boundary in arrival order
   (`sessionMutationChain` serialises the `crypto.subtle` work so joiners are deterministic); a rejected settle releases its turn, slot and
   connection. Join is late join. `Full` counts attached players; 16 connection slots (`host::MAX_CONNS = warm::MAX_VIEWS`, mirrored in `server.ts`) so a
