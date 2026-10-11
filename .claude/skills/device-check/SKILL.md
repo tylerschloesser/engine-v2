@@ -12,7 +12,7 @@ A failed check does not block unrelated work. It becomes a fix or a plan change;
 ## Devices
 
 - **iPhone:** an iPhone 12 (12-class or newer), iOS 18.7 or newer, Safari. Low Power Mode off unless an item says otherwise; Auto-Lock **Never** for the round (set it back afterwards).
-- **Android:** a Pixel 5 (Android 10, Chrome) on USB, driven from the Mac. It is evidence about Android, not a gate: the iPhone is the pass/fail device. Every `-android` row below is "not run: no device" unless a Pixel round is actually done; record a Pixel result as a note, never as the item's pass.
+- **Android:** a Pixel 5 (Android 14; Chrome reports Android 10 in its user agent) on USB, driven from the Mac. It is evidence about Android, not a gate: the iPhone is the pass/fail device. Each `-android` row below carries the last Pixel round as a note, never as the item's pass. The Pixel has a PIN: never lock it or let it sleep while driving it.
 - **Mac:** desktop Safari and Firefox, for items that name them. Desktop Chrome is covered by the automated suites, not here.
 
 ## Automation
@@ -41,7 +41,7 @@ Closes the phone run of ADR 0002. Last results: iPhone pass 2026-10-08.
 **Open:** `determinism.html`.
 
 - **M03-determinism** (ADR 0002). *Steps:* load the page, wait for the banner. *Pass:* one PASS banner; every checkpoint hash equals its golden (0 mismatches); the page shows `crossOriginIsolated: true`. *If it fails:* no fallback by design. Record the first divergent checkpoint and the user agent; plan a fix. Suspects in order: an observable NaN (ADR 0002 section 2), a toolchain difference.
-- **M03-determinism-android** *(not run: no device)*. Same page, Chrome. *Pass / If it fails:* as above.
+- **M03-determinism-android**. Same page, Chrome. *Pass / If it fails:* as above. Pixel 5, Android 14, Chrome 155, driven over adb + CDP, 2026-10-10 (notes, not passes): PASS banner, every hash and worldgen checkpoint and the reference `full-game.log` match, `crossOriginIsolated: true`.
 
 ## M08: Worldgen ms per chunk
 
@@ -51,7 +51,7 @@ Closes the deferred item of ADR 0008 Consequences. Last results: iPhone pass 202
 
 - **M08-worldgen-ms-per-chunk** (ADR 0008 section 6). *Steps:* let the bench finish; record median ms/chunk, the golden result, the user agent and `hardwareConcurrency`. *Pass:* golden match, and median at or under the per-chunk budget of ADR 0008 section 6 (1 ms). *If it fails:* a golden mismatch is a determinism bug: stop and treat as M03-determinism. Over budget: revisit the default gen-worker count on phones and the world warmer's yield per gap (ADR 0008 Consequences).
 - **M08-warn-threshold**. *Steps:* compute F = phone median / desktop median from the same page. *Pass:* phone median <= 0.5 ms (the ADR 0008 estimate holds) or F <= 5. *If it fails:* set `worldgenMsPerChunkWarn` in `packages/engine/budgets.json` to 1 ms / F and record F.
-- **M08-android** *(not run: no device)*. Both items in Chrome.
+- **M08-android**. Both items in Chrome. Pixel 5, Android 14, Chrome 155, driven over adb + CDP, 2026-10-10 (notes, not passes): median 0.29 ms/chunk, golden match, 8 cores; desktop Chrome 0.08 ms, F = 3.6.
 
 ## M09b: Terrain fill rate
 
@@ -60,7 +60,7 @@ Closes the deferred item of ADR 0018 Consequences; repeated by `M18-fill-rate-wi
 **Open:** `device.html?autopan=1&tiles=256&scale=2`.
 
 - **M09b-fill-rate** (ADR 0018 section 9 GPU share; ADR 0018 Consequences). *Steps:* portrait 60 s, then landscape 60 s (on iOS Safari portrait only, no rotation, ADR 0057); copy the HUD numbers. *Pass:* both orientations measured (iOS Safari: one portrait window, every window portrait, ADR 0057); `isolated` and adapter lines green; rAF interval p95 <= 17.5 ms; intervals > 20 ms <= 5 per 10 s (on iOS Safari these two are advisory: recorded, never failed, ADR 0056); GPU execution p95 <= 6 ms (timestamp queries, `gpu_exec_p95_ms`; the queue latency is informational); on iOS Safari also no gap over 20 ms has an engine cause (`stall` under 16 ms and callback lateness under 2 ms for every gap in the measured windows, ADR 0056); no visible hitch while chunks stream in. *If it fails,* in the order ADR 0018 Consequences states: reopen with `&scaleCap=1.5`; then `&scaleCap=1`; then add `&cutoff=4`. The first passing configuration becomes the mobile default: change the `ClientOptions.render` defaults and add a superseding note to ADR 0018. None passes: the per-chunk-quad fallback of ADR 0018 (a new piece of work).
-- **M09b-fill-rate-android** *(not run: no device)*. Same, Chrome.
+- **M09b-fill-rate-android**. Same, Chrome. Pixel 5, Android 14, Chrome 155, driven over adb + CDP, 2026-10-10 (notes, not passes): portrait and landscape 60 s each: rAF p95 16.7 ms, 0 intervals over 20 ms, GPU exec p95 5.18 / 4.85 ms.
 
 ## M11: Boot, gestures and memory
 
@@ -72,7 +72,7 @@ First time engine code runs on the phone; do the M03, M08 and M09b sections in t
 - **M11-gestures** (ADR 0019 section 3). *Steps:* one-finger pan 10 s, flick, pinch to both zoom limits, tap a tile, pull down from the top edge, double-tap, rotate the phone. *Pass:* the world point stays under the finger; the flick glides and stops; the HUD shows the tapped tile; the page never scrolls, zooms or refreshes; rotation keeps the centre. *If it fails:* name the knob (inertia constant, tap thresholds, page CSS helper of ADR 0019 section 3).
 - **M11-memory** (ADR 0015 section 5 arena sizes and whole-tab target). *Steps:* `device.html?probe=memory`. The probe (1) grows a scratch memory in 64 MiB steps to 1 GiB (allocated and written a page at a time, so the OS actually commits it), (2) runs the default topology beside the WebGPU context with a scripted ~4 tiles/s pan for 2 min, (3) repeats (2) with `&touch=1`. The HUD prints each step's progress; record all three. *Pass:* (2) and (3) finish without a reload. *If it fails:* re-run with `&sim=64&client=32` (MiB); if that survives, lower the mobile defaults by a superseding ADR for ADR 0015 section 5. If (1) < 256 MiB, record the ceiling in the same ADR. *Known gap:* `&touch=1` re-runs the identical session rather than force-writing every arena page from main (no ABI export exists for that); if (2) passes but (3) shows a different ceiling anyway, note it.
 - **M11-pinch-desktop-safari** (ADR 0019 section 3, Mac). *Steps:* `device.html` in desktop Safari on the loopback URL; trackpad pinch in and out over a landmark tile. *Pass:* the zoom follows the fingers about the cursor and the page itself never zooms. *If it fails:* the `gesturechange` listener or `preventDefault` in the engine's `input/wheel.ts`; the automated `camera.gesturechange_scale_zooms_about_cursor` covers only the maths.
-- **M11-android** *(not run: no device)*. All three phone items in Chrome.
+- **M11-android**. All three phone items in Chrome. Pixel 5, Android 14, Chrome 155, driven over adb + CDP, 2026-10-10 (notes, not passes): boot (adreno-6xx, workers ready); gestures by real touches (pan tracks the finger, flick glides and stops, pinch to 12 and 256 tiles, tap reports the tile under the finger, pull-down and double-tap leave the page unscrolled and unzoomed, rotation keeps the centre); memory probe 1024 MiB, both 2 min runs without a reload.
 
 ## M16: Vertical slice on the phone
 
@@ -85,7 +85,7 @@ First on-device run of the slice. Last results: iPhone coexist and round-trip pa
 - **M16-coexist** (ADR 0015 section 5 whole-tab target; ADR 0020 section 10). *Steps:* play and pan for 10 min. *Pass:* no reload, no visible hitch, `engine_mem_grows` = 0 on every instance. Frame pacing is judged driverless only (ADR 0056). *If it fails:* the smaller-arena parameters of M11-memory, then its fallback.
 - **M16-background** (`docs/architecture/simulation.md`, idle worlds). *Steps:* another app for 30 s and return; lock the screen for 60 s and return. *Pass:* frame loop and tick loop resume without a reload; the HUD `tick` did not advance while hidden. `slice.html`'s world is in memory and only a persisted world pauses: on Android Chrome its `tick` advances while hidden by design; check the pause itself on the reference game's page (start a collect, hide 20 s: it must still be running on return).
 - **M16-low-power** (ADR 0019 Context, time-based motion). *Steps:* turn Low Power Mode on, pan and flick; turn it off afterwards. *Pass:* motion speed unchanged at the halved frame rate: the scripted flick's glide distance at the halved rate is at least 0.95 and at most 1.05 of the one at the normal rate.
-- **M16-android** *(not run: no device)*. All items in Chrome.
+- **M16-android**. All items in Chrome. Pixel 5, Android 14, Chrome 155, driven over adb + CDP, 2026-10-10 (notes, not passes): slice boot; ten real Paint taps `confirmed 10`, `rejected 0`, `ring drops 0`; 10 min / 1,182 pans with `engine_mem_grows` 0 and no reload; background: resumes without a reload (the slice world is in memory and keeps ticking, see M16-background; the reference page's persisted world paused across a 20 s hide). Screen lock and Low Power not run: the Pixel has a PIN, and Battery Saver does not engage while it charges.
 
 ## M17b: Desktop Safari and Firefox harness run
 
@@ -106,7 +106,7 @@ Closes the deferred item of ADR 0019 Consequences, which combines it with the fi
 - **M18-fill-rate-with-anchors**. *Steps:* on the same `device.html?anchors=50` page (not `fx-terrain`), portrait 60 s then landscape 60 s, panning and pinching continuously; copy the HUD numbers. *Pass / If it fails:* as `M09b-fill-rate` (rAF p95 <= 17.5 ms; intervals > 20 ms <= 5 per 10 s; GPU execution p95 <= 6 ms; no visible hitch), reopening with `&anchorMode=translate` first before `M09b-fill-rate`'s `&scaleCap` / `&cutoff` ladder.
 - **M18-pick** (ADR 0019 section 4). *Steps:* at three zoom levels (`&tiles=`), tap several rings (small and, near the grid's 3-tile spacing, close together) and a button. *Pass:* the HUD's `pick_id` reports the topmost ring's id every time (0 misses); a tap on a button leaves `pick_id` unchanged (never reaches the canvas).
 - **M18-touch-ghost** (ADR 0019 section 4, cursor tile and ghost). *Steps:* tap to move the cursor tile, then drag. *Pass:* the ghost (a translucent square, `extract()`'s `ANCHOR_CURSOR_TILE` draw) sits on the tapped tile; the drag pans.
-- **M18-android** *(not run: no device)*. All items in Chrome.
+- **M18-android**. All items in Chrome. Pixel 5, Android 14, Chrome 155, driven over adb + CDP, 2026-10-10 (notes, not passes): fill rate with anchors rAF p95 16.75 ms, 0 over 20 ms, GPU p95 1.97 / 1.77 ms; anchor probe max error 1.26 / 0.92 px, jitter 1.17 / 0.86 px (swim not judged by eye: a CDP screenshot omits the WebGPU canvas); pick 0 misses at 12/24/40 tiles, button taps leave `pick_id`; touch ghost on the tapped tile, drag pans.
 
 ## M23: OPFS and world lifecycle
 
@@ -120,18 +120,18 @@ Closes the deferred OPFS latency item of ADR 0005 Consequences; it tunes only th
 - **M23-private**. *Steps:* open the page in Private Browsing. *Pass:* the HUD reports `durable: false` and the world still plays.
 - **M23-hidden-pause**. *Steps:* tap Paint once (a fresh `tick` reading), background 30 s, foreground, tap Paint again. *Pass:* the second `tick` reading is only a few ticks past the first (not ~600, the 30 s at 20 Hz a still-running world would rack up) and `durable` stays `true`; no reload. *Why tap Paint, not just read the HUD:* `hash` / `tick` refresh only on that discrete event, so the number sitting on screen while backgrounded proves nothing about whether ticking stopped.
 - **M23-export-import**. *Steps:* tap Export (a `<worldId>.world` download; confirm it arrives in Files); note the HUD `hash`. Reload the page (or open a second tab) with a fresh `?world=<other-id>`, choose the downloaded file in the Import file picker, type the new id, tap Import (importing onto an id that already has a world fails: use a new id); then open `world.html?world=<other-id>` directly. *Pass:* the new world's HUD `hash` (after a Paint tap, at the same tick count) equals the exported world's `hash`.
-- **M23-android** *(not run: no device)*. All items in Chrome.
+- **M23-android**. All items in Chrome. Pixel 5, Android 14, Chrome 155, driven over adb + CDP, 2026-10-10 (notes, not passes): `flush` p95 0.93 ms; kill-resume (12 confirmed paints, force-stop, reopened at tick 714 >= 713 with the same hash); world-busy; hidden pause +59 ticks over 30 s, durable. Export produces the archive and the page's file input imports it, but the file did not reach Downloads (unconfirmed); Private not run (Chrome ignores an incognito intent).
 
 ## M29: Net worker and reconnect
 
-Closes the iOS worker-socket resume item (ADR 0013 Consequences); it tunes only the dead timeout and the probe deadline of ADR 0013. Last results: `M29-net-heap` pass 2026-10-08 (driverless); `M29-socket-resume` and `M29-play-through-drop` pass 2026-10-10 on the iPhone 12 (12 drops, app-5s and app-30s by hand, app-5min and lock-60s driven over USB): `visible` to `Welcome` median 0 ms, max 111 ms (a 0 is a link that had already reconnected while hidden), interactive and no dialog in every run. **Closed as not applicable** (Tyler, 2026-10-10): Wi-Fi to cellular (no SIM) and airplane 15 s (iOS keeps Wi-Fi on in airplane mode on this phone, so the socket only resets; a real outage needs Wi-Fi off too). The four drops that ran cover the resume path; a phone with a SIM walks them if the link code changes. The link log lists rows newest first. Android is not run anywhere (every `-android` row).
+Closes the iOS worker-socket resume item (ADR 0013 Consequences); it tunes only the dead timeout and the probe deadline of ADR 0013. Last results: `M29-net-heap` pass 2026-10-08 (driverless); `M29-socket-resume` and `M29-play-through-drop` pass 2026-10-10 on the iPhone 12 (12 drops, app-5s and app-30s by hand, app-5min and lock-60s driven over USB): `visible` to `Welcome` median 0 ms, max 111 ms (a 0 is a link that had already reconnected while hidden), interactive and no dialog in every run. **Closed as not applicable** (Tyler, 2026-10-10): Wi-Fi to cellular (no SIM) and airplane 15 s (iOS keeps Wi-Fi on in airplane mode on this phone, so the socket only resets; a real outage needs Wi-Fi off too). The four drops that ran cover the resume path; a phone with a SIM walks them if the link code changes. The link log lists rows newest first. Android: see M29-android.
 
 **Open:** on the Mac `pnpm device:serve --tunnel --ws puts` (starts the real-time server and proxies `/ws`); on the phone `mp.html?linklog=1` on the printed URL.
 
 - **M29-socket-resume** (ADR 0013 Client policy). *Steps:* three runs each of: another app 5 s; 30 s; 5 min; screen lock 60 s; Wi-Fi to cellular in the foreground; airplane mode 15 s. Per run copy from the on-page link log: `close` delivered (ms after `visible`) or silence; ms from `visible` to `Welcome`; page discarded or not. *Pass:* `visible` to `Welcome` median <= 1.5 s and max <= 4 s: keep the ADR 0013 numbers. *If it fails:* silence with median > 2 s: lower the probe deadline toward one heartbeat interval plus margin; prompt `close` everywhere: numbers stay, note it. Any change is a new ADR amending ADR 0013 Client policy.
 - **M29-play-through-drop** (ADR 0013 Client policy). *Steps:* keep panning during each drop above. *Pass:* the game stays interactive on last known state; the indicator appears only after the delay ADR 0013 states; no modal for short outages.
 - **M29-net-heap** (ADR 0015 section 2, ADR 0016). *Steps:* 10 min connected with steady traffic. *Pass:* no visible periodic hitch (the net worker's garbage stays off the main thread). Frame pacing is judged driverless only (ADR 0056).
-- **M29-android** *(not run: no device)*. All items in Chrome.
+- **M29-android**. All items in Chrome. Pixel 5, Android 14, Chrome 155, driven over adb + CDP, 2026-10-10 (notes, not passes): another app 5 s / 30 s: the socket survives (0 ms); 5 min: `Welcome` 32 ms after `visible`; 15 s outages through a proxy that stops forwarding (Wi-Fi off cannot drop an `adb reverse` link): online 383-872 ms after the outage ends, `reconnecting` shown, no modal, no reload.
 
 ## M34: Reference multiplayer on real devices
 
@@ -142,7 +142,7 @@ Holds the own-timer feel and remote motion items. Last results: iPhone two-devic
 - **M34-two-devices**. *Steps:* phone and Mac join one LAN world; collect on one, place on the other. *Pass:* each sees the other's circle and changes; roster dots go hollow after a disconnect plus the grace of ADR 0013 and fill on return.
 - **M34-own-timer-bar** (ADR 0012 completion gap). The rule is decided: the bar stretches over `duration + lead`. *Steps:* start own timers on Wi-Fi, then on a throttled or cellular link (a Wi-Fi-only iPhone with no SIM cannot do cellular: throttle instead). *Pass:* each bar starts at the tap and reaches full as the result arrives, with no full bar left waiting and no result before the bar is full. *If it fails:* a bar that waits or overshoots is a lead-estimate or `own_progress` bug: record RTT and the gap and fix in the prediction/clock code.
 - **M34-remote-motion** (ADR 0012 "Remote motion"). *Steps:* move on the Mac and watch the phone; then close the Mac's page. *Pass:* the remote circle moves without snapping: while it moves its drawn position changes on at least 0.9 of the frames and is never still for more than 50 ms, and it never steps back against its walking direction by more than 0.15 tiles; when its player leaves it disappears within 1000 ms (ADR 0013: presence vanishes at once on a clean close; the fade of ADR 0012 is for a stalled link). Frame pacing is judged driverless only (ADR 0056). *If it fails:* revisit the adaptive remote delay.
-- **M34-android** *(not run: no device)*. All items in Chrome.
+- **M34-android**. All items in Chrome. Pixel 5, Android 14, Chrome 155, driven over adb + CDP, 2026-10-10 (notes, not passes): Pixel and desktop Chrome in one LAN world (both rosters, both circles); remote motion changed on 1.0 of moving frames, max still 0 ms, no backstep or snap, gone 201 ms after close; own bars within -72..+17 ms direct and -24..+67 ms under a 281 ms-each-way proxy from load.
 
 ## M35: Built reference game in real Safari
 
@@ -187,5 +187,5 @@ Run last, on the final build, after every section above has a result: re-run rat
 - **M39-full-game-touch**. *Steps:* play the reference game by hand on the phone: spawn, mine to the unlock, craft, place with tap-then-confirm, pick the empty furnace up and place it again, fuel, smelt, take. *Pass:* every step works by touch; buttons and the furnace panel stay glued to their tiles; 10 min with no reload and no visible hitch.
 - **M39-two-devices**. *Steps:* phone and Mac in one hosted world (LAN world if the hosted deployment is not up), both through the `#k=` invite link. *Pass:* each sees the other's circle move smoothly; roster dots follow a disconnect after the grace and the return; a furnace placed on one appears on the other.
 - **M39-desktop-browsers**. *Steps:* desktop Safari and Firefox on the Mac, 5 min of play each. *Pass:* 0 validation errors in the console; no periodic hitch.
-- **M39-android** *(not run: no device)*. M39-full-game-touch and M39-two-devices in Chrome.
+- **M39-android**. M39-full-game-touch and M39-two-devices in Chrome. Pixel 5, Android 14, Chrome 155, driven over adb + CDP, 2026-10-10 (notes, not passes): full game by real taps on the production page (to the ingot, no reload); large save 10 min `engine_mem_grows` 0, tick p95 19.4 ms (reported); frame shares main p95 0.78 ms, client `frame` p95 5.08 ms (both under 0062, the client share ~3.7x the iPhone's). Two devices: see M34-android (furnace sync across devices not checked).
 - **M39-sign-off**. *Steps:* Tyler plays the reference game from start to furnace output, single-player and with a second player. *Pass:* Tyler signs off. *If it fails:* each objection becomes a work item.
