@@ -26,7 +26,7 @@ The plan is revised from measurements, at every phase end and whenever a milesto
 |---|---|---|---|---|---|
 | [x] | 40 | `40-item-representation-spike.md` | `fx-belts` fixture skeleton; native spike of the item representations of 0077 on the standard belt world (50,000 tiles, 250,000 items), four regimes; 0077 amended to Accepted with the winner | — | |
 | [x] | 41 | `41-forecast-spike.md` | native spike of the dirty-marking and cheap forecast of 0078 on the spike sim: correction rate, estimated bytes, tracker cost; 0078 confirmed or revised | 40 | |
-| [ ] | 42 | `42-transport-core.md` | `engine::transport` in `Store`: lines, runs (the winner), `advance`, `DeadEnd`/`Next`/`Sink`, update order, `insert_back`, codec/hash/snapshot, `WorldRead`/`WorldWrite` accessors, `max_lines`/`max_items`, `no_alloc_transport`, the snapshot bump | 40 | |
+| [x] | 42 | `42-transport-core.md` | `engine::transport` in `Store`: lines, runs (the winner), `advance`, `DeadEnd`/`Next`/`Sink`, update order, `insert_back`, codec/hash/snapshot, `WorldRead`/`WorldWrite` accessors, `max_lines`/`max_items`, `no_alloc_transport`, the snapshot bump | 40 | |
 | [ ] | 42b | `42b-transport-core-goldens.md` | `fx-belts` requests (`Action::Request(Op)`, the `Request` entity, spawner active list) and the first four goldens natively, under Node and Bun | 42 | |
 | [ ] | 43 | `43-transport-surgery-and-geometry.md` | `split`/`join`/`extend`/`shrink`/`rescale`/`destroy`, `insert_at`/`remove_at`/`front`, segment geometry, derived chunk set and tile index, edit-while-running goldens | 42b | |
 | [ ] | 44 | `44-transport-merge-and-fork.md` | `Output::Merge` and `Output::Fork`, big-step crossings (`speed >= SPACING`), side-load and splitter goldens, conservation and throughput properties | 43 | |

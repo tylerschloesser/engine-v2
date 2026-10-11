@@ -22,6 +22,9 @@ pub enum Phase {
     BuildFrame = 5,
     Snapshot = 6,
     Replay = 7,
+    /// M42 (review): the transport `advance` after `Game::tick`, so a trap inside it is not
+    /// blamed on the game's tick rules.
+    Advance = 8,
 }
 
 impl Phase {
@@ -35,6 +38,7 @@ impl Phase {
             5 => Some(Phase::BuildFrame),
             6 => Some(Phase::Snapshot),
             7 => Some(Phase::Replay),
+            8 => Some(Phase::Advance),
             _ => None,
         }
     }

@@ -15,8 +15,12 @@
 //! be taken well after the last real frame (an idle world, `sim_dirty()` still set from an old
 //! event); without it, `testing::replay`'s own `Base::Snapshot` path has no way to correctly
 //! interpret the *next* frame's `tick_delta`, which is always relative to that reference tick, not
-//! to the snapshot's own tick. `container_version` stays `1` (an ADR amendment covers this and the
+//! to the snapshot's own tick. `container_version` stayed `1` for it (an ADR amendment covers this and the
 //! other two additions here together, M22 Deviations).
+//!
+//! **`container_version` 2 (M42)**: the store section gained the transport store (0076 §7,
+//! `Store`'s module doc comment), so a version-1 snapshot is refused as `ContainerVersion` (the ABI's
+//! `Status::ContainerVersion`; the host reports the world as `SaveIncompatible`), never misparsed.
 //!
 //! **A `total_len` varint, not named by 0005, is added right after `container_version`**: it is
 //! the byte length of everything from `identity` through the trailing `crc32`, inclusive. Without
@@ -48,7 +52,7 @@ use crate::store::Store;
 use crate::time::Tick;
 
 const MAGIC: [u8; 4] = *b"PSN1";
-const CONTAINER_VERSION: u16 = 1;
+const CONTAINER_VERSION: u16 = 2;
 
 /// Sanity bound on a snapshot's total declared length (a corrupt `total_len` must not make
 /// [`SnapshotReader::push`] buffer without limit before ever reaching the CRC that would reject
@@ -517,6 +521,42 @@ mod tests {
         crate::assert_golden_bytes!("persist_snapshot_golden_bytes", &bytes);
     }
 
+    /// M42: the transport section changed the store layout, so a snapshot stamped with the old
+    /// container version 1 (here: a current snapshot with its version bytes set back to 1, which is
+    /// what an old save looks like at the envelope) is refused as `ContainerVersion` by both
+    /// readers, before any byte of the store section is read.
+    #[test]
+    fn snapshot_old_layout_is_incompatible() {
+        let store = store_with(2, 1, CacheCapacity::Chunks(4));
+        let mut w = SnapshotWriter::begin(
+            &store,
+            Tick(5),
+            &SimRng::new(1),
+            0,
+            0,
+            0,
+            &identity_for::<TGame>(),
+        );
+        let mut bytes = drain(&mut w);
+        assert_eq!(
+            u16::from_le_bytes([bytes[4], bytes[5]]),
+            2,
+            "written as version 2"
+        );
+        bytes[4..6].copy_from_slice(&1u16.to_le_bytes());
+        let mut reader = SnapshotReader::new(shell(CacheCapacity::Chunks(4)));
+        assert_eq!(
+            reader.push(&bytes).err(),
+            Some(PersistError::ContainerVersion),
+            "a version-1 snapshot must be refused as ContainerVersion"
+        );
+        assert_eq!(
+            UpgradeReader::new().push(&bytes).err(),
+            Some(PersistError::ContainerVersion),
+            "the upgrade path refuses it the same way"
+        );
+    }
+
     #[test]
     fn snapshot_roundtrip_random_blocks() {
         let store = store_with(5, 2, CacheCapacity::Chunks(4));
@@ -616,6 +656,8 @@ mod tests {
             max_entities: 64,
             max_modified_tiles: 64,
             max_action_growth: 64,
+            max_lines: crate::transport::DEFAULT_MAX_LINES,
+            max_items: crate::transport::DEFAULT_MAX_ITEMS,
         };
         let mut sim = Sim::<TimerGame>::genesis(params);
         let mut out = Vec::new();

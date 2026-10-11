@@ -13,6 +13,8 @@ fn new_sim(seed: u64) -> Sim<Puts> {
         max_entities: 262_144,
         max_modified_tiles: 1_048_576,
         max_action_growth: 4_096,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     })
 }
 
@@ -139,6 +141,8 @@ fn rejecting_apply_wrote_nothing_twin_panics() {
         max_entities: 0,
         max_modified_tiles: 0,
         max_action_growth: 0,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     let mut out = Vec::new();
     sim.step(
@@ -166,6 +170,8 @@ fn release_rejecting_apply_that_wrote_is_rolled_back() {
         max_entities: 0,
         max_modified_tiles: 0,
         max_action_growth: 0,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     let mut out = Vec::new();
     let hash = sim.state_hash();

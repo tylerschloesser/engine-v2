@@ -29,6 +29,8 @@ where
         max_entities,
         max_modified_tiles: 1_000_000,
         max_action_growth: 65_536,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     }
 }
 

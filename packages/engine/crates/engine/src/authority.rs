@@ -13,6 +13,7 @@ use crate::game::{EntityId, Game, PlayerId, Unknown};
 use crate::rng::SimRng;
 use crate::store::Store;
 use crate::time::{Tick, Ticks};
+use crate::transport::{TransportRead, TransportWrite};
 use crate::world::{ChunkCoord, SystemId, TerrainStore, Tile, TilePos, TileRect, TraitSet};
 use crate::world_access::{WorldRead, WorldWrite, chunk_of};
 
@@ -156,6 +157,12 @@ pub struct Authority<G: Game> {
     /// True only while `Sim::genesis` runs `Game::genesis` (ADR 0046): writes still apply and set
     /// `dirty`, but are not logged in `changes`, and `WorldWrite::wake_at` is allowed.
     in_genesis: bool,
+    /// True only while `Sim::step` runs `Game::tick` (M42): with `in_genesis`, the phases where
+    /// `WorldWrite::transport_mut` is `Ok` on `Authority` itself (0076 §6). `TickCx` answers `Ok`
+    /// on its own; this flag covers a tick rule that reaches `Authority`'s `WorldWrite` through
+    /// `TickCx::as_write` (a helper shared with `apply`). Everywhere else (`apply`, `on_player`)
+    /// `transport_mut` is `Err(Unknown)` with a debug assertion.
+    in_tick: bool,
     changes: ChangeLog<G>,
     /// Reused across `entities_in` calls (`.claude/rules/hot-paths.md`): a `RefCell` since
     /// `WorldRead::entities_in` takes `&self`.
@@ -204,11 +211,34 @@ impl<G: Game> Authority<G> {
     /// `Store::new` (M21, M21 Deviations: moved from here into
     /// `Store` so `Store::apply` can consult footprints for `ChunkIndex` maintenance) -- `Authority`
     /// no longer holds its own `Registry` copy, reading `self.store.registry()` instead.
+    /// No transport arena: `create` and `insert_*` return `Full` (0079 §5: the arena is reserved
+    /// only by [`Authority::with_transport_caps`]/[`Authority::from_snapshot_with_caps`]).
     pub fn new(terrain: TerrainStore, global: G::Global, seed: u64) -> Self {
+        Self::build(Store::new(terrain, global), SimRng::new(seed), Tick(0))
+    }
+
+    /// [`Authority::new`] with the world's own transport caps (0079 §5): `Sim::genesis` reserves
+    /// the arena once, at the world's size, instead of the defaults first.
+    pub(crate) fn with_transport_caps(
+        terrain: TerrainStore,
+        global: G::Global,
+        seed: u64,
+        max_lines: u32,
+        max_items: u32,
+    ) -> Self {
+        let mut store = Store::new(terrain, global);
+        store
+            .set_transport_caps(max_lines, max_items)
+            .expect("a fresh store's transport has no caps yet");
+        Self::build(store, SimRng::new(seed), Tick(0))
+    }
+
+    /// The one field initialiser behind every constructor.
+    fn build(store: Store<G>, rng: SimRng, tick: Tick) -> Self {
         Authority {
-            store: Store::new(terrain, global),
-            rng: SimRng::new(seed),
-            tick: Tick(0),
+            store,
+            rng,
+            tick,
             changes: ChangeLog::new(),
             entities_in_scratch: RefCell::new(Vec::new()),
             max_entities: 262_144,
@@ -222,6 +252,7 @@ impl<G: Game> Authority<G> {
             journal_disabled_for_test: false,
             dirty: false,
             in_genesis: false,
+            in_tick: false,
         }
     }
 
@@ -237,6 +268,24 @@ impl<G: Game> Authority<G> {
         self.max_entities = max_entities;
         self.max_modified_tiles = max_modified_tiles;
         self.max_action_growth = max_action_growth;
+    }
+
+    /// `Sim::step`'s bracket around `Game::tick` (M42, the `in_tick` field).
+    pub(crate) fn set_in_tick(&mut self, on: bool) {
+        self.in_tick = on;
+    }
+
+    /// `Sim::step`, after `Game::tick` and before `end_tick` (0076 §2, M42 Planning decisions):
+    /// one tick of every transport line.
+    /// Marks the world dirty when the transport changed this tick, by `advance` or by a tick
+    /// rule's write through `transport_mut` (M42 review): a world where only belts move is still
+    /// snapshotted (`dirty` is otherwise set only by puts and logged records).
+    pub(crate) fn advance_transport(&mut self) {
+        let transport = self.store.transport_mut();
+        let moved = transport.advance();
+        if transport.take_changed() || moved {
+            self.dirty = true;
+        }
     }
 
     pub fn max_entities(&self) -> u32 {
@@ -319,25 +368,25 @@ impl<G: Game> Authority<G> {
     /// `Sim::genesis` does. Plain `pub` since M22b: `host::
     /// Host::sim_restore_end` is now a genuine production caller (previously only `testing::replay`/
     /// `testing::heavy` and this module's own tests, behind the `testing` feature).
+    /// The transport arena is not reserved here (0079 §5); see
+    /// [`Authority::from_snapshot_with_caps`].
     pub fn from_snapshot(store: Store<G>, rng: SimRng, tick: Tick) -> Self {
-        Authority {
-            store,
-            rng,
-            tick,
-            changes: ChangeLog::new(),
-            entities_in_scratch: RefCell::new(Vec::new()),
-            max_entities: 262_144,
-            max_modified_tiles: 1_048_576,
-            max_action_growth: 4_096,
-            growth_violations: 0,
-            entities_visited_per_tick: 0,
-            apply_rollbacks: 0,
-            journal: UndoJournal::new(),
-            #[cfg(any(test, feature = "testing"))]
-            journal_disabled_for_test: false,
-            dirty: false,
-            in_genesis: false,
-        }
+        Self::build(store, rng, tick)
+    }
+
+    /// [`Authority::from_snapshot`] with the world's own transport caps (0079 §5): the host's
+    /// restore and upgrade paths reserve the arena once, at the world's size.
+    pub(crate) fn from_snapshot_with_caps(
+        mut store: Store<G>,
+        rng: SimRng,
+        tick: Tick,
+        max_lines: u32,
+        max_items: u32,
+    ) -> Self {
+        store
+            .set_transport_caps(max_lines, max_items)
+            .expect("a restored store's transport is reserved here, once");
+        Self::build(store, rng, tick)
     }
 
     /// Mutable store access: `testkit::fill_world`/`set_next_entity_id` (feature `testing`) need
@@ -626,6 +675,9 @@ impl<G: Game> WorldRead<G> for Authority<G> {
         self.store.entities_in(rect, &mut scratch, f);
         Ok(())
     }
+    fn transport(&self) -> &dyn TransportRead {
+        self.store.transport()
+    }
 }
 
 impl<G: Game> Authority<G> {
@@ -694,6 +746,20 @@ impl<G: Game> WorldWrite<G> for Authority<G> {
             "WorldWrite::wake_at is callable from Game::genesis and Game::tick only (ADR 0046)"
         );
         self.store.timer_wake_at(id, at);
+    }
+    /// `Ok` while `Game::genesis` or `Game::tick` runs (0076 §6); inside `apply`/`on_player` it is
+    /// `Err(Unknown)` and, in debug and test builds, a panic naming the rule: an action that
+    /// touches transport lines is a bug on the host (`?` makes it `NotPredictable` on the client).
+    fn transport_mut(&mut self) -> Result<&mut dyn TransportWrite, Unknown> {
+        if self.in_genesis || self.in_tick {
+            return Ok(self.store.transport_mut());
+        }
+        debug_assert!(
+            false,
+            "WorldWrite::transport_mut is host-tick only: Err(Unknown) inside apply/on_player \
+             (0076 §6); topology changes are tick rules"
+        );
+        Err(Unknown)
     }
 }
 
@@ -823,6 +889,9 @@ impl<G: Game> WorldRead<G> for TickCx<'_, G> {
     ) -> Result<(), Unknown> {
         self.authority.entities_in(rect, f)
     }
+    fn transport(&self) -> &dyn TransportRead {
+        self.authority.store.transport()
+    }
 }
 
 impl<G: Game> WorldWrite<G> for TickCx<'_, G> {
@@ -853,6 +922,10 @@ impl<G: Game> WorldWrite<G> for TickCx<'_, G> {
     }
     fn wake_at(&mut self, id: EntityId, at: Tick) {
         TickCx::wake_at(self, id, at);
+    }
+    /// Always `Ok`: tick rules own topology (0076 §6).
+    fn transport_mut(&mut self) -> Result<&mut dyn TransportWrite, Unknown> {
+        Ok(self.authority.store.transport_mut())
     }
 }
 

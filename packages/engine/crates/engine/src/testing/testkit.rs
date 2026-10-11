@@ -60,6 +60,12 @@ pub fn set_next_entity_id<G: Game>(sim: &mut Sim<G>, id: u32) {
     sim.authority_mut().store_mut().set_next_entity_id(id);
 }
 
+/// The host world's transport store, mutable outside a tick (M42, `store_hash_includes_transport`):
+/// tests set up lines and items directly, the way `fill_world` sets up entities.
+pub fn transport_mut<G: Game>(sim: &mut Sim<G>) -> &mut crate::transport::Transport {
+    sim.authority_mut().store_mut().transport_mut()
+}
+
 pub fn run_script<G: Game>(sim: &mut Sim<G>, script: &[(Tick, Record<G>)]) -> u64
 where
     G::Action: Clone,

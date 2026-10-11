@@ -20,6 +20,8 @@ fn params(seed: u64) -> WorldParams<RefGame> {
         max_entities: 262_144,
         max_modified_tiles: 1_048_576,
         max_action_growth: 4_096,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     }
 }
 

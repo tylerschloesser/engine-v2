@@ -32,6 +32,8 @@ fn migrate_hz_change_rescales_engine_timers() {
         max_entities: 10_000,
         max_modified_tiles: 10_000,
         max_action_growth: 100,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     let mut out = Vec::new();
     sim.step(

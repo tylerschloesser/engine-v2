@@ -145,6 +145,8 @@ fn params(seed: u64) -> WorldParams<RGame> {
         max_entities: 64,
         max_modified_tiles: 64,
         max_action_growth: 64,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     }
 }
 

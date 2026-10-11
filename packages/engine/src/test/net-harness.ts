@@ -508,6 +508,12 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
       ...(opts.world?.params?.maxActionGrowth !== undefined
         ? { maxActionGrowth: opts.world.params.maxActionGrowth }
         : {}),
+      ...(opts.world?.params?.maxLines !== undefined
+        ? { maxLines: opts.world.params.maxLines }
+        : {}),
+      ...(opts.world?.params?.maxItems !== undefined
+        ? { maxItems: opts.world.params.maxItems }
+        : {}),
     },
     ...(opts.world?.joinKey !== undefined ? { joinKey: opts.world.joinKey } : {}),
     ...(opts.world?.maxPlayers !== undefined ? { maxPlayers: opts.world.maxPlayers } : {}),

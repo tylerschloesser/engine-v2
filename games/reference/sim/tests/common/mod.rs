@@ -40,6 +40,8 @@ impl RefScenario {
                 max_entities: 262_144,
                 max_modified_tiles: 1_048_576,
                 max_action_growth: 4_096,
+                max_lines: engine::transport::DEFAULT_MAX_LINES,
+                max_items: engine::transport::DEFAULT_MAX_ITEMS,
             }),
             out: Vec::new(),
             seqs: std::collections::BTreeMap::new(),

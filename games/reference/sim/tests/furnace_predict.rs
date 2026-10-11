@@ -168,6 +168,8 @@ fn world_with_b(
         max_entities: 4096,
         max_modified_tiles: 4096,
         max_action_growth: 4096,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     let (idx, who) = add_client(&mut lb, delay);
     let b = add_client(&mut lb, delay);

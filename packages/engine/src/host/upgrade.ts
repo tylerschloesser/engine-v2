@@ -84,7 +84,11 @@ export type UpgradeCandidateResult =
   | { kind: 'ok'; outcome: 'direct-or-same'; logSegment: number; logOffset: number }
   | { kind: 'ok'; outcome: 'migrated'; logSegment: number; logOffset: number }
   | { kind: 'incompatible'; reason: IncompatReasonName }
-  | { kind: 'unusable' } // `Status.Corrupt`/`ContainerVersion`/a torn envelope: try an older candidate.
+  /** 0079 §6 (M42): the snapshot's container version is not this build's (`Status.ContainerVersion`
+   * from `sim_upgrade_push`): the whole save predates (or postdates) this layout, so it is refused,
+   * never fallen back from. */
+  | { kind: 'container' }
+  | { kind: 'unusable' } // `Status.Corrupt`/a torn envelope: try an older candidate.
 
 export function runUpgradeCandidate(
   inst: EngineInstance,
@@ -99,6 +103,10 @@ export function runUpgradeCandidate(
       const n = Math.min(region.len, bytes.length - off)
       region.u8.set(bytes.subarray(off, off + n), 0)
       const pushStatus = inst.call1(inst.x.sim_upgrade_push, n)
+      if (pushStatus === Status.ContainerVersion) {
+        inst.call0(inst.x.sim_upgrade_end)
+        return { kind: 'container' }
+      }
       if (pushStatus !== Status.Ok) {
         pushesOk = false
         break

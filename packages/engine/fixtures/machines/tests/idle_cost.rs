@@ -16,6 +16,8 @@ fn idle_world_visits_zero_entities() {
         max_entities: 20_000,
         max_modified_tiles: 20_000,
         max_action_growth: 4096,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     fill_world(&mut sim, 10_000, 0);
     assert_eq!(sim.authority().store().entity_count(), 10_000);

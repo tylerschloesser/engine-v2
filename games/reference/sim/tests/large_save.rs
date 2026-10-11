@@ -31,6 +31,8 @@ fn params(seed: u64, scale: u32) -> WorldParams<RefGame> {
         max_entities: DEFAULT_MAX_ENTITIES / scale,
         max_modified_tiles: DEFAULT_MAX_MODIFIED_TILES / scale,
         max_action_growth: DEFAULT_MAX_ACTION_GROWTH,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     }
 }
 

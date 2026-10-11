@@ -396,7 +396,13 @@ export async function setup(shell: Shell, message: SetupMessage): Promise<LoopSt
       // broad `'load-failed'` bucket above into its own `'save-incompatible'` code (Traps: "other
       // open failures stay 'load-failed'") -- both keep this same degraded-worker fallback
       // (`exportWorld`/`deleteWorld` still reachable), only the reported code/detail differ.
-      if (e instanceof WorldLoadError && e.kind === 'incompatible' && e.reason !== undefined) {
+      // 0079 §6 (M42): a container-version mismatch (`kind 'container'`, reason `Container`) is
+      // reported the same way.
+      if (
+        e instanceof WorldLoadError &&
+        (e.kind === 'incompatible' || e.kind === 'container') &&
+        e.reason !== undefined
+      ) {
         shell.post({
           type: 'start-failed',
           code: 'save-incompatible',

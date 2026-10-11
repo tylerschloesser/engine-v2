@@ -1,7 +1,7 @@
 //! `Sim<G>` (M12b Scope): the host driver. `genesis` builds
 //! a fresh world and runs `Game::genesis` once at tick 0; `step` runs one frame's recorded inputs
 //! in 0004 order (`on_player`, or `apply` then the host's per-player `last_seq = seq`), then
-//! `Game::tick`, then advances the tick.
+//! `Game::tick`, then the transport `advance` (M42, 0076 §2), then advances the tick.
 //!
 //! `timers`/`wake`/`active` (M21b: the timer wheel, wake
 //! queue and per-system active lists `Store` holds as sim state (0007 §7); `Authority`/`TickCx`
@@ -35,6 +35,10 @@ pub struct WorldParams<G: Game> {
     pub max_entities: u32,
     pub max_modified_tiles: u32,
     pub max_action_growth: u32,
+    /// M42 (0076 §8): the transport line cap (default `transport::DEFAULT_MAX_LINES`, 32,768).
+    pub max_lines: u32,
+    /// M42 (0076 §8): the transport item cap (default `transport::DEFAULT_MAX_ITEMS`, 262,144).
+    pub max_items: u32,
 }
 
 // Bounded on the worldgen params' own `Clone` (mirrors `Record<G>`'s manual `Clone` above):
@@ -52,6 +56,8 @@ where
             max_entities: self.max_entities,
             max_modified_tiles: self.max_modified_tiles,
             max_action_growth: self.max_action_growth,
+            max_lines: self.max_lines,
+            max_items: self.max_items,
         }
     }
 }
@@ -162,7 +168,14 @@ impl<G: Game> Sim<G> {
         let source: Box<dyn PristineSource> =
             Box::new(Pristine::<G::Worldgen>::new(params.seed, params.worldgen));
         let terrain = TerrainStore::new(dims, source, CacheCapacity::Chunks(DEFAULT_CACHE_CHUNKS));
-        let mut authority = Authority::new(terrain, G::Global::default(), params.seed);
+        // M42 (0076 §8, 0079 §5): the transport arena is reserved once, at the world's caps.
+        let mut authority = Authority::with_transport_caps(
+            terrain,
+            G::Global::default(),
+            params.seed,
+            params.max_lines,
+            params.max_items,
+        );
         authority.set_budget(
             params.max_entities,
             params.max_modified_tiles,
@@ -177,7 +190,8 @@ impl<G: Game> Sim<G> {
     }
 
     /// Runs `records` in host arrival order (0004: `on_player`, or `apply` then the host's
-    /// per-player `last_seq = seq`), then `Game::tick`, then advances the tick. A rejecting
+    /// per-player `last_seq = seq`), then `Game::tick`, then the transport `advance`, then advances
+    /// the tick. A rejecting
     /// `apply` that recorded a write panics (0004 Consequences: "the host asserts that a rejecting
     /// `apply` recorded no writes").
     pub fn step(&mut self, records: &[Record<G>], out: &mut Vec<Outcome<G>>) {
@@ -201,6 +215,9 @@ impl<G: Game> Sim<G> {
     ) {
         use crate::persist::Phase;
         out.clear();
+        // M42 review: a native caller that caught a panic out of an earlier `G::tick` must not
+        // leave `apply` with tick-only access.
+        self.authority.set_in_tick(false);
         for (i, record) in records.iter().enumerate() {
             match record {
                 Record::Player { who, ev } => {
@@ -265,11 +282,19 @@ impl<G: Game> Sim<G> {
         on_phase(Phase::Tick, 0);
         self.authority.begin_tick();
         mark(Bp::BeginTick);
+        self.authority.set_in_tick(true);
         {
             let mut cx = TickCx::new(&mut self.authority);
             G::tick(&mut cx);
         }
+        self.authority.set_in_tick(false);
         mark(Bp::GameTick);
+        // M42 (0076 §2; Planning decisions "`advance` after `G::tick`"): every transport line moves
+        // once, after the game's inserts of this tick and before the wake queue's fixed point. Its
+        // own progress phase, so a trap inside it is not blamed on `G::tick`.
+        on_phase(Phase::Advance, 0);
+        self.authority.advance_transport();
+        mark(Bp::Transport);
         self.authority.end_tick();
         self.authority.advance_tick();
         mark(Bp::EndTick);

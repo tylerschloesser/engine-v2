@@ -31,6 +31,7 @@ pub mod store;
 #[cfg(feature = "testing")]
 pub mod testing;
 pub mod time;
+pub mod transport;
 pub mod view;
 pub mod wire;
 pub mod world;

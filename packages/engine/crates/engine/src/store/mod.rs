@@ -23,6 +23,16 @@
 //! next to the timer wheel it drives (Deviations records this placement choice). A client replica's
 //! own `Store` never receives any of the three (they are never sent as deltas), so it always
 //! encodes/decodes as empty there -- only a host-side full snapshot (M22) round-trips real content.
+//!
+//! M42 (0076 §1, §7) adds the transport store (`crate::transport::Transport`) last of all, after
+//! the wake queue: the newest sim state goes at the end, and 0005 "Snapshot" predates it. It is the
+//! one part of `Store` not mutated through [`Store::apply`] (0076 §7): `Transport::advance` and the
+//! host-tick surgery API mutate it directly. [`Store::encode`] always writes it; the state hash
+//! writes it only once the store is not pristine (a line was ever created,
+//! `Transport::is_pristine`), so every world that never uses transport keeps its pre-M42 hash and
+//! every golden hash of such a world stays valid. `Store::new` holds an empty transport with no
+//! arena; [`Store::set_transport_caps`] reserves it from the world params (`max_lines`,
+//! `max_items`, 0076 §8) when a host world is created or restored.
 
 mod index;
 
@@ -37,6 +47,7 @@ use crate::sim::active::ActiveLists;
 use crate::sim::timers::TimerWheel;
 use crate::sim::wake::WakeQueue;
 use crate::time::Tick;
+use crate::transport::Transport;
 use crate::world::{
     ChunkCoord, ChunkDims, Footprint, Registry, SystemId, TerrainStore, TilePos, TileRect,
 };
@@ -123,6 +134,8 @@ pub struct Store<G: Game> {
     wake: WakeQueue,
     /// M21b (0007 §7): per-system active lists. Sim state, encoded in system then insertion order.
     active: ActiveLists,
+    /// M42 (0076 §1, §7): transport lines. Sim state, encoded last (module doc comment).
+    transport: Transport,
 }
 
 /// Length-prefixed `Codec` value: a varint byte count, then the value's canonical bytes. Lets
@@ -163,7 +176,35 @@ impl<G: Game> Store<G> {
             timers: TimerWheel::new(),
             wake: WakeQueue::new(),
             active: ActiveLists::new(),
+            transport: Transport::empty(),
         }
+    }
+
+    /// Reserves the transport arena from the world params (0076 §8), once (0079 §5): `Authority`'s
+    /// constructors that take the caps call it. Setup only, never on a tick path.
+    pub(crate) fn set_transport_caps(
+        &mut self,
+        max_lines: u32,
+        max_items: u32,
+    ) -> Result<(), crate::transport::TransportError> {
+        self.transport.set_caps(max_lines, max_items)
+    }
+
+    /// `crate::migrate`'s engine-owned carry (M42): replaces the (unreserved) transport store with
+    /// the old world's; the caller reserves it at the world's caps afterwards.
+    pub(crate) fn carry_transport(&mut self, t: Transport) {
+        self.transport = t;
+    }
+
+    /// The transport store's read side (`WorldRead::transport`).
+    pub fn transport(&self) -> &Transport {
+        &self.transport
+    }
+
+    /// The transport store's write side: `TickCx`, `genesis` and `migrate` (0076 §6), and
+    /// `Sim::step`'s `advance`.
+    pub(crate) fn transport_mut(&mut self) -> &mut Transport {
+        &mut self.transport
     }
 
     /// The only mutator of replicated state, on both sides of the wire (0011). Idempotent:
@@ -616,8 +657,8 @@ impl<G: Game> Store<G> {
 
     /// Canonical bytes: see the module doc comment for the field order. Shared by [`Store::encode`]
     /// and [`StateHash::hash_state`] (hashing is encoding into a sink that has no buffer,
-    /// `crate::hash`).
-    fn write_canonical(&self, sink: &mut impl ByteSink) {
+    /// `crate::hash`). `for_hash` drops a pristine transport section (module doc comment).
+    fn write_canonical(&self, sink: &mut impl ByteSink, for_hash: bool) {
         sink.put_u32(self.players.len() as u32);
         for (who, slot) in &self.players {
             sink.put_u32(who.0);
@@ -644,10 +685,15 @@ impl<G: Game> Store<G> {
         self.active.write_canonical(sink);
         self.timers.write_canonical(sink);
         self.wake.write_canonical(sink);
+
+        // M42: the transport store, last (module doc comment).
+        if !(for_hash && self.transport.is_pristine()) {
+            self.transport.write_canonical(sink);
+        }
     }
 
     pub fn encode(&self, sink: &mut impl ByteSink) {
-        self.write_canonical(sink);
+        self.write_canonical(sink, false);
     }
 
     /// Replaces every field from canonical bytes written by [`Store::encode`]. `self.terrain` is
@@ -687,6 +733,15 @@ impl<G: Game> Store<G> {
         let active = ActiveLists::decode(reader)?;
         let timers = TimerWheel::decode(reader)?;
         let wake = WakeQueue::decode(reader)?;
+        // Decoded aside first, like every field above: `self` is untouched on `Err`.
+        let mut transport = Transport::empty();
+        transport.read_canonical(reader)?;
+        if self.transport.is_reserved() {
+            // This store's arena was reserved: the decoded one keeps its caps.
+            transport
+                .set_caps(self.transport.max_lines(), self.transport.max_items())
+                .map_err(|_| CodecError::Malformed)?;
+        }
 
         self.players = players;
         self.next_entity_id = next_entity_id;
@@ -695,6 +750,7 @@ impl<G: Game> Store<G> {
         self.active = active;
         self.timers = timers;
         self.wake = wake;
+        self.transport = transport;
         // 0007 §5 "rebuilt on load": a decoded `Store` must never be observed with a stale or
         // absent `ChunkIndex` (M21 Provides "rebuilt by
         // Store::rebuild_indexes() after decode").
@@ -712,7 +768,7 @@ impl<G: Game> Store<G> {
 
 impl<G: Game> StateHash for Store<G> {
     fn hash_state(&self, h: &mut Fnv64) {
-        self.write_canonical(h);
+        self.write_canonical(h, true);
     }
 }
 

@@ -185,6 +185,14 @@ fn default_max_modified_tiles() -> u32 {
 fn default_max_action_growth() -> u32 {
     4_096
 }
+/// 0076 §8 (M42): `WorldConfig.params.maxLines`'s default.
+fn default_max_lines() -> u32 {
+    crate::transport::DEFAULT_MAX_LINES
+}
+/// 0076 §8 (M42): `WorldConfig.params.maxItems`'s default.
+fn default_max_items() -> u32 {
+    crate::transport::DEFAULT_MAX_ITEMS
+}
 /// 0007 §8's host cache budget default (1,024 chunks = 4 MiB at the default 32x32 chunk size);
 /// mirrors `Sim::genesis`'s own private `DEFAULT_CACHE_CHUNKS` (`crate::sim`), which is what
 /// actually governs `TerrainStore` capacity today -- see the module doc comment on `cache_chunks`
@@ -261,6 +269,12 @@ struct SimConfig<P> {
     max_modified_tiles: u32,
     #[serde(default = "default_max_action_growth")]
     max_action_growth: u32,
+    /// M42 (0076 §8): the transport line and item caps; the transport arena is reserved from them
+    /// at world creation.
+    #[serde(default = "default_max_lines")]
+    max_lines: u32,
+    #[serde(default = "default_max_items")]
+    max_items: u32,
     /// Parsed and held on [`Host`] for M15's connection/warmer wiring, but **not yet wired to
     /// `TerrainStore` capacity**: `Sim::genesis`'s own signature is fixed by M12b's Provides and
     /// takes no cache-size parameter, so this field is inert today (M13 Deviations records this as a known gap, not a silent drop).
@@ -619,9 +633,9 @@ pub struct Host<G: Game> {
     restore_done: Option<crate::persist::SnapshotInfo>,
     /// The state-budget fields [`Host::sim_restore_begin`] took out of `pending` (`WorldParams`
     /// carries no `Clone` bound on `worldgen`, so building the restore shell moves the whole value
-    /// out of `pending`; these three plain `u32`s are kept aside for [`Host::sim_restore_end`] to
+    /// out of `pending`; these plain `u32`s (M42: plus the transport caps) are kept aside for [`Host::sim_restore_end`] to
     /// apply via `Authority::set_budget`, the same way `Sim::genesis` does).
-    restore_budget: Option<(u32, u32, u32)>,
+    restore_budget: Option<(u32, u32, u32, u32, u32)>,
     /// M24b step 4: the in-progress envelope decode
     /// [`Host::sim_upgrade_begin`] started, fed by [`Host::sim_upgrade_push`]; `None` when no
     /// upgrade is in flight.
@@ -2832,9 +2846,13 @@ where
         let cache_bytes = cfg.cache_chunks as u64 * dims.slab_bytes() as u64;
         let entity_bytes = cfg.max_entities as u64 * size_of::<G::Entity>() as u64;
         let overlay_bytes = cfg.max_modified_tiles as u64 * OVERLAY_ENTRY_ESTIMATE_BYTES;
+        // M42 (0079 §5): the transport arena `Sim::genesis` reserves at the world's caps.
+        let transport_bytes =
+            crate::transport::Transport::reserved_bytes(cfg.max_lines, cfg.max_items);
         let computed = cache_bytes
             + entity_bytes
             + overlay_bytes
+            + transport_bytes
             + CHUNK_INDEX_ESTIMATE_BYTES
             + SLACK_ESTIMATE_BYTES;
         if computed > cfg.world_budget_bytes as u64 {
@@ -2861,6 +2879,8 @@ where
                 max_entities: cfg.max_entities,
                 max_modified_tiles: cfg.max_modified_tiles,
                 max_action_growth: cfg.max_action_growth,
+                max_lines: cfg.max_lines,
+                max_items: cfg.max_items,
             }),
             cache_chunks: cfg.cache_chunks,
             sim: None,
@@ -3312,6 +3332,8 @@ where
             max_entities,
             max_modified_tiles,
             max_action_growth,
+            max_lines,
+            max_items,
         }) = self.pending.take()
         else {
             return Status::AlreadyInitialised;
@@ -3319,7 +3341,13 @@ where
         let shell = restore_shell::<G>(seed, worldgen);
         self.restore_reader = Some(crate::persist::SnapshotReader::new(shell));
         self.restore_done = None;
-        self.restore_budget = Some((max_entities, max_modified_tiles, max_action_growth));
+        self.restore_budget = Some((
+            max_entities,
+            max_modified_tiles,
+            max_action_growth,
+            max_lines,
+            max_items,
+        ));
         Status::Ok
     }
 
@@ -3356,12 +3384,15 @@ where
             return Status::IdentityMismatch;
         }
         let store = reader.into_store();
-        let mut authority = crate::authority::Authority::from_snapshot(store, info.rng, info.tick);
-        if let Some((max_entities, max_modified_tiles, max_action_growth)) =
+        let Some((max_entities, max_modified_tiles, max_action_growth, max_lines, max_items)) =
             self.restore_budget.take()
-        {
-            authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
-        }
+        else {
+            return Status::NotInitialised;
+        };
+        let mut authority = crate::authority::Authority::from_snapshot_with_caps(
+            store, info.rng, info.tick, max_lines, max_items,
+        );
+        authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
         self.sim = Some(Sim::from_parts(authority));
         self.last_logged_tick = Tick(info.log_ref_tick);
         let Some(out) = result.get_mut(..8) else {
@@ -3428,6 +3459,8 @@ where
             max_entities,
             max_modified_tiles,
             max_action_growth,
+            max_lines,
+            max_items,
         } = pending;
         let running = self.identity();
         match env.identity.compare(&running) {
@@ -3437,8 +3470,9 @@ where
                 if store.decode(&mut reader).is_err() {
                     return Status::Corrupt;
                 }
-                let mut authority =
-                    crate::authority::Authority::from_snapshot(store, env.rng, env.tick);
+                let mut authority = crate::authority::Authority::from_snapshot_with_caps(
+                    store, env.rng, env.tick, max_lines, max_items,
+                );
                 authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
                 self.sim = Some(Sim::from_parts(authority));
                 self.last_logged_tick = Tick(env.log_ref_tick);
@@ -3481,7 +3515,9 @@ where
                         );
                     }
                 };
-                match crate::migrate::migrate::<G>(old, terrain, env.tick, env.rng) {
+                match crate::migrate::migrate_with_caps::<G>(
+                    old, terrain, env.tick, env.rng, max_lines, max_items,
+                ) {
                     Ok((mut authority, _outcome)) => {
                         authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
                         self.sim = Some(Sim::from_parts(authority));
@@ -3973,6 +4009,9 @@ mod default_tests {
         assert_eq!(cfg.max_entities, 262_144);
         assert_eq!(cfg.max_modified_tiles, 1_048_576);
         assert_eq!(cfg.max_action_growth, 4096, "4 KiB");
+        // 0076 §8 (M42): the transport caps.
+        assert_eq!(cfg.max_lines, 32_768);
+        assert_eq!(cfg.max_items, 262_144);
         assert_eq!(cfg.cache_chunks, 1024);
         // 0010 (spec client R3): 256 tiles per axis, about 144 subscribed chunks per client.
         assert_eq!(cfg.view_max_tiles_per_axis, 256);

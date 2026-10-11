@@ -19,6 +19,8 @@ fn genesis(
         max_entities,
         max_modified_tiles,
         max_action_growth,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     })
 }
 

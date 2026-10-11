@@ -4,7 +4,7 @@
 // brief's own instruction -- never a hand-built container.
 import { describe, expect, test } from 'vitest'
 import { RegionId, Role, Status } from '../../src/abi.js'
-import { Persistence } from '../../src/host/persistence.js'
+import { Persistence, WorldLoadError } from '../../src/host/persistence.js'
 import type { EngineInstance } from '../../src/loader.js'
 import { instantiate } from '../../src/loader.js'
 import {
@@ -365,6 +365,54 @@ describe('Persistence.open (fx-persist, real pipeline)', () => {
     // No usable snapshot survives (the only one is skipped): falls back to a genesis replay of
     // segment 0's own (also-truncated-to-nothing) log, resuming at tick 0.
     expect(tick).toBe(0)
+  })
+
+  // 0079 §6 (M42): a snapshot written under container version 1 (before the transport section) is
+  // refused with kind 'container', reason 'Container', and no stored byte changes: no fallback to an
+  // older snapshot or to a genesis replay of segment 0.
+  test('old_container_version_is_refused_and_nothing_is_rewritten', async () => {
+    const storage = memoryStorage()
+    const inst = instantiate(await wasm(), Role.Sim, buildSimInstanceConfig(CFG))
+    const persistence = Persistence.create(storage, CFG, inst)
+    const timer = manualTimer()
+    const host = createSimHostFromInstance(
+      wrapEngineInstance(inst),
+      { clock: { now: () => 0 }, timer: timer.services },
+      persistence,
+    )
+    expect(inst.call1(inst.x.sim_connect, 0)).toBe(Status.Ok)
+    host.stepTick(1)
+    persistence.snapshotNow()
+    await persistence.flush()
+
+    const keys = worldKeys(CFG.worldId)
+    const snapKey = keys.snap(1)
+    const snap = await storage.read(snapKey)
+    if (!snap) throw new Error('expected a snapshot at tick 1')
+    // magic(4), then container_version u16 LE
+    expect(new DataView(snap.buffer, snap.byteOffset).getUint16(4, true)).toBe(2)
+    const old = snap.slice()
+    old[4] = 1
+    old[5] = 0
+    await storage.write(snapKey, old)
+
+    const before = new Map<string, string>()
+    for (const k of (await storage.list('')).sort()) {
+      before.set(k, Buffer.from((await storage.read(k)) ?? []).toString('hex'))
+    }
+    const ni = await makeNewInstance()
+    const err = await Persistence.open(storage, CFG, ni).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(WorldLoadError)
+    expect((err as WorldLoadError).kind).toBe('container')
+    expect((err as WorldLoadError).reason).toBe('Container')
+    const after = new Map<string, string>()
+    for (const k of (await storage.list('')).sort()) {
+      after.set(k, Buffer.from((await storage.read(k)) ?? []).toString('hex'))
+    }
+    expect(after).toEqual(before)
   })
 
   test('resend_after_recovery_not_applied_twice', async () => {

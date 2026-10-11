@@ -18,6 +18,8 @@ fn new_sim(seed: u64, max_entities: u32) -> Sim<Machines> {
         max_entities,
         max_modified_tiles: 4096,
         max_action_growth: 4096,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     })
 }
 

@@ -30,6 +30,8 @@ fn params() -> WorldParams<Persist> {
         max_entities: 64,
         max_modified_tiles: 64,
         max_action_growth: 64,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     }
 }
 
@@ -189,6 +191,7 @@ fn check(idle_before_snapshot: u32) {
             tick: info.tick,
             rng: info.rng,
             log_ref_tick: info.log_ref_tick,
+            caps: engine::testing::replay::WorldCaps::of(&params()),
         })),
         tail,
         &after,

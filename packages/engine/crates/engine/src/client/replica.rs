@@ -528,6 +528,11 @@ impl<G: Game> WorldRead<G> for Replica<G> {
         self.tick
     }
 
+    /// Empty until M46 replicates line structures (0078): every line is `Unknown`.
+    fn transport(&self) -> &dyn crate::transport::TransportRead {
+        self.store.transport()
+    }
+
     fn tile(&self, p: TilePos) -> Result<Tile, Unknown> {
         // A field branch, no allocation: an unconfigured terrain has no pristine function to
         // answer with, and a default tile would be a guess (`.claude/rules/prediction.md`).

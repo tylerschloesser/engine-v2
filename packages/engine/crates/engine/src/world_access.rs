@@ -15,6 +15,7 @@ use crate::predict::Overlay;
 use crate::rng::SimRng;
 use crate::store::Store;
 use crate::time::Tick;
+use crate::transport::{NoTransport, TransportRead, TransportWrite};
 use crate::world::{ChunkCoord, ChunkDims, Registry, Tile, TilePos, TileRect, TraitSet};
 
 /// `tile >> CHUNK_BITS` for `G` (0007 §2-3): shared by every `WorldRead`/`WorldWrite` implementor
@@ -53,6 +54,12 @@ pub trait WorldRead<G: Game> {
         rect: TileRect,
         f: &mut dyn FnMut(EntityId, &G::Entity),
     ) -> Result<(), Unknown>;
+    /// The transport store's read side (0076 §1, M42). The host's is total; a client replica's is
+    /// empty until M46 (every line `Unknown`). A default that holds no lines, for contexts with no
+    /// transport state (test fakes).
+    fn transport(&self) -> &dyn TransportRead {
+        &NoTransport
+    }
 }
 
 /// Every chunk `rect` touches, under `dims`: shared by every `WorldRead::entities_in` implementor
@@ -82,6 +89,13 @@ pub trait WorldWrite<G: Game>: WorldRead<G> {
     /// silently ignoring it: `apply` and prediction journal no timer pre-image (ADR 0046).
     fn wake_at(&mut self, _id: EntityId, _at: Tick) {
         panic!("WorldWrite::wake_at is callable from Game::genesis and Game::tick only (ADR 0046)");
+    }
+    /// The transport store's write side, host tick only (0076 §6): `Ok` from `TickCx`,
+    /// `Game::genesis` and `Game::migrate`; `Err(Unknown)` inside `apply`/`on_player` on the host
+    /// (a debug assertion: a bug there) and under prediction (`NotPredictable`). The default is
+    /// `Err(Unknown)`.
+    fn transport_mut(&mut self) -> Result<&mut dyn TransportWrite, Unknown> {
+        Err(Unknown)
     }
 }
 
@@ -158,6 +172,10 @@ impl<'a, G: Game> View<'a, G> {
 impl<G: Game> WorldRead<G> for View<'_, G> {
     fn tick(&self) -> Tick {
         self.tick
+    }
+
+    fn transport(&self) -> &dyn TransportRead {
+        self.store.transport()
     }
 
     fn roster(&self, f: &mut dyn FnMut(PlayerId, bool)) {

@@ -13,6 +13,7 @@
 use crate::game::{EntityId, Game, PlayerId, Unknown};
 use crate::rng::SimRng;
 use crate::time::Tick;
+use crate::transport::{Item, LineId, Output, TransportRead, TransportWrite};
 use crate::world::{ChunkDims, Registry, Tile, TilePos, TileRect, TraitSet};
 use crate::world_access::{WorldRead, WorldWrite};
 
@@ -161,6 +162,10 @@ impl<'a, G: Game> WorldRead<G> for Predicting<'a, G> {
         }
         Ok(())
     }
+
+    fn transport(&self) -> &dyn TransportRead {
+        self
+    }
 }
 
 impl<'a, G: Game> WorldWrite<G> for Predicting<'a, G> {
@@ -220,6 +225,51 @@ impl<'a, G: Game> WorldWrite<G> for Predicting<'a, G> {
     fn rng(&mut self) -> Result<&mut SimRng, Unknown> {
         self.overlay.mark_unknown();
         Err(Unknown)
+    }
+    /// Host tick only (0076 §6): `Unknown` under prediction, so an action touching transport lines
+    /// is `NotPredictable`.
+    fn transport_mut(&mut self) -> Result<&mut dyn TransportWrite, Unknown> {
+        self.overlay.mark_unknown();
+        Err(Unknown)
+    }
+}
+
+/// The transport read side under prediction (M42): the replica's own (empty until M46), with every
+/// `Unknown` marked on the overlay so a handler that reads a line it cannot see declines as
+/// `NotPredictable`, the same as every other read here.
+impl<G: Game> TransportRead for Predicting<'_, G> {
+    fn lines_len(&self) -> u32 {
+        self.base.transport().lines_len()
+    }
+    fn len(&self, line: LineId) -> Result<u32, Unknown> {
+        self.taint(self.base.transport().len(line))
+    }
+    fn speed(&self, line: LineId) -> Result<u16, Unknown> {
+        self.taint(self.base.transport().speed(line))
+    }
+    fn out(&self, line: LineId) -> Result<Output, Unknown> {
+        self.taint(self.base.transport().out(line))
+    }
+    fn count(&self, line: LineId) -> Result<u32, Unknown> {
+        self.taint(self.base.transport().count(line))
+    }
+    fn front(&self, line: LineId) -> Result<Option<(Item, u32)>, Unknown> {
+        self.taint(self.base.transport().front(line))
+    }
+    fn items_in(&self, line: LineId, f: &mut dyn FnMut(Item, u32)) -> Result<(), Unknown> {
+        self.taint(self.base.transport().items_in(line, f))
+    }
+    fn sunk(&self, line: LineId) -> Result<u64, Unknown> {
+        self.taint(self.base.transport().sunk(line))
+    }
+}
+
+impl<G: Game> Predicting<'_, G> {
+    fn taint<T>(&self, r: Result<T, Unknown>) -> Result<T, Unknown> {
+        if r.is_err() {
+            self.overlay.mark_unknown();
+        }
+        r
     }
 }
 

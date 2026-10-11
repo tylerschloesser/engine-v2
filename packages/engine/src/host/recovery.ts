@@ -18,6 +18,7 @@ export const Phase = {
   BuildFrame: 5,
   Snapshot: 6,
   Replay: 7,
+  Advance: 8,
 } as const
 export type Phase = (typeof Phase)[keyof typeof Phase]
 

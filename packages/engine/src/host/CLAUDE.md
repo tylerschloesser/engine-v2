@@ -36,8 +36,8 @@ write side of 0005 Persistence. One instance per world.
   own", reusable by M24 after a trap. Each snapshot candidate's own decoded identity is compared with the running one
   by `sim_upgrade_*`, never `manifest.created` (the original identity: it would re-trigger the upgrade
   every reload); `SaveIncompatible` throws `WorldLoadError('incompatible')`, no fallback. Then tries every `snap/` key newest
-  first through `sim_restore_begin/push/end`, each candidate on a fresh `newInstance()`: a bad CRC/
-  container version, or a `logOffset` beyond its own segment's stored bytes (0005: "kept until the
+  first through `sim_restore_begin/push/end`, each candidate on a fresh `newInstance()`: a bad CRC
+  (a container-version mismatch throws `WorldLoadError('container')` instead, 0079 §6), or a `logOffset` beyond its own segment's stored bytes (0005: "kept until the
   new one verifies"), falls back to the next-older one, then to a genesis replay of segment 0 if
   none verify. Either way, `sim_replay_begin/push/end` replays the chosen tail; a torn frame is
   truncated with `storage.write` (`Storage` has no `truncate`) and reported in `truncatedBytes`.

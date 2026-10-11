@@ -23,6 +23,11 @@ export interface WorldConfig<Params = unknown> {
     maxEntities?: number
     maxModifiedTiles?: number
     maxActionGrowth?: number
+    /** 0076 §8 (M42): the transport line cap, default 32,768 (`transport::DEFAULT_MAX_LINES`).
+     * The transport arena is reserved from it and `maxItems` when the world is created. */
+    maxLines?: number
+    /** 0076 §8 (M42): the transport item cap, default 262,144 (`transport::DEFAULT_MAX_ITEMS`). */
+    maxItems?: number
   }
   joinKey?: string
   maxPlayers?: number
@@ -79,6 +84,9 @@ export function buildSimInstanceConfig(
       maxEntities: cfg.params.maxEntities,
       maxModifiedTiles: cfg.params.maxModifiedTiles,
       maxActionGrowth: cfg.params.maxActionGrowth,
+      // M42: `undefined` hits `host::SimConfig`'s serde defaults (0076 §8), like the three above.
+      maxLines: cfg.params.maxLines,
+      maxItems: cfg.params.maxItems,
       cacheChunks: cfg.cacheChunks,
       // M22 steps 4-6 (Consumes: "M13 `WorldConfig.
       // buildHash` reaching the instance through M02's `InstanceConfig` in the `engine_init`

@@ -114,6 +114,8 @@ fn genesis(seed: u64, max_entities: u32) -> Sim<SGame> {
         max_entities,
         max_modified_tiles: 1_000_000,
         max_action_growth: 4096,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     })
 }
 

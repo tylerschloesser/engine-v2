@@ -273,6 +273,9 @@ pub struct OldStore {
     wake_next: Vec<EntityId>,
     /// Engine-only: one `Vec` per system (`SystemId::MAX` of them), each in insertion order.
     active: Vec<Vec<EntityId>>,
+    /// Engine-only (M42): the transport store, game-type-free, carried whole into the migrated
+    /// world before `Game::migrate` runs (which may then edit it through `transport_mut`).
+    transport: Option<crate::transport::Transport>,
 }
 
 impl OldStore {
@@ -384,6 +387,11 @@ impl OldStore {
             wake_next.push(EntityId(reader.u32()?));
         }
 
+        // Transport store (`Transport::write_canonical`, M42): always present in a container-version-2
+        // snapshot (version 1 is refused before this runs, `persist::snapshot`).
+        let mut transport = crate::transport::Transport::empty();
+        transport.read_canonical(reader)?;
+
         Ok(OldStore {
             schema,
             old_hz,
@@ -399,6 +407,7 @@ impl OldStore {
             timers,
             wake_next,
             active,
+            transport: Some(transport),
         })
     }
 
@@ -561,6 +570,10 @@ impl<G: Game> WorldRead<G> for Migrating<'_, G> {
     ) -> Result<(), Unknown> {
         self.authority.entities_in(rect, f)
     }
+
+    fn transport(&self) -> &dyn crate::transport::TransportRead {
+        self.authority.store().transport()
+    }
 }
 
 impl<G: Game> WorldWrite<G> for Migrating<'_, G> {
@@ -607,6 +620,10 @@ impl<G: Game> WorldWrite<G> for Migrating<'_, G> {
         // fully-qualified call below is required so this reaches `WorldWrite::rng` instead.
         <Authority<G> as WorldWrite<G>>::rng(self.authority)
     }
+    /// `Ok`: `Game::migrate` may rebuild lines (0076 §6).
+    fn transport_mut(&mut self) -> Result<&mut dyn crate::transport::TransportWrite, Unknown> {
+        Ok(self.authority.store_mut().transport_mut())
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -639,10 +656,33 @@ pub struct MigrationOutcome {
 /// why `OldStore` does not carry them itself). `terrain` is a fresh, empty `TerrainStore` built
 /// over the *new* build's own worldgen/params.
 pub fn migrate<G: Game>(
+    old: OldStore,
+    terrain: crate::world::TerrainStore,
+    tick: Tick,
+    rng: SimRng,
+) -> Result<(Authority<G>, MigrationOutcome), SaveIncompatible>
+where
+    G::Global: Default,
+{
+    migrate_with_caps(
+        old,
+        terrain,
+        tick,
+        rng,
+        crate::transport::DEFAULT_MAX_LINES,
+        crate::transport::DEFAULT_MAX_ITEMS,
+    )
+}
+
+/// [`migrate`] with the world's own transport caps (0079 §5): the host's upgrade path reserves the
+/// arena once, at the world's size.
+pub(crate) fn migrate_with_caps<G: Game>(
     mut old: OldStore,
     terrain: crate::world::TerrainStore,
     tick: Tick,
     rng: SimRng,
+    max_lines: u32,
+    max_items: u32,
 ) -> Result<(Authority<G>, MigrationOutcome), SaveIncompatible>
 where
     G::Global: Default,
@@ -653,10 +693,17 @@ where
     let carried_timers = std::mem::take(&mut old.timers);
     let carried_wake_next = std::mem::take(&mut old.wake_next);
     let carried_active = std::mem::take(&mut old.active);
+    let carried_transport = old.transport.take();
     let from_schema = old.schema();
 
-    let store = crate::store::Store::new(terrain, G::Global::default());
-    let mut authority = Authority::from_snapshot(store, rng, tick);
+    let mut store = crate::store::Store::new(terrain, G::Global::default());
+    // M42: the transport store is engine-owned and carries whole, before `Game::migrate` (which
+    // may edit it: `Migrating::transport_mut` is `Ok`). Carried into the bare store first, so
+    // `from_snapshot_with_caps`'s reservation grows this one arena instead of building a second.
+    if let Some(t) = carried_transport {
+        store.carry_transport(t);
+    }
+    let mut authority = Authority::from_snapshot_with_caps(store, rng, tick, max_lines, max_items);
 
     let mut migrating = Migrating::new(&mut authority);
     G::migrate(
@@ -883,6 +930,7 @@ mod tests {
                 timers: Vec::new(),
                 wake_next: Vec::new(),
                 active: (0..SystemId::MAX).map(|_| Vec::new()).collect(),
+                transport: None,
             }
         }
 
@@ -1078,6 +1126,7 @@ mod tests {
                 timers: Vec::new(),
                 wake_next: Vec::new(),
                 active: (0..SystemId::MAX).map(|_| Vec::new()).collect(),
+                transport: None,
             };
             let dims = ChunkDims::new(4);
             let terrain = TerrainStore::new(dims, Box::new(ZeroSource), CacheCapacity::Chunks(8));

@@ -40,6 +40,43 @@ pub struct SnapshotBase<G: Game> {
     /// of assuming the log's first tail frame is relative to `tick` (true only when the snapshot
     /// coincided with the last logged frame, false after any idle gap before it).
     pub log_ref_tick: u32,
+    /// The world's state budget and transport caps (M42 review: a restore must run with the
+    /// world's own params, not `Authority::new`'s defaults; `max_items` changes sim results).
+    pub caps: WorldCaps,
+}
+
+/// The `WorldParams` fields a snapshot does not carry (0005 Formats) but a restored sim needs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorldCaps {
+    pub max_entities: u32,
+    pub max_modified_tiles: u32,
+    pub max_action_growth: u32,
+    pub max_lines: u32,
+    pub max_items: u32,
+}
+
+impl WorldCaps {
+    pub fn of<G: Game>(p: &WorldParams<G>) -> Self {
+        WorldCaps {
+            max_entities: p.max_entities,
+            max_modified_tiles: p.max_modified_tiles,
+            max_action_growth: p.max_action_growth,
+            max_lines: p.max_lines,
+            max_items: p.max_items,
+        }
+    }
+
+    /// A restored `Authority` with these caps and budget.
+    fn restore<G: Game>(self, store: Store<G>, rng: SimRng, tick: Tick) -> Authority<G> {
+        let mut a =
+            Authority::from_snapshot_with_caps(store, rng, tick, self.max_lines, self.max_items);
+        a.set_budget(
+            self.max_entities,
+            self.max_modified_tiles,
+            self.max_action_growth,
+        );
+        a
+    }
 }
 
 /// M24 fix round 1: scans the *whole* log once, collecting
@@ -156,7 +193,7 @@ where
     let (mut sim, mut reference_tick) = match base {
         Base::Genesis(params) => (Sim::genesis(params), 0u32),
         Base::Snapshot(b) => (
-            Sim::from_parts(Authority::from_snapshot(b.store, b.rng, b.tick)),
+            Sim::from_parts(b.caps.restore(b.store, b.rng, b.tick)),
             b.log_ref_tick,
         ),
     };
@@ -280,7 +317,7 @@ where
         Err(_) => panic!("heavy mode: a snapshot this process just wrote must round-trip"),
     };
     let restored = reader.into_store();
-    let authority = Authority::from_snapshot(restored, info.rng, info.tick);
+    let authority = WorldCaps::of(params).restore(restored, info.rng, info.tick);
     *sim = Sim::from_parts(authority);
 }
 
@@ -420,6 +457,8 @@ mod tests {
             max_entities: 64,
             max_modified_tiles: 64,
             max_action_growth: 64,
+            max_lines: crate::transport::DEFAULT_MAX_LINES,
+            max_items: crate::transport::DEFAULT_MAX_ITEMS,
         }
     }
 
@@ -726,6 +765,7 @@ mod tests {
                 tick: info.tick,
                 rng: info.rng,
                 log_ref_tick: info.log_ref_tick,
+                caps: WorldCaps::of(&params()),
             })),
             &tail,
             &[Tick(5)],

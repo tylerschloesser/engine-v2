@@ -44,6 +44,8 @@ fn extract_hash_remote_players() {
         max_entities: 4096,
         max_modified_tiles: 4096,
         max_action_growth: 4096,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     for _ in 0..3 {
         let (i, _) = lb.add_client(

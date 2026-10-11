@@ -3,6 +3,8 @@
 Status: not started · After: 42b · Tyler-dependent: no
 
 ## Goal
+(Revised 2026-10-11: `insert_at`/`remove_at` landed in M42 ([0079](../decisions/0079-transport-core-decisions.md) §7); this milestone keeps `front` and the surgery, and its edit-while-running goldens exercise the two primitives through `fx-belts` requests.)
+
 Lines can be edited while items are on them, and the engine knows where a line is: `split`, `join`, `extend_front`/`extend_back`, `shrink_front`/`shrink_back`, `rescale` and `destroy` keep items and spacing; `insert_at`, `remove_at` and `front` are the inserter-shaped primitives; the game registers each line's segments and the engine derives its chunk set, anchor chunk and a tile index. Goldens pin edits during flow.
 
 ## Read first

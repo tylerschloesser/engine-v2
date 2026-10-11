@@ -40,13 +40,15 @@ pub enum Phase {
     /// The cost of one `mark` itself: a sampled furnace marks twice in a row at its start. Each
     /// sampled sub-phase includes one such cost; readings subtract it.
     Overhead = 13,
+    /// M42: the transport `advance` (`Sim::step`, after `GameTick`).
+    Transport = 14,
 }
 
 /// One timer pop in this many is timed in full.
 pub const SAMPLE_EVERY: u32 = 16;
 
 /// Number of phases, `Start` included (the host's readout has this many slots).
-pub const PHASES: usize = 14;
+pub const PHASES: usize = 15;
 
 #[cfg(not(feature = "bench-phases"))]
 #[inline(always)]

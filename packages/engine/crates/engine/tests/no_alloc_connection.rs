@@ -195,6 +195,8 @@ fn host_and_client_steady_state_no_alloc() {
         max_entities: 4096,
         max_modified_tiles: 4096,
         max_action_growth: 4096,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     let player = host.connect(0);
     let mut client = ClientCore::new(Replica::<NGame>::new(
@@ -463,6 +465,8 @@ fn pan_run(bounded: bool, window: u32) -> PanRun {
         max_entities: 65536,
         max_modified_tiles: 65536,
         max_action_growth: 65536,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     let player = host.connect(0);
     let mut client = ClientCore::new(Replica::<NGame>::new(
@@ -658,6 +662,8 @@ fn warmed_admit_host() -> (Host<NGame>, u32, [u8; 256], [u8; 4096]) {
         max_entities: 65536,
         max_modified_tiles: 65536,
         max_action_growth: 65536,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     let _player = host.connect(0);
     let mut seq = 0u32;

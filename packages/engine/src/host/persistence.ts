@@ -90,10 +90,9 @@ export interface ManifestV1 {
  * a stored world cannot simply be loaded. `identity`: reserved (M22b/M23's own placeholder;
  * superseded by `incompatible` below -- a build-hash difference alone no longer means this, since
  * M24b's upgrade path handles it). `corrupt`: every candidate snapshot (and, if segment 0 is all
- * there ever was, the log itself) failed to decode. `container`: reserved for a future container-
- * version mismatch the engine cannot even attempt (nothing raises this yet: a version mismatch on a
- * single candidate snapshot is instead treated the same as `corrupt`, falling back to an older one,
- * since a *newer* running build can still read an *older* segment's own untouched history).
+ * there ever was, the log itself) failed to decode. `container` (0079 §6, M42): a snapshot whose container version is not this
+ * build's (`Status.ContainerVersion`), reason `Container`, surfaced to the client as
+ * `save-incompatible`; no fallback to an older snapshot or a genesis replay, every byte untouched.
  * `incompatible` (M24b: the upgrade path itself concluded
  * `SaveIncompatible` (`reason` names why: `Schema`/`TickRate`/`Worldgen`/`MigrateDeclined`/
  * `Container`/`Decode` from `sim_upgrade_end`, or `ChunkSize` raised here, before any ABI call, from
@@ -569,6 +568,19 @@ export class Persistence {
           parseSnapshotIdentity(bytes),
           candidate.reason,
         )
+      }
+      if (candidate.kind === 'container') {
+        // 0079 §6 (M42): a container-version mismatch is the whole save's layout, not one bad
+        // candidate -- refused, every stored byte untouched, never a fallback to an older snapshot
+        // or a genesis replay of segment 0 (which would present a long-lived world as `recovered`
+        // at the end of its first segment).
+        let stored: IdentityJson | undefined
+        try {
+          stored = parseSnapshotIdentity(bytes)
+        } catch {
+          stored = undefined
+        }
+        throw new WorldLoadError('container', runningIdentity, stored, 'Container')
       }
       if (candidate.kind === 'unusable') {
         recovered = true

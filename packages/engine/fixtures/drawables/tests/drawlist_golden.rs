@@ -36,6 +36,8 @@ fn connected_client() -> Loopback<Drawables> {
         max_entities: 64,
         max_modified_tiles: 64,
         max_action_growth: 0,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     let (idx, _player) = lb.add_client(
         0,

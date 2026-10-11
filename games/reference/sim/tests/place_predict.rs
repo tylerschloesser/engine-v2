@@ -76,6 +76,8 @@ fn world_with_furnaces(delay: u32, items: u32) -> (Loopback<RefGame>, usize, Pla
         max_entities: 4096,
         max_modified_tiles: 4096,
         max_action_growth: 4096,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     let (idx, who) = lb.add_client(
         delay,

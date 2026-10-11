@@ -34,6 +34,8 @@ fn old_params(seed: u64) -> WorldParams<V1> {
         max_entities: 10_000,
         max_modified_tiles: 10_000,
         max_action_growth: 100,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     }
 }
 

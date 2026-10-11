@@ -18,6 +18,8 @@ fn params(seed: u64) -> WorldParams<Presence> {
         max_entities: 262_144,
         max_modified_tiles: 1_048_576,
         max_action_growth: 4_096,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     }
 }
 
@@ -122,6 +124,8 @@ fn wide_host_with_joined_player() -> Host<WideGame> {
         max_entities: 262_144,
         max_modified_tiles: 1_048_576,
         max_action_growth: 4_096,
+        max_lines: engine::transport::DEFAULT_MAX_LINES,
+        max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     host.connect(0); // PlayerId(1)
     host.tick();

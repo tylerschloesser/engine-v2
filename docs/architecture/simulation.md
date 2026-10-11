@@ -18,7 +18,7 @@ The sim is a deterministic, tick-stepped state machine. One `Game` implementatio
 `Sim<G>::step` (`sim/mod.rs`; `step_with_progress` adds a hook the host uses to write a crash-locating `Progress` cursor before each game-authored call) runs one tick over the records queued for it, in this order:
 
 1. For each `Record` in arrival order: `Record::Player` calls `G::on_player` (and then sets the engine roster bit for `Connected`/`Disconnected`); `Record::Action` runs the state-budget check, then `G::apply`, then records `last_seq = seq` for that player (`Authority::record_ack`) and pushes an `Outcome { seq, result }`.
-2. `Authority::begin_tick` (swap the wake queue's `next` into `now`; compact active-list tombstones), `G::tick(TickCx)`, `end_tick` (drop what `now` still holds), `advance_tick` (tick counter + 1).
+2. `Authority::begin_tick` (swap the wake queue's `next` into `now`; compact active-list tombstones), `G::tick(TickCx)`, the transport `advance` (every line moves once, in update order, after the game's inserts of the tick: [0076](../decisions/0076-transport-lines-engine-game-split.md) §2), `end_tick` (drop what `now` still holds), `advance_tick` (tick counter + 1).
 
 Crash location: `persist/progress.rs` `Phase`/`Progress` is a cursor the host writes before each game-authored call so a trap names the record that caused it. `bench_phase.rs` `mark` is per-phase tick timing, compiled out unless the `bench-phases` feature is on, and never feeds state.
 

@@ -43,6 +43,7 @@ const NAMES = [
   'wake_at',
   'put',
   'overhead',
+  'transport',
 ]
 
 function cameraUplink(x: number, y: number): Uint8Array {
