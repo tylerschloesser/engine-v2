@@ -16,9 +16,14 @@
 //! is the one part of `Store` not mutated through `Delta` (0076 §7): `advance` and the surgery API
 //! mutate it directly on the host.
 //!
-//! M42 scope: `create`, `set_out` (`DeadEnd`, `Next`, `Sink`; `Merge`/`Fork` are refused with
-//! [`TransportError::Unsupported`] until M44, as is `Next` into the line itself), `set_speed`,
-//! `insert_back`, and `insert_at`/`remove_at` (0076 §3's inserter primitives, `items.rs`).
+//! M42 scope: `create`, `set_out` (`DeadEnd`, `Next`, `Sink`; an output into the line itself is
+//! [`TransportError::Unsupported`]), `set_speed`, `insert_back`, and `insert_at`/`remove_at` (0076
+//! §3's inserter primitives, `items.rs`).
+//!
+//! M44 (0076 §1): `Output::Merge` (a side-load: `advance.rs` lands a crossing item at `at - o`,
+//! clamped, iff `SPACING` is clear on both sides there) and `Output::Fork` (alternation by the
+//! line's `toggle`, sim state), the update order over two-target outputs (`order.rs`) and their
+//! encoding (`codec.rs`).
 //!
 //! M43 (0076 §3-§4): line surgery (`surgery.rs`: `split`, `join`, `extend_*`, `shrink_*`,
 //! `rescale`, the full `destroy`), `take_front` (`items.rs`), and geometry (`geometry.rs`: each
@@ -67,19 +72,27 @@ impl LineId {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Item(pub u16);
 
-/// What the front of a line feeds (0076 §1). M42 runs `DeadEnd`, `Next` and `Sink`; `Merge` and
-/// `Fork` exist for the shape of the API and are refused by `set_out` until M44.
+/// What the front of a line feeds (0076 §1; `Merge` and `Fork` from M44). No output names the line
+/// itself (`Unsupported`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Output {
     DeadEnd,
     /// A plain hand-off: lane preserved, position continues (landing `target.len - overshoot`).
     Next(LineId),
-    /// A side-load onto `line` at position `at` (M44).
+    /// A side-load onto `line` at position `at` (M44): an item crossing the front with overshoot
+    /// `o` lands at `at - o`, clamped to `[0, line.len - 1]`, iff `SPACING` is clear on both sides
+    /// of that position on `line` (as `insert_at`); else it waits at position 0. The item behind a
+    /// transferred one is not held back by it. Any `at` is accepted (the clamp covers a target
+    /// shortened later).
     Merge {
         line: LineId,
         at: u32,
     },
-    /// Alternates items between `a` and `b` (M44).
+    /// Alternates items between `a` and `b` (M44): an item crossing with overshoot `o` goes to the
+    /// line's preferred target (`TransportRead::toggle`, `false` = `a`) if it has room at the
+    /// plain hand-off landing `target.len - o` (`tail + SPACING <= landing`), else to the other
+    /// on the same rule, else it waits at position 0; the toggle flips only when the item went to
+    /// the preferred side. `a != b`, both at least the feeder's `speed` long (0079 §8).
     Fork {
         a: LineId,
         b: LineId,
@@ -97,14 +110,15 @@ pub enum TransportError {
     /// No room on the line: `insert_back` would land past `len - 1`, or `insert_at` lacks
     /// `SPACING` clear on either side.
     NoRoom,
-    /// `speed` is 0 or not below `len` (0076 §1: `1 <= speed < len`), or a `Next` target shorter
-    /// than the feeder's `speed` (`set_out`, `set_speed`: a hand-off must land inside the target).
+    /// `speed` is 0 or not below `len` (0076 §1: `1 <= speed < len`), or a `Next` or `Fork`
+    /// target shorter than the feeder's `speed` (`set_out`, `set_speed`: a hand-off must land
+    /// inside the target).
     BadSpeed,
     /// The line (or an output's target) does not exist.
     NoLine,
     /// `Item(0)` ("none") cannot be placed on a line.
     BadItem,
-    /// Not in M42: a `Merge`/`Fork` output (M44) or a `Next` into the line itself.
+    /// An output naming the line itself, or a `Fork` with `a == b`.
     Unsupported,
     /// `set_caps` after the arena was reserved, with other caps (0079 §5: reserved once).
     CapsFixed,
@@ -138,6 +152,9 @@ pub trait TransportRead {
     fn items_in(&self, line: LineId, f: &mut dyn FnMut(Item, u32)) -> Result<(), Unknown>;
     /// Items this line's `Sink` has deleted so far.
     fn sunk(&self, line: LineId) -> Result<u64, Unknown>;
+    /// The line's fork toggle (M44): `true` when its `Fork` prefers `b`; `false` for any other
+    /// output.
+    fn toggle(&self, line: LineId) -> Result<bool, Unknown>;
     /// The line's registered segments front to back (M43; none until `set_segments`).
     fn segments(&self, line: LineId, f: &mut dyn FnMut(Segment)) -> Result<(), Unknown>;
     /// Where position `pos` is in the world (M43, `geometry.rs`): `None` without segments or for
@@ -203,6 +220,8 @@ pub trait TransportWrite: TransportRead {
     /// index is out of room, or the path enters more than [`MAX_LINE_TILES`] tiles. Every surgery
     /// that changes a line's `len` clears its segments; the game registers them again.
     fn set_segments(&mut self, line: LineId, segs: &[Segment]) -> Result<(), TransportError>;
+    /// Sets what the line feeds (refusals: [`TransportError`]). A changed output clears the fork
+    /// toggle; the same output again is a no-op (toggle, order and `touched` unchanged).
     fn set_out(&mut self, line: LineId, out: Output) -> Result<(), TransportError>;
     fn set_speed(&mut self, line: LineId, speed: u16) -> Result<(), TransportError>;
     /// A spawner's primitive: lands at `max(len - speed, tail + SPACING)`, refused (`NoRoom`) past
@@ -245,6 +264,9 @@ impl TransportRead for NoTransport {
         Err(Unknown)
     }
     fn sunk(&self, _line: LineId) -> Result<u64, Unknown> {
+        Err(Unknown)
+    }
+    fn toggle(&self, _line: LineId) -> Result<bool, Unknown> {
         Err(Unknown)
     }
     fn segments(&self, _line: LineId, _f: &mut dyn FnMut(Segment)) -> Result<(), Unknown> {
@@ -293,6 +315,8 @@ pub struct Transport {
     /// Slots in update order; recomputed by `advance` when `graph_dirty`.
     order: Vec<u32>,
     graph_dirty: bool,
+    /// How many times the order was recomputed (tests and tools; not state).
+    order_recomputes: u32,
     scratch: order::Scratch,
     /// The segment pool (`geometry.rs`): every line's segments, contiguous per line, compacted in
     /// place when the tail is reached. `seg_cap` records at most (`max_lines x
@@ -334,6 +358,7 @@ impl Transport {
             items: 0,
             order: Vec::new(),
             graph_dirty: false,
+            order_recomputes: 0,
             scratch: order::Scratch::default(),
             segs: Vec::new(),
             seg_cap: 0,
@@ -438,6 +463,12 @@ impl Transport {
             cur = n.next;
         }
         Ok(())
+    }
+
+    /// How many times the update order was recomputed so far (a graph change recomputes it once,
+    /// at the next `advance`; tests and tools, not state).
+    pub fn order_recomputes(&self) -> u32 {
+        self.order_recomputes
     }
 
     /// Whether [`Transport::set_caps`] has run (the arena is reserved, possibly empty at caps 0).
@@ -616,6 +647,10 @@ impl TransportRead for Transport {
         Ok(self.read_line(line)?.sunk)
     }
 
+    fn toggle(&self, line: LineId) -> Result<bool, Unknown> {
+        Ok(self.read_line(line)?.toggle)
+    }
+
     fn segments(&self, line: LineId, f: &mut dyn FnMut(Segment)) -> Result<(), Unknown> {
         let l = self.slot(line).ok_or(Unknown)?;
         for r in self.seg_slice(l) {
@@ -723,27 +758,46 @@ impl TransportWrite for Transport {
 
     fn set_out(&mut self, line: LineId, out: Output) -> Result<(), TransportError> {
         let slot = self.slot(line).ok_or(TransportError::NoLine)?;
-        let next_slot = match out {
-            Output::DeadEnd | Output::Sink => NIL,
-            Output::Next(t) => {
+        if self.lines[slot as usize].out == out {
+            // The same output again is a no-op (M44 review): a game re-applying a region's
+            // outputs must not reset its forks' toggles or recompute the order.
+            return Ok(());
+        }
+        let speed = u32::from(self.lines[slot as usize].speed);
+        // 0079 §8 (M42 review): a landing `target.len + p` with `p >= -speed` is never negative
+        // only if the target is at least one tick's travel long (`Next` and both `Fork` targets;
+        // a `Merge` landing is clamped instead).
+        let fits = |t: &Transport, s: u32| t.lines[s as usize].len >= speed;
+        let (next_slot, alt_slot) = match out {
+            Output::DeadEnd | Output::Sink => (NIL, NIL),
+            Output::Next(t) | Output::Merge { line: t, .. } => {
                 if t == line {
                     return Err(TransportError::Unsupported);
                 }
                 let ts = self.slot(t).ok_or(TransportError::NoLine)?;
-                // 0079 (M42 review): a landing `target.len + p` with `p >= -speed` is never
-                // negative only if the target is at least one tick's travel long.
-                if self.lines[ts as usize].len < u32::from(self.lines[slot as usize].speed) {
+                if matches!(out, Output::Next(_)) && !fits(self, ts) {
                     return Err(BadSpeed);
                 }
-                ts
+                (ts, NIL)
             }
-            Output::Merge { .. } | Output::Fork { .. } => {
-                return Err(TransportError::Unsupported);
+            Output::Fork { a, b } => {
+                if a == line || b == line || a == b {
+                    return Err(TransportError::Unsupported);
+                }
+                let sa = self.slot(a).ok_or(TransportError::NoLine)?;
+                let sb = self.slot(b).ok_or(TransportError::NoLine)?;
+                if !fits(self, sa) || !fits(self, sb) {
+                    return Err(BadSpeed);
+                }
+                (sa, sb)
             }
         };
         let rec = &mut self.lines[slot as usize];
         rec.out = out;
         rec.next_slot = next_slot;
+        rec.alt_slot = alt_slot;
+        // A changed output starts preferring `a` (the toggle is only ever set on a fork).
+        rec.toggle = false;
         rec.jam_valid = false;
         self.graph_dirty = true;
         self.touch(slot);
@@ -756,8 +810,12 @@ impl TransportWrite for Transport {
         if speed == 0 || u32::from(speed) >= rec.len {
             return Err(BadSpeed);
         }
-        // The hand-off bound (`set_out`): a `Next` target at least `speed` long.
-        if rec.next_slot != NIL && self.lines[rec.next_slot as usize].len < u32::from(speed) {
+        // The hand-off bound (`set_out`): `Next` and `Fork` targets at least `speed` long.
+        if rec
+            .bound_targets()
+            .iter()
+            .any(|&s| s != NIL && self.lines[s as usize].len < u32::from(speed))
+        {
             return Err(BadSpeed);
         }
         self.lines[slot as usize].speed = speed;

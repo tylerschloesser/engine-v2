@@ -14,11 +14,37 @@
 //! A line whose `len` changes loses its segments and their tile-index entries (`sum(len) == len`
 //! would no longer hold, and a cut cannot split an arc exactly); the game registers the new path
 //! with `set_segments`. Feeder lookups scan every line (no reverse links): O(lines), rare.
+//!
+//! Redirects (M44): a line whose output names a destroyed, split or joined-away line follows it.
+//! `destroy`: `Next` and `Merge` into it become `DeadEnd`, a `Fork` with it as one target becomes
+//! `Next(the other)` (its toggle cleared). `split(line, at)`: `Next` and `Fork` targets move to the
+//! new back part; a `Merge` moves there (at `at_m - at`) only if its entry point `at_m >= at`,
+//! else it stays on the front part. `join(front, back)`: everything naming `back` names `front`, a
+//! `Merge` at `at_m + front.len`; a `Fork` left with both targets `front` becomes `Next(front)`.
+//! A merge's entry point also follows the positions of its target (M44 review): `extend_front`
+//! adds `by`, `shrink_front` subtracts it (an entry point that falls off the front, `at < by`,
+//! becomes `DeadEnd`, like a destroyed target), `rescale` maps it to `floor(at x new / old)`;
+//! `extend_back`/`shrink_back` leave it (positions from the front do not change).
 
 use super::line::{Line, NIL, Run};
 use super::{Item, LineId, MAX_LEN, Output, SPACING, Transport, TransportError};
 
 const SP: i64 = SPACING as i64;
+
+/// What happened to the line a redirect follows (module doc).
+#[derive(Clone, Copy)]
+enum Redirect {
+    /// Destroyed.
+    Gone,
+    /// Split: positions `>= at` are now the back part `back` (slot `slot`) at `pos - at`.
+    Split { back: LineId, slot: u32, at: u32 },
+    /// Joined behind `front` (slot `slot`): positions now `pos + offset` on it.
+    Join {
+        front: LineId,
+        slot: u32,
+        offset: u32,
+    },
+}
 
 impl Transport {
     /// 0079 §11: surgery never sees items landed across a cut (they exist only inside `advance`).
@@ -30,11 +56,12 @@ impl Transport {
         );
     }
 
-    /// Whether every line feeding slot `l` (`Next(l)`) moves at most `len` per tick (0079 §8).
+    /// Whether every line feeding slot `l` by `Next` or `Fork` moves at most `len` per tick (0079
+    /// §8; a `Merge` landing is clamped).
     fn feeders_fit(&self, l: u32, len: u64) -> bool {
         self.index.iter().all(|&(_, s)| {
             let rec = &self.lines[s as usize];
-            rec.next_slot != l || u64::from(rec.speed) <= len
+            !rec.bound_targets().contains(&l) || u64::from(rec.speed) <= len
         })
     }
 
@@ -49,29 +76,118 @@ impl Transport {
         Ok(())
     }
 
-    /// Points every `Next(from)` at `to` (slot `to_slot`); `DeadEnd` when `to` is `None`. Each
-    /// changed feeder is touched.
-    fn redirect_feeders(&mut self, from: LineId, to: Option<(LineId, u32)>) {
+    /// Re-points every output naming `from` (module doc, "Redirects"). Each changed feeder is
+    /// touched.
+    fn redirect_feeders(&mut self, from: LineId, to: Redirect) {
         for k in 0..self.index.len() {
             let s = self.index[k].1;
-            let rec = &mut self.lines[s as usize];
-            if rec.out == Output::Next(from) {
-                match to {
-                    Some((id, slot)) => {
-                        rec.out = Output::Next(id);
-                        rec.next_slot = slot;
-                    }
-                    None => {
-                        rec.out = Output::DeadEnd;
-                        rec.next_slot = NIL;
+            let rec = self.lines[s as usize];
+            // `(out, next_slot, alt_slot)` after the redirect, or `None` if unchanged.
+            let moved = match (rec.out, to) {
+                (Output::Next(t), _) | (Output::Merge { line: t, .. }, Redirect::Gone)
+                    if t == from =>
+                {
+                    match to {
+                        Redirect::Gone => Some((Output::DeadEnd, NIL, NIL)),
+                        Redirect::Split { back, slot, .. } => Some((Output::Next(back), slot, NIL)),
+                        Redirect::Join { front, slot, .. } => {
+                            Some((Output::Next(front), slot, NIL))
+                        }
                     }
                 }
+                (Output::Merge { line, at: m }, Redirect::Split { back, slot, at }) => {
+                    (line == from && m >= at).then(|| {
+                        (
+                            Output::Merge {
+                                line: back,
+                                at: m - at,
+                            },
+                            slot,
+                            NIL,
+                        )
+                    })
+                }
+                (
+                    Output::Merge { line, at: m },
+                    Redirect::Join {
+                        front,
+                        slot,
+                        offset,
+                    },
+                ) => (line == from).then_some((
+                    Output::Merge {
+                        line: front,
+                        at: m.saturating_add(offset),
+                    },
+                    slot,
+                    NIL,
+                )),
+                (Output::Fork { a, b }, _) if a == from || b == from => {
+                    let (other, other_slot) = if a == from {
+                        (b, rec.alt_slot)
+                    } else {
+                        (a, rec.next_slot)
+                    };
+                    let (id, slot) = match to {
+                        Redirect::Gone => (None, NIL),
+                        Redirect::Split { back, slot, .. } => (Some(back), slot),
+                        Redirect::Join { front, slot, .. } => (Some(front), slot),
+                    };
+                    match id {
+                        Some(id) if id != other => Some(if a == from {
+                            (Output::Fork { a: id, b }, slot, rec.alt_slot)
+                        } else {
+                            (Output::Fork { a, b: id }, rec.next_slot, slot)
+                        }),
+                        // Gone, or both targets are now one line: a plain hand-off to the other.
+                        _ => Some((Output::Next(other), other_slot, NIL)),
+                    }
+                }
+                _ => None,
+            };
+            if let Some((out, next_slot, alt_slot)) = moved {
+                let rec = &mut self.lines[s as usize];
+                if !matches!(out, Output::Fork { .. }) {
+                    rec.toggle = false;
+                }
+                rec.out = out;
+                rec.next_slot = next_slot;
+                rec.alt_slot = alt_slot;
                 rec.jam_valid = false;
                 // Its output changed: touched like `set_out` (M47 reads it; M43 review).
                 self.touch(s);
             }
         }
         self.graph_dirty = true;
+    }
+
+    /// Re-maps the entry point of every `Merge` onto `target` after a surgery that moved its
+    /// positions (M44 review): `extend_front` adds `by`, `shrink_front` subtracts it, `rescale`
+    /// scales it. `None` (an entry point that fell off the front) turns the merge into `DeadEnd`,
+    /// like a destroyed target. Each changed feeder is touched.
+    fn move_merge_points(&mut self, target: LineId, f: impl Fn(u32) -> Option<u32>) {
+        for k in 0..self.index.len() {
+            let s = self.index[k].1;
+            let Output::Merge { line, at } = self.lines[s as usize].out else {
+                continue;
+            };
+            if line != target {
+                continue;
+            }
+            let rec = &mut self.lines[s as usize];
+            match f(at) {
+                Some(new) if new == at => continue,
+                Some(new) => rec.out = Output::Merge { line, at: new },
+                None => {
+                    rec.out = Output::DeadEnd;
+                    rec.next_slot = NIL;
+                    self.graph_dirty = true;
+                }
+            }
+            let rec = &mut self.lines[s as usize];
+            rec.jam_valid = false;
+            self.touch(s);
+        }
     }
 
     /// Whether any run after the front has a negative gap (the exact `squashed` flag).
@@ -115,7 +231,7 @@ impl Transport {
         }
         self.clear_geometry(slot);
         self.free_slot(line, slot);
-        self.redirect_feeders(line, None);
+        self.redirect_feeders(line, Redirect::Gone);
         self.changed = true;
         Ok(removed)
     }
@@ -244,7 +360,14 @@ impl Transport {
         }
         self.lines[slot as usize].len = at;
         self.clear_geometry(slot);
-        self.redirect_feeders(line, Some((id, back_slot)));
+        self.redirect_feeders(
+            line,
+            Redirect::Split {
+                back: id,
+                slot: back_slot,
+                at,
+            },
+        );
         self.lines[back_slot as usize].out = Output::Next(line);
         self.lines[back_slot as usize].next_slot = slot;
         self.finish(slot);
@@ -260,7 +383,13 @@ impl Transport {
         if self.lines[bs as usize].out != Output::Next(front) {
             return Err(TransportError::NotLinked);
         }
-        if self.lines[fs as usize].out == Output::Next(back) {
+        // The joined line would feed itself.
+        let feeds_back = match self.lines[fs as usize].out {
+            Output::Next(t) | Output::Merge { line: t, .. } => t == back,
+            Output::Fork { a, b } => a == back || b == back,
+            Output::DeadEnd | Output::Sink => false,
+        };
+        if feeds_back {
             return Err(TransportError::Unsupported);
         }
         let (f, b) = (self.lines[fs as usize], self.lines[bs as usize]);
@@ -318,7 +447,14 @@ impl Transport {
         self.clear_geometry(fs);
         self.clear_geometry(bs);
         self.free_slot(back, bs);
-        self.redirect_feeders(back, Some((front, fs)));
+        self.redirect_feeders(
+            back,
+            Redirect::Join {
+                front,
+                slot: fs,
+                offset: f.len,
+            },
+        );
         self.finish(fs);
         Ok(())
     }
@@ -342,6 +478,9 @@ impl Transport {
             self.lines[slot as usize].tail_pos += by;
         }
         self.lines[slot as usize].len = new_len as u32;
+        if at_front {
+            self.move_merge_points(line, |at| Some(at.saturating_add(by)));
+        }
         self.clear_geometry(slot);
         self.finish(slot);
         Ok(())
@@ -373,6 +512,9 @@ impl Transport {
             }
         }
         self.lines[slot as usize].len = new_len as u32;
+        if at_front {
+            self.move_merge_points(line, |at| at.checked_sub(by));
+        }
         self.clear_geometry(slot);
         self.finish(slot);
         Ok(())
@@ -444,6 +586,12 @@ impl Transport {
             cur = n.next;
         }
         self.lines[slot as usize].len = new_len;
+        self.move_merge_points(line, |at| {
+            Some(
+                (u64::from(at) * u64::from(new_len) / u64::from(rec.len)).min(u64::from(u32::MAX))
+                    as u32,
+            )
+        });
         self.clear_geometry(slot);
         self.finish(slot);
         Ok(())

@@ -25,8 +25,19 @@
 //! A plain `Next` needs `target.len >= feeder.speed` (`set_out`, `set_speed`, decode), so a landing
 //! `target.len + p` is never negative. Positions are `i64` here so no
 //! `len` near `u32::MAX` can overflow the arithmetic; stored values stay `u32`.
+//!
+//! `Merge` and `Fork` (M44, 0076 §1): the front item has no leader (`p = pos - speed`); when
+//! `p < 0` (overshoot `o = -p`) it tries to transfer. `Merge { line, at }`: landing
+//! `clamp(at - o, 0, line.len - 1)`, transferred iff `SPACING` is clear on both sides there on the
+//! target (`insert_at`'s rule and code path). `Fork { a, b }`: the preferred target (the toggle)
+//! if its plain hand-off landing `target.len - o` has room (`tail + SPACING <= landing`), else the
+//! other, else none; the toggle flips only on a preferred delivery. A transferred item leaves no
+//! leader behind (the next item is free again); a refused one waits at 0 and the walk squashes the
+//! items behind it. Several items cross in one tick front to back, each against the target as the
+//! previous landing left it. A merge landing in the middle of a target that has not advanced yet
+//! (a cut link) is a `count == 0` run (`Line::fresh_mid`) the target's walk keeps in place.
 
-use super::line::{NIL, Run};
+use super::line::{NIL, Run, opt as opt_node};
 use super::{Output, SPACING, Transport, TransportError};
 
 const SP: i64 = SPACING as i64;
@@ -57,8 +68,11 @@ impl Transport {
     fn advance_line(&mut self, l: u32) {
         let epoch = self.epoch;
         let fresh_runs = self.lines[l as usize].fresh_runs;
+        // Merge landings across a cut in the middle of this line (`count == 0` runs, M44).
+        let mut mid_left = self.lines[l as usize].fresh_mid;
         self.lines[l as usize].adv_mark = epoch;
         self.lines[l as usize].fresh_runs = 0;
+        self.lines[l as usize].fresh_mid = 0;
         let Some(mut h) = self.first(l) else {
             self.lines[l as usize].held = false;
             return;
@@ -81,7 +95,7 @@ impl Transport {
         let out = line.out;
         let target = line.next_slot;
         let mut leader = match out {
-            Output::Sink => NONE,
+            Output::Sink | Output::Merge { .. } | Output::Fork { .. } => NONE,
             Output::Next(_) => {
                 let t = &self.lines[target as usize];
                 if t.items > 0 {
@@ -90,38 +104,62 @@ impl Transport {
                     NONE
                 }
             }
-            // `Merge`/`Fork` are never stored in M42 (`set_out` and decode refuse them).
-            Output::DeadEnd | Output::Merge { .. } | Output::Fork { .. } => -SP,
+            Output::DeadEnd => -SP,
         };
         let mut crossed = false;
+        // The front run is a merge landing across a cut (M44): it stays where it landed.
+        let mut front_fresh = false;
         // The front items, one at a time while they cross.
         let d0 = loop {
             let r = self.get(h);
+            if r.count == 0 {
+                self.get_mut(h).count = 1;
+                mid_left -= 1;
+                front_fresh = true;
+                break 0;
+            }
             let pos0 = i64::from(r.gap);
             let bound = leader + SP;
-            let p = if pos0 < bound {
+            let mut p = if pos0 < bound {
                 pos0
             } else {
                 (pos0 - speed).max(bound)
             };
+            if p < 0 {
+                let taken = match out {
+                    Output::Merge { at, .. } => self.merge_land(target, at, -p, r.item),
+                    Output::Fork { .. } => self.fork_land(l, target, line.alt_slot, -p, r.item),
+                    _ => true,
+                };
+                if !taken {
+                    // No room on the target: the item waits at the front.
+                    p = 0;
+                }
+            }
             if p >= 0 {
                 self.get_mut(h).gap = p as i32;
                 break pos0 - p;
             }
-            // `p < 0` needs a leader below `-SP`: a `Sink` or a `Next` (a dead end bounds p at 0).
+            // `p < 0` needs no leader or one below `-SP`: a `Sink`, `Next`, or a transfer (a dead
+            // end bounds p at 0).
             crossed = true;
             leader = p;
-            if out == Output::Sink {
-                self.lines[l as usize].sunk += 1;
-                self.items -= 1;
-            } else {
-                let t = &self.lines[target as usize];
-                let (tlen, fresh_landing) = (i64::from(t.len), t.adv_mark != epoch);
-                debug_assert!(
-                    tlen + p >= 0,
-                    "a hand-off lands inside the target (set_out)"
-                );
-                self.land(target, r.item, (tlen + p) as u32, fresh_landing);
+            match out {
+                Output::Sink => {
+                    self.lines[l as usize].sunk += 1;
+                    self.items -= 1;
+                }
+                Output::Next(_) => {
+                    let t = &self.lines[target as usize];
+                    let (tlen, fresh_landing) = (i64::from(t.len), t.adv_mark != epoch);
+                    debug_assert!(
+                        tlen + p >= 0,
+                        "a hand-off lands inside the target (set_out)"
+                    );
+                    self.land(target, r.item, (tlen + p) as u32, fresh_landing);
+                }
+                // Already landed; the item left this line's run, so the next one is free.
+                _ => leader = NONE,
             }
             self.lines[l as usize].items -= 1;
             if r.count > 1 {
@@ -181,9 +219,17 @@ impl Transport {
             if c == fresh {
                 break;
             }
-            let r = self.get(c);
-            if last_d == speed {
-                if !squashed {
+            let mut r = self.get(c);
+            let fresh_mid = r.count == 0;
+            if fresh_mid {
+                // A merge landing across a cut (M44): it stays; its gap widens by what the item
+                // ahead moved, and the items behind it are held by it.
+                self.get_mut(c).count = 1;
+                r.count = 1;
+                mid_left -= 1;
+            } else if last_d == speed {
+                // With a cut's landing still ahead the walk goes on, skipping like a squashed line.
+                if !squashed && mid_left == 0 {
                     all_rest_at_speed = true;
                     break;
                 }
@@ -194,7 +240,7 @@ impl Transport {
             }
             let g = i64::from(r.gap) + last_d;
             // The squash rule: an item inside its bound (`g < 0`) does not move.
-            let d = g.min(speed).max(0);
+            let d = if fresh_mid { 0 } else { g.min(speed).max(0) };
             let ng = g - d;
             last_d = d;
             if ng < 0 {
@@ -223,6 +269,7 @@ impl Transport {
                 cur = self.next(c);
             }
         }
+        debug_assert_eq!(mid_left, 0, "every merge landing across a cut was walked");
         let moved = if all_rest_at_speed { speed } else { last_d };
         if fresh != NIL {
             // The runs ahead moved `moved`; the cut's items stay, so their gap widens by it.
@@ -237,7 +284,7 @@ impl Transport {
         if fresh == NIL {
             rec.tail_pos -= moved as u32;
         }
-        rec.held = d0 == 0;
+        rec.held = d0 == 0 && !front_fresh;
         if crossed || d0 > 0 || moved > 0 {
             rec.mark = epoch;
             self.changed = true;
@@ -295,6 +342,148 @@ impl Transport {
         rec.items += 1;
         rec.mark = epoch;
         self.changed = true;
+    }
+
+    /// A `Merge` transfer onto slot `t` with overshoot `o` (module doc): `true` if the item landed.
+    /// On a target that has advanced this tick it is exactly `insert_at` (which may refuse); on one
+    /// that has not (a cut link) [`Transport::land_fresh_at`].
+    fn merge_land(&mut self, t: u32, at: u32, o: i64, item: u16) -> bool {
+        let tl = &self.lines[t as usize];
+        let pos = (i64::from(at) - o).clamp(0, i64::from(tl.len) - 1);
+        if tl.adv_mark != self.epoch {
+            return self.land_fresh_at(t, pos, item);
+        }
+        if self.insert_at_slot(t, pos as u32, item).is_err() {
+            return false;
+        }
+        // `insert_at` counted a new item; this one only moved.
+        self.items -= 1;
+        true
+    }
+
+    /// A `Fork` transfer from slot `l` with overshoot `o` (module doc): the preferred target, else
+    /// the other; `true` if the item landed. Flips `l`'s toggle on a preferred delivery only.
+    fn fork_land(&mut self, l: u32, a: u32, b: u32, o: i64, item: u16) -> bool {
+        let toggle = self.lines[l as usize].toggle;
+        let (pref, other) = if toggle { (b, a) } else { (a, b) };
+        if self.try_hand_off(pref, o, item) {
+            self.lines[l as usize].toggle = !toggle;
+            return true;
+        }
+        self.try_hand_off(other, o, item)
+    }
+
+    /// The plain hand-off landing `target.len - o` on slot `t` if it has room behind the target's
+    /// rearmost item (`tail + SPACING <= landing`, the rule `Next`'s leader enforces).
+    fn try_hand_off(&mut self, t: u32, o: i64, item: u16) -> bool {
+        let tl = &self.lines[t as usize];
+        let pos = i64::from(tl.len) - o;
+        debug_assert!(
+            (0..i64::from(tl.len)).contains(&pos),
+            "a fork target is at least the feeder's speed long (set_out)"
+        );
+        if tl.items > 0 && i64::from(tl.tail_pos) + SP > pos {
+            return false;
+        }
+        let fresh = tl.adv_mark != self.epoch;
+        self.land(t, item, pos as u32, fresh);
+        true
+    }
+
+    /// A merge landing at `pos` on slot `l`, which has not advanced yet this tick (a cut link):
+    /// `insert_at`'s room rule over the line as it stands (earlier landings across the cut
+    /// included; [`Transport::locate`] walks from the nearer end), and the item never joins a run
+    /// that will still move. Behind the rearmost item it is a back landing ([`Transport::land`],
+    /// `fresh_runs`); in front of or among the cut's back runs it joins that block, merging with a
+    /// packed same-kind neighbour in it (canonical form, `u16` guard; M44 review); elsewhere it is
+    /// its own run marked `count == 0` (`fresh_mid`), restored by the line's walk. `true` if it
+    /// landed.
+    fn land_fresh_at(&mut self, l: u32, pos: i64, item: u16) -> bool {
+        let Some(slot) = self.locate(l, pos) else {
+            return false;
+        };
+        if slot.prev.is_some_and(|(_, pl)| pos - pl < SP) {
+            return false;
+        }
+        let Some((c, f)) = slot.next else {
+            self.land(l, item, pos as u32, true);
+            return true;
+        };
+        if f - pos < SP {
+            return false;
+        }
+        // Whether `c` is in the cut's back block (the last `fresh_runs` runs), and its first run.
+        let line = self.lines[l as usize];
+        let (mut in_block, mut first) = (false, NIL);
+        let mut b = opt_node(line.tail);
+        for _ in 0..line.fresh_runs {
+            let Some(n) = b else { break };
+            in_block |= n == c;
+            first = n;
+            b = self.prev(n);
+        }
+        let gap = slot.prev.map_or(pos, |(_, pl)| pos - pl - SP) as i32;
+        let gap_after = (f - pos - SP) as i32;
+        let epoch = self.epoch;
+        if in_block {
+            let next = self.get(c);
+            let join_next = gap_after == 0 && next.item == item && next.count < u16::MAX;
+            let join_prev = c != first
+                && slot.prev.is_some_and(|(p, _)| {
+                    let pr = self.get(p);
+                    gap == 0 && pr.item == item && pr.count < u16::MAX
+                });
+            match (join_prev, join_next) {
+                (true, _) => {
+                    let p = slot.prev.expect("joined").0;
+                    self.get_mut(p).count += 1;
+                    let total = u32::from(self.get(p).count) + u32::from(next.count);
+                    if join_next && total <= u32::from(u16::MAX) {
+                        self.get_mut(p).count = total as u16;
+                        self.remove_run(l, c);
+                        self.lines[l as usize].fresh_runs -= 1;
+                    } else {
+                        self.get_mut(c).gap = gap_after;
+                    }
+                }
+                (false, true) => {
+                    let n = self.get_mut(c);
+                    n.count += 1;
+                    n.gap = gap;
+                }
+                (false, false) => {
+                    self.get_mut(c).gap = gap_after;
+                    self.insert_before(
+                        l,
+                        Some(c),
+                        Run {
+                            item,
+                            count: 1,
+                            gap,
+                        },
+                    );
+                    self.lines[l as usize].fresh_runs += 1;
+                }
+            }
+            self.lines[l as usize].jam_valid = false;
+        } else {
+            self.get_mut(c).gap = gap_after;
+            self.insert_before(
+                l,
+                Some(c),
+                Run {
+                    item,
+                    count: 0,
+                    gap,
+                },
+            );
+            self.lines[l as usize].fresh_mid += 1;
+        }
+        let rec = &mut self.lines[l as usize];
+        rec.items += 1;
+        rec.mark = epoch;
+        self.changed = true;
+        true
     }
 
     pub(super) fn insert_back_slot(&mut self, l: u32, item: u16) -> Result<(), TransportError> {

@@ -5,8 +5,9 @@
 //! line_count u32
 //! per line: id u32 | len u32 | speed u16 | out | sunk u64 | jam u32 | run_count u32 | runs
 //!           [| seg_count u8 | segments]
-//!   out: tag u8 (0 DeadEnd, 1 Next + id u32, 2 Sink, 3 Merge + line u32 + at u32, 4 Fork + a u32 + b u32),
-//!     bit 7 (`SEGMENTS`) set when segments follow the runs (M43)
+//!   out: tag u8 (0 DeadEnd, 1 Next + id u32, 2 Sink, 3 Merge + line u32 + at u32,
+//!     4 Fork + a u32 + b u32 + toggle u8), bit 7 (`SEGMENTS`) set when segments follow the runs
+//!     (M43); the toggle (M44, 0 or 1) is encoded only with a fork, the one output that has one
 //!   jam: the cursor's run index from the front (>= 1), 0 = unknown, u32::MAX = "all packed"
 //!   run: item u16 | count u16 | dist u32
 //!     dist: the front run's first item position; for a later run, the distance from the item
@@ -19,8 +20,9 @@
 //! A later run's `dist` carries the spacing, so a spacing violation is representable in bytes.
 //! Decode rejects (`CodecError::Malformed`) `dist == 0` (two items at one position), a position
 //! past `len - 1`, a `count` of 0, `Item(0)`, `len` past `MAX_LEN`, `speed` outside `[1, len)`, ids
-//! not ascending or not below `next_id`, an output naming a missing line or itself, a `Next` target
-//! shorter than the feeder's `speed`, `Merge`/`Fork` (M44), a `jam` index past the runs or one with
+//! not ascending or not below `next_id`, an output naming a missing line or itself, a `Next` or
+//! `Fork` target shorter than the feeder's `speed`, a `Fork` with `a == b` or a toggle byte other
+//! than 0 or 1, a `jam` index past the runs or one with
 //! a gapped run between it and the front run (the cursor's invariant), and segments `set_segments`
 //! would refuse (`seg_count` 0 with the bit set, more than `MAX_SEGMENTS`, lengths not summing to
 //! `len`, an arc field out of range, a path entering more than `MAX_LINE_TILES` tiles). A `dist`
@@ -71,6 +73,7 @@ impl Transport {
                     sink.put_u8(4 | flag);
                     sink.put_u32(a.0);
                     sink.put_u32(b.0);
+                    sink.put_u8(u8::from(line.toggle));
                 }
             }
             sink.put_u64(line.sunk);
@@ -182,11 +185,24 @@ impl Transport {
             }
             let tag = reader.u8()?;
             let has_segments = tag & SEGMENTS != 0;
+            let mut toggle = false;
             let out = match tag & !SEGMENTS {
                 0 => Output::DeadEnd,
                 1 => Output::Next(LineId(reader.u32()?)),
                 2 => Output::Sink,
-                // `Merge`/`Fork` (tags 3, 4) are refused until M44, like `set_out` refuses them.
+                3 => Output::Merge {
+                    line: LineId(reader.u32()?),
+                    at: reader.u32()?,
+                },
+                4 => {
+                    let (a, b) = (LineId(reader.u32()?), LineId(reader.u32()?));
+                    toggle = match reader.u8()? {
+                        0 => false,
+                        1 => true,
+                        _ => return Err(bad),
+                    };
+                    Output::Fork { a, b }
+                }
                 _ => return Err(bad),
             };
             let sunk = reader.u64()?;
@@ -197,6 +213,7 @@ impl Transport {
             }
             let mut line = Line::new(LineId(id), len, speed);
             line.out = out;
+            line.toggle = toggle;
             line.sunk = sunk;
             t.lines.push(line);
             t.index.push((LineId(id), slot));
@@ -309,16 +326,31 @@ impl Transport {
             return Err(bad);
         }
         t.next_id = next_id;
-        // Resolve `Next` targets to slots; a missing target or the line itself is malformed.
+        // Resolve output targets to slots: a missing target, the line itself or a fork with
+        // `a == b` is malformed, and so is a `Next` or `Fork` target shorter than one tick's
+        // travel (`set_out`'s hand-off bound, 0079 §8).
         for slot in 0..t.lines.len() {
-            if let Output::Next(target) = t.lines[slot].out {
-                let s = t.slot(target).ok_or(bad)?;
-                // Not itself, and at least one tick's travel long (`set_out`'s hand-off bound).
-                if s as usize == slot || t.lines[s as usize].len < u32::from(t.lines[slot].speed) {
+            let speed = u32::from(t.lines[slot].speed);
+            let resolve = |t: &Transport, id: LineId, bounded: bool| -> Result<u32, CodecError> {
+                let s = t.slot(id).ok_or(bad)?;
+                if s as usize == slot || (bounded && t.lines[s as usize].len < speed) {
                     return Err(bad);
                 }
-                t.lines[slot].next_slot = s;
-            }
+                Ok(s)
+            };
+            let (next_slot, alt_slot) = match t.lines[slot].out {
+                Output::DeadEnd | Output::Sink => (NIL, NIL),
+                Output::Next(id) => (resolve(&t, id, true)?, NIL),
+                Output::Merge { line, .. } => (resolve(&t, line, false)?, NIL),
+                Output::Fork { a, b } => {
+                    if a == b {
+                        return Err(bad);
+                    }
+                    (resolve(&t, a, true)?, resolve(&t, b, true)?)
+                }
+            };
+            t.lines[slot].next_slot = next_slot;
+            t.lines[slot].alt_slot = alt_slot;
         }
         t.graph_dirty = true;
         // Derived (never encoded): the tile index is rebuilt from the decoded segments.

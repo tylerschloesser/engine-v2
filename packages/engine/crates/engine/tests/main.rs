@@ -38,6 +38,8 @@ mod timers_wakeups;
 mod transport_access;
 #[path = "main/transport_geometry.rs"]
 mod transport_geometry;
+#[path = "main/transport_outputs.rs"]
+mod transport_outputs;
 #[path = "main/transport_rules.rs"]
 mod transport_rules;
 #[path = "main/transport_surgery.rs"]

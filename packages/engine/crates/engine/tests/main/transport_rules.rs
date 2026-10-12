@@ -14,11 +14,15 @@ use engine::transport::{
     Item, LineId, Output, SPACING, Transport, TransportError, TransportRead, TransportWrite,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Out {
     DeadEnd,
     Next(u32),
     Sink,
+    /// M44: `(target, at)` (the reference test only; the rule table has none).
+    Merge(u32, u32),
+    /// M44: `(a, b)`.
+    Fork(u32, u32),
 }
 
 #[derive(Clone)]
@@ -299,12 +303,7 @@ fn build(lines: &[LineSpec]) -> Transport {
         assert_eq!(t.create(s.len, s.speed), Ok(id(i as u32)));
     }
     for (i, s) in lines.iter().enumerate() {
-        let out = match s.out {
-            Out::DeadEnd => Output::DeadEnd,
-            Out::Next(t) => Output::Next(id(t)),
-            Out::Sink => Output::Sink,
-        };
-        t.set_out(id(i as u32), out).expect("set_out");
+        t.set_out(id(i as u32), to_output(s.out)).expect("set_out");
         for &(item, pos) in s.items {
             t.insert_at(id(i as u32), pos, Item(item))
                 .expect("items at rest are spaced");
@@ -602,7 +601,7 @@ fn transport_full_at_caps() {
     assert_eq!(
         u.set_out(l, Output::Fork { a: l, b: l }),
         Err(TransportError::Unsupported),
-        "Fork is M44"
+        "a fork into itself"
     );
     assert_eq!(
         u.insert_back(LineId(9), Item(1)),
@@ -611,26 +610,58 @@ fn transport_full_at_caps() {
 }
 
 /// A per-item reference of the same rule (M40's candidate A, written plainly): every line a `Vec`
-/// of `(item, pos)` front to back, with its own update order (a reverse-topological walk, not
-/// production's `order_into`) and its own reading of the cycle cut (0079: an item that crosses
-/// the cut onto a line that has not advanced yet does not move again that tick).
+/// of `(item, pos)` front to back, with its own update order (a recursive Tarjan, not production's
+/// iterative `order_into`) and its own reading of the cycle cut (0079: an item that crosses the cut
+/// onto a line that has not advanced yet does not move again that tick). M44: `Merge` and `Fork`
+/// written from 0076 §1 and the `Output` docs, not from `advance.rs`.
 struct Reference {
     lines: Vec<Option<RefLine>>, // by `LineId - 1`; `None` once destroyed
     sunk: u64,
     /// Items that crossed a cycle cut (non-vacuity of the cut rule).
     cut_landings: u64,
+    /// M44 non-vacuity counts, see [`Stat`].
+    stats: [u64; 8],
+}
+
+/// Indices into `Reference::stats`.
+#[derive(Clone, Copy, Debug)]
+enum Stat {
+    MergeLanded,
+    MergeRefused,
+    /// A merge landing across a cut in front of the target's rearmost item.
+    MergeCutMid,
+    ForkPreferred,
+    ForkDiverted,
+    ForkWaited,
+    /// A tick in which one merge or fork line transferred two or more items.
+    BigStep,
+    /// A fork or merge landing across a cut.
+    CutTransfer,
 }
 
 struct RefLine {
     len: i64,
     speed: i64,
     out: Out,
+    toggle: bool,
     items: Vec<(u16, i64)>,
-    /// Items at the back that crossed the cut this tick (they do not move again).
-    fresh: usize,
+    /// Positions of the items that crossed a cut onto this line this tick (they do not move again).
+    fresh: Vec<i64>,
 }
 
+const SP: i64 = SPACING as i64;
+const NO_LEADER: i64 = i64::MIN / 4;
+
 impl Reference {
+    fn new() -> Self {
+        Reference {
+            lines: Vec::new(),
+            sunk: 0,
+            cut_landings: 0,
+            stats: [0; 8],
+        }
+    }
+
     fn line(&self, l: usize) -> &RefLine {
         self.lines[l].as_ref().expect("a live line")
     }
@@ -644,88 +675,139 @@ impl Reference {
             len,
             speed,
             out: Out::DeadEnd,
+            toggle: false,
             items: Vec::new(),
-            fresh: 0,
+            fresh: Vec::new(),
         }));
     }
 
-    /// Reverse topological, roots in ascending id: follow each root's links until a placed line
-    /// (emit the path backwards) or a line already on the path (a cycle: its lowest id first, then
-    /// backwards against the links; then the path before it, backwards).
+    fn succs(&self, l: usize) -> Vec<usize> {
+        match self.line(l).out {
+            Out::Next(t) | Out::Merge(t, _) => vec![t as usize],
+            Out::Fork(a, b) => vec![a as usize, b as usize],
+            Out::DeadEnd | Out::Sink => vec![],
+        }
+    }
+
+    /// Reverse topological, Tarjan's components with roots in ascending id and links in output
+    /// order (`a` before `b`). A component of several lines: its lowest id first, then the others in
+    /// depth-first post-order from it within the component.
     fn order(&self) -> Vec<usize> {
-        let n = self.lines.len();
-        let mut placed = vec![false; n];
-        let mut order = Vec::new();
-        for r in 0..n {
-            if self.lines[r].is_none() || placed[r] {
-                continue;
-            }
-            let mut path: Vec<usize> = Vec::new();
-            let mut x = r;
-            let cut = loop {
-                if placed[x] {
-                    break None;
-                }
-                if let Some(k) = path.iter().position(|&p| p == x) {
-                    break Some(k);
-                }
-                path.push(x);
-                match self.line(x).out {
-                    Out::Next(t) => x = t as usize,
-                    _ => break None,
-                }
-            };
-            let prefix = match cut {
-                Some(k) => {
-                    let cycle = &path[k..];
-                    let lowest = *cycle.iter().min().unwrap();
-                    let at = cycle.iter().position(|&c| c == lowest).unwrap();
-                    order.push(lowest);
-                    for d in 1..cycle.len() {
-                        order.push(cycle[(at + cycle.len() - d) % cycle.len()]);
+        struct Tarjan<'a> {
+            r: &'a Reference,
+            index: Vec<Option<usize>>,
+            low: Vec<usize>,
+            on_stack: Vec<bool>,
+            stack: Vec<usize>,
+            counter: usize,
+            out: Vec<usize>,
+        }
+        impl Tarjan<'_> {
+            fn strong(&mut self, v: usize) {
+                self.index[v] = Some(self.counter);
+                self.low[v] = self.counter;
+                self.counter += 1;
+                self.stack.push(v);
+                self.on_stack[v] = true;
+                for w in self.r.succs(v) {
+                    match self.index[w] {
+                        None => {
+                            self.strong(w);
+                            self.low[v] = self.low[v].min(self.low[w]);
+                        }
+                        Some(iw) if self.on_stack[w] => self.low[v] = self.low[v].min(iw),
+                        Some(_) => {}
                     }
-                    k
                 }
-                None => path.len(),
-            };
-            order.extend(path[..prefix].iter().rev());
-            for &p in &path {
-                placed[p] = true;
+                if Some(self.low[v]) != self.index[v] {
+                    return;
+                }
+                let at = self.stack.iter().position(|&x| x == v).unwrap();
+                let comp = self.stack.split_off(at);
+                for &x in &comp {
+                    self.on_stack[x] = false;
+                }
+                let lowest = *comp.iter().min().unwrap();
+                self.out.push(lowest);
+                let mut seen = vec![lowest];
+                self.post(lowest, &comp, &mut seen);
+            }
+
+            fn post(&mut self, x: usize, comp: &[usize], seen: &mut Vec<usize>) {
+                for w in self.r.succs(x) {
+                    if comp.contains(&w) && !seen.contains(&w) {
+                        seen.push(w);
+                        self.post(w, comp, seen);
+                        self.out.push(w);
+                    }
+                }
             }
         }
-        order
+        let n = self.lines.len();
+        let mut tj = Tarjan {
+            r: self,
+            index: vec![None; n],
+            low: vec![0; n],
+            on_stack: vec![false; n],
+            stack: Vec::new(),
+            counter: 0,
+            out: Vec::new(),
+        };
+        for v in 0..n {
+            if self.lines[v].is_some() && tj.index[v].is_none() {
+                tj.strong(v);
+            }
+        }
+        tj.out
     }
 
     fn advance(&mut self) {
-        const SP: i64 = SPACING as i64;
         let mut advanced = vec![false; self.lines.len()];
         for l in self.order() {
             let (speed, out) = (self.line(l).speed, self.line(l).out);
             let mut leader = match out {
                 Out::DeadEnd => -SP,
-                Out::Sink => i64::MIN / 4,
+                Out::Sink | Out::Merge(..) | Out::Fork(..) => NO_LEADER,
                 Out::Next(t) => {
                     let t = self.line(t as usize);
-                    t.items.last().map_or(i64::MIN / 4, |&(_, p)| p - t.len)
+                    t.items.last().map_or(NO_LEADER, |&(_, p)| p - t.len)
                 }
             };
             let fresh = std::mem::take(&mut self.line_mut(l).fresh);
+            let mut transfers = 0;
             let mut k = 0;
-            while k + fresh < self.line(l).items.len() {
+            while k < self.line(l).items.len() {
                 let (item, pos) = self.line(l).items[k];
+                if fresh.contains(&pos) {
+                    // Crossed a cut onto this line this tick: stays, and holds the items behind.
+                    leader = pos;
+                    k += 1;
+                    continue;
+                }
                 let bound = leader + SP;
-                let p = if pos < bound {
+                let mut p = if pos < bound {
                     pos
                 } else {
                     (pos - speed).max(bound)
                 };
-                leader = p;
+                if p < 0 {
+                    let landed = match out {
+                        Out::Merge(t, at) => self.merge(t as usize, at, -p, item, &advanced),
+                        Out::Fork(..) => self.fork(l, -p, item, &advanced),
+                        _ => true,
+                    };
+                    if !landed {
+                        p = 0;
+                    }
+                }
                 if p >= 0 {
                     self.line_mut(l).items[k].1 = p;
+                    leader = p;
                     k += 1;
                     continue;
                 }
                 self.line_mut(l).items.remove(k);
+                leader = p;
                 match out {
                     Out::Sink => self.sunk += 1,
                     Out::Next(t) => {
@@ -733,15 +815,77 @@ impl Reference {
                         let tlen = self.line(t).len;
                         self.line_mut(t).items.push((item, tlen + p));
                         if !advanced[t] {
-                            self.line_mut(t).fresh += 1;
+                            self.line_mut(t).fresh.push(tlen + p);
                             self.cut_landings += 1;
                         }
+                    }
+                    Out::Merge(..) | Out::Fork(..) => {
+                        // It left this line: the next item has no leader.
+                        leader = NO_LEADER;
+                        transfers += 1;
                     }
                     Out::DeadEnd => unreachable!("a dead end bounds p at 0"),
                 }
             }
+            if transfers >= 2 {
+                self.stats[Stat::BigStep as usize] += 1;
+            }
             advanced[l] = true;
         }
+    }
+
+    /// A side-load (0076 §1): `at - o` clamped to the target, iff no item of the target is closer
+    /// than `SPACING` to it.
+    fn merge(&mut self, t: usize, at: u32, o: i64, item: u16, advanced: &[bool]) -> bool {
+        let tl = self.line(t);
+        let pos = (i64::from(at) - o).clamp(0, tl.len - 1);
+        if tl.items.iter().any(|&(_, q)| (q - pos).abs() < SP) {
+            self.stats[Stat::MergeRefused as usize] += 1;
+            return false;
+        }
+        let mid = tl.items.last().is_some_and(|&(_, q)| q > pos);
+        let k = tl.items.partition_point(|&(_, q)| q < pos);
+        self.line_mut(t).items.insert(k, (item, pos));
+        if !advanced[t] {
+            self.line_mut(t).fresh.push(pos);
+            self.stats[Stat::CutTransfer as usize] += 1;
+            if mid {
+                self.stats[Stat::MergeCutMid as usize] += 1;
+            }
+        }
+        self.stats[Stat::MergeLanded as usize] += 1;
+        true
+    }
+
+    /// The preferred target's plain hand-off landing, else the other's, else none; the toggle
+    /// flips on a preferred delivery only.
+    fn fork(&mut self, l: usize, o: i64, item: u16, advanced: &[bool]) -> bool {
+        let Out::Fork(a, b) = self.line(l).out else {
+            unreachable!()
+        };
+        let toggle = self.line(l).toggle;
+        let (pref, other) = if toggle { (b, a) } else { (a, b) };
+        for (k, t) in [pref as usize, other as usize].into_iter().enumerate() {
+            let tl = self.line(t);
+            let pos = tl.len - o;
+            if tl.items.last().is_some_and(|&(_, q)| q + SP > pos) {
+                continue;
+            }
+            self.line_mut(t).items.push((item, pos));
+            if !advanced[t] {
+                self.line_mut(t).fresh.push(pos);
+                self.stats[Stat::CutTransfer as usize] += 1;
+            }
+            if k == 0 {
+                self.line_mut(l).toggle = !toggle;
+                self.stats[Stat::ForkPreferred as usize] += 1;
+            } else {
+                self.stats[Stat::ForkDiverted as usize] += 1;
+            }
+            return true;
+        }
+        self.stats[Stat::ForkWaited as usize] += 1;
+        false
     }
 
     fn insert_back(&mut self, l: usize, item: u16) -> Result<(), TransportError> {
@@ -784,24 +928,39 @@ impl Reference {
         best.map(|(k, _)| items.remove(k).0)
     }
 
-    /// `set_out`'s refusals, written from the rule: not into itself, a target at least `speed`
-    /// long (the hand-off bound).
+    /// `set_out`'s refusals, written from the rule: no output into itself, a fork's two targets
+    /// distinct, `Next` and fork targets at least `speed` long (the hand-off bound; a merge
+    /// landing is clamped). A new output clears the toggle.
     fn set_out(&mut self, l: usize, out: Out) -> Result<(), TransportError> {
-        if let Out::Next(t) = out {
-            if t as usize == l {
+        let speed = self.line(l).speed;
+        let short = |t: u32| self.line(t as usize).len < speed;
+        match out {
+            Out::Next(t) | Out::Merge(t, _) if t as usize == l => {
                 return Err(TransportError::Unsupported);
             }
-            if self.line(t as usize).len < self.line(l).speed {
-                return Err(TransportError::BadSpeed);
+            Out::Fork(a, b) if a as usize == l || b as usize == l || a == b => {
+                return Err(TransportError::Unsupported);
             }
+            Out::Next(t) if short(t) => return Err(TransportError::BadSpeed),
+            Out::Fork(a, b) if short(a) || short(b) => return Err(TransportError::BadSpeed),
+            _ => {}
         }
-        self.line_mut(l).out = out;
+        let line = self.line_mut(l);
+        if line.out != out {
+            line.out = out;
+            line.toggle = false;
+        }
         Ok(())
     }
 
     fn set_speed(&mut self, l: usize, speed: i64) -> Result<(), TransportError> {
         let line = self.line(l);
-        let short_target = matches!(line.out, Out::Next(t) if self.line(t as usize).len < speed);
+        let short = |t: u32| self.line(t as usize).len < speed;
+        let short_target = match line.out {
+            Out::Next(t) => short(t),
+            Out::Fork(a, b) => short(a) || short(b),
+            _ => false,
+        };
         if speed >= line.len || short_target {
             return Err(TransportError::BadSpeed);
         }
@@ -811,9 +970,15 @@ impl Reference {
 
     fn destroy(&mut self, l: usize) -> Vec<u16> {
         let gone = self.lines[l].take().expect("a live line");
+        let l = l as u32;
         for line in self.lines.iter_mut().flatten() {
-            if matches!(line.out, Out::Next(t) if t as usize == l) {
-                line.out = Out::DeadEnd;
+            match line.out {
+                Out::Next(t) | Out::Merge(t, _) if t == l => line.out = Out::DeadEnd,
+                Out::Fork(a, b) if a == l || b == l => {
+                    line.out = Out::Next(if a == l { b } else { a });
+                    line.toggle = false;
+                }
+                _ => {}
             }
         }
         gone.items.into_iter().map(|(i, _)| i).collect()
@@ -823,10 +988,17 @@ impl Reference {
 /// M43's surgery on the reference, written from 0076 §3 and the doc comments of
 /// `TransportWrite` (not from `surgery.rs`): items are `(item, pos)` front to back, so a squashed
 /// pair is just two positions closer than `SPACING`, which the reference's own rule resolves.
+/// M44: the redirects of `surgery.rs`'s module doc for `Merge` and `Fork`.
 impl Reference {
+    /// Whether `x` feeds `l` under the hand-off bound (`Next` or either fork target).
     fn feeds(&self, x: &RefLine, l: usize) -> bool {
         let _ = self;
-        matches!(x.out, Out::Next(t) if t as usize == l)
+        let l = l as u32;
+        match x.out {
+            Out::Next(t) => t == l,
+            Out::Fork(a, b) => a == l || b == l,
+            _ => false,
+        }
     }
 
     /// `speed < len` and every feeder at most `len` per tick (0079 §8).
@@ -842,10 +1014,31 @@ impl Reference {
         Ok(())
     }
 
-    fn redirect(&mut self, from: usize, to: usize) {
+    /// Every output naming `from` names `to`; a merge's entry point maps through `at_map` (`None`:
+    /// it stays on `from`); a fork left with one target twice becomes `Next`.
+    fn redirect(&mut self, from: usize, to: usize, at_map: impl Fn(u32) -> Option<u32>) {
+        let (from, to) = (from as u32, to as u32);
         for x in self.lines.iter_mut().flatten() {
-            if matches!(x.out, Out::Next(t) if t as usize == from) {
-                x.out = Out::Next(to as u32);
+            match x.out {
+                Out::Next(t) if t == from => x.out = Out::Next(to),
+                Out::Merge(t, at) if t == from => {
+                    if let Some(at) = at_map(at) {
+                        x.out = Out::Merge(to, at);
+                    }
+                }
+                Out::Fork(a, b) if a == from || b == from => {
+                    let (a, b) = (
+                        if a == from { to } else { a },
+                        if b == from { to } else { b },
+                    );
+                    if a == b {
+                        x.out = Out::Next(a);
+                        x.toggle = false;
+                    } else {
+                        x.out = Out::Fork(a, b);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -861,13 +1054,15 @@ impl Reference {
         let k = line.items.partition_point(|&(_, p)| p < at);
         let back = line.items.split_off(k);
         line.len = at;
-        self.redirect(l, n);
+        let cut = at as u32;
+        self.redirect(l, n, |m| m.checked_sub(cut));
         self.lines.push(Some(RefLine {
             len: len - at,
             speed,
             out: Out::Next(l as u32),
+            toggle: false,
             items: back.into_iter().map(|(i, p)| (i, p - at)).collect(),
-            fresh: 0,
+            fresh: Vec::new(),
         }));
         Ok(n)
     }
@@ -876,7 +1071,13 @@ impl Reference {
         if !matches!(self.line(back).out, Out::Next(f) if f as usize == front) {
             return Err(TransportError::NotLinked);
         }
-        if matches!(self.line(front).out, Out::Next(b) if b as usize == back) {
+        let b = back as u32;
+        let feeds_back = match self.line(front).out {
+            Out::Next(t) | Out::Merge(t, _) => t == b,
+            Out::Fork(x, y) => x == b || y == b,
+            _ => false,
+        };
+        if feeds_back {
             return Err(TransportError::Unsupported);
         }
         let gone = self.lines[back].take().expect("a live line");
@@ -885,11 +1086,25 @@ impl Reference {
         f.items
             .extend(gone.items.into_iter().map(|(i, p)| (i, p + flen)));
         f.len += gone.len;
-        self.redirect(back, front);
+        self.redirect(back, front, |m| Some(m.saturating_add(flen as u32)));
         Ok(())
     }
 
+    /// A merge's entry point follows its target's positions; `None`: it fell off (`DeadEnd`).
+    fn move_merge_points(&mut self, target: usize, f: impl Fn(u32) -> Option<u32>) {
+        for x in self.lines.iter_mut().flatten() {
+            if let Out::Merge(t, at) = x.out
+                && t as usize == target
+            {
+                x.out = f(at).map_or(Out::DeadEnd, |at| Out::Merge(t, at));
+            }
+        }
+    }
+
     fn extend(&mut self, l: usize, by: i64, at_front: bool) {
+        if at_front {
+            self.move_merge_points(l, |at| Some(at.saturating_add(by as u32)));
+        }
         let line = self.line_mut(l);
         line.len += by;
         if at_front {
@@ -916,6 +1131,7 @@ impl Reference {
             for it in &mut line.items {
                 it.1 -= by;
             }
+            self.move_merge_points(l, |at| at.checked_sub(by as u32));
         }
         Ok(())
     }
@@ -934,7 +1150,11 @@ impl Reference {
             it.1 = *p;
         }
         line.len = new_len;
-        Ok(scaled.windows(2).any(|w| w[1] - w[0] < i64::from(SPACING)))
+        let squashed = scaled.windows(2).any(|w| w[1] - w[0] < i64::from(SPACING));
+        self.move_merge_points(l, |at| {
+            Some((i64::from(at) * new_len / old).min(i64::from(u32::MAX)) as u32)
+        });
+        Ok(squashed)
     }
 }
 
@@ -943,6 +1163,14 @@ fn to_output(out: Out) -> Output {
         Out::DeadEnd => Output::DeadEnd,
         Out::Sink => Output::Sink,
         Out::Next(a) => Output::Next(LineId(a + 1)),
+        Out::Merge(t, at) => Output::Merge {
+            line: LineId(t + 1),
+            at,
+        },
+        Out::Fork(a, b) => Output::Fork {
+            a: LineId(a + 1),
+            b: LineId(b + 1),
+        },
     }
 }
 
@@ -953,15 +1181,16 @@ fn to_output(out: Out) -> Output {
 /// too); every live line compared every tick for 400 ticks, and the codec round trip at the end.
 /// M43 adds surgery outside the cycle: a `split` or a `join` every 20 ticks, an `extend_*` or a
 /// `shrink_*` every 30, a `rescale` every 50 (squashed pairs included), each refusal compared.
+/// M44 adds `Merge` and `Fork`: eight feeders at speeds 24, 72 and 96 merging or forking into the
+/// chains, a cycle cut on a merge (landings in the middle of a line that has not advanced) and a
+/// cycle cut on a fork, a random `set_out` to and from both outputs on a third of the ticks (each
+/// refusal compared), every toggle and output (the surgery redirects) compared every tick, and
+/// counts proving each branch ran.
 #[test]
 fn transport_matches_per_item_reference() {
     let mut rng = engine::rng::SimRng::new(11);
     let mut t = Transport::new(512, 1 << 16);
-    let mut r = Reference {
-        lines: Vec::new(),
-        sunk: 0,
-        cut_landings: 0,
-    };
+    let mut r = Reference::new();
     let speeds = [8i64, 24, 72];
     let lens = [128i64, 256, 512, 1024, 1536];
     let create = |t: &mut Transport, r: &mut Reference, len: i64, speed: i64| {
@@ -1005,6 +1234,43 @@ fn transport_matches_per_item_reference() {
     for k in 0..3 {
         set_out(&mut t, &mut r, c[k], Out::Next(c[(k + 1) % 3] as u32)).unwrap();
     }
+    // M44, on its own stream. A cycle cut on a merge: x (lowest id, speed 96) side-loads into the
+    // middle of y, which runs into z and back to x; y is fed at its back, so x's landings on y
+    // (which has not advanced yet) fall in front of y's rearmost item.
+    let mut orng = engine::rng::SimRng::new(44);
+    let m: Vec<usize> = [(512, 96), (1024, 24), (512, 72)]
+        .into_iter()
+        .map(|(len, speed)| create(&mut t, &mut r, len, speed))
+        .collect();
+    set_out(&mut t, &mut r, m[0], Out::Merge(m[1] as u32, 700)).unwrap();
+    set_out(&mut t, &mut r, m[1], Out::Next(m[2] as u32)).unwrap();
+    set_out(&mut t, &mut r, m[2], Out::Next(m[0] as u32)).unwrap();
+    // A cycle cut on a fork: f (lowest, speed 96) forks to a and b; a runs back to f, b side-loads
+    // onto a.
+    let fk: Vec<usize> = [(512, 96), (512, 72), (768, 24)]
+        .into_iter()
+        .map(|(len, speed)| create(&mut t, &mut r, len, speed))
+        .collect();
+    set_out(&mut t, &mut r, fk[0], Out::Fork(fk[1] as u32, fk[2] as u32)).unwrap();
+    set_out(&mut t, &mut r, fk[1], Out::Next(fk[0] as u32)).unwrap();
+    set_out(&mut t, &mut r, fk[2], Out::Merge(fk[1] as u32, 300)).unwrap();
+    let protected: Vec<usize> = [&c[..], &m[..], &fk[..]].concat();
+    // Eight feeders into the chains (`set_out` may refuse a fork onto a short line: compared).
+    let chains: Vec<usize> = (0..60).collect();
+    for k in 0..8 {
+        let speed = [24i64, 72, 96][k % 3];
+        let l = create(&mut t, &mut r, lens[2 + orng.below(3) as usize], speed);
+        let a = chains[orng.below(60) as usize] as u32;
+        let b = chains[orng.below(60) as usize] as u32;
+        let len = r.line(a as usize).len as u32;
+        let out = if k % 2 == 0 {
+            Out::Merge(a, orng.below(len + 128))
+        } else {
+            Out::Fork(a, b)
+        };
+        let _ = set_out(&mut t, &mut r, l, out);
+    }
+    let mut out_changes = [0u32; 2]; // merges and forks set by the random `set_out`
 
     let live = |r: &Reference| -> Vec<usize> {
         (0..r.lines.len())
@@ -1012,9 +1278,12 @@ fn transport_matches_per_item_reference() {
             .collect()
     };
     for tick in 0..400 {
-        // The cycle stays a cycle (mutations pick other lines) and is kept fed but sparse (a full
-        // loop jams), so items keep crossing its cut.
-        let alive: Vec<usize> = live(&r).into_iter().filter(|l| !c.contains(l)).collect();
+        // The cycles stay cycles (mutations pick other lines) and are kept fed but sparse (a
+        // full loop jams), so items keep crossing their cuts.
+        let alive: Vec<usize> = live(&r)
+            .into_iter()
+            .filter(|l| !protected.contains(l))
+            .collect();
         let pick = |rng: &mut engine::rng::SimRng| alive[rng.below(alive.len() as u32) as usize];
         let in_cycle: usize = c.iter().map(|&l| r.line(l).items.len()).sum();
         for &l in c.iter().filter(|_| in_cycle < 8) {
@@ -1024,6 +1293,40 @@ fn transport_matches_per_item_reference() {
                 r.insert_back(l, item),
                 "tick {tick}: cycle feed {l}"
             );
+        }
+        for cycle in [&m, &fk] {
+            let held: usize = cycle.iter().map(|&l| r.line(l).items.len()).sum();
+            if held < 6 {
+                let l = cycle[1];
+                let item = 1 + orng.below(3) as u16;
+                assert_eq!(
+                    t.insert_back(LineId(l as u32 + 1), Item(item)),
+                    r.insert_back(l, item),
+                    "tick {tick}: M44 cycle feed {l}"
+                );
+            }
+        }
+        // M44: a random output to or from `Merge`/`Fork` (targets anywhere, the line itself
+        // included: its refusal is compared).
+        if orng.below(3) == 0 {
+            let l = pick(&mut orng);
+            let all = live(&r);
+            let mut any = || all[orng.below(all.len() as u32) as usize] as u32;
+            let (a, b) = (any(), any());
+            let len = r.line(a as usize).len as u32;
+            let out = match orng.below(6) {
+                0 | 1 => Out::Merge(a, orng.below(len + 128)),
+                2 | 3 => Out::Fork(a, b),
+                4 => Out::Next(a),
+                _ => [Out::DeadEnd, Out::Sink][orng.below(2) as usize],
+            };
+            if set_out(&mut t, &mut r, l, out).is_ok() {
+                match out {
+                    Out::Merge(..) => out_changes[0] += 1,
+                    Out::Fork(..) => out_changes[1] += 1,
+                    _ => {}
+                }
+            }
         }
         if rng.below(2) == 0 {
             let l = pick(&mut rng);
@@ -1069,7 +1372,10 @@ fn transport_matches_per_item_reference() {
             }
         }
         // M43: surgery (before `advance`, as from `G::tick`), never on the cycle.
-        let alive: Vec<usize> = live(&r).into_iter().filter(|l| !c.contains(l)).collect();
+        let alive: Vec<usize> = live(&r)
+            .into_iter()
+            .filter(|l| !protected.contains(l))
+            .collect();
         let pick = |rng: &mut engine::rng::SimRng| alive[rng.below(alive.len() as u32) as usize];
         if tick % 20 == 10 {
             if srng.below(2) == 0 {
@@ -1088,7 +1394,7 @@ fn transport_matches_per_item_reference() {
                     .iter()
                     .copied()
                     .filter(
-                        |&b| matches!(r.line(b).out, Out::Next(f) if !c.contains(&(f as usize))),
+                        |&b| matches!(r.line(b).out, Out::Next(f) if !protected.contains(&(f as usize))),
                     )
                     .collect();
                 if !backs.is_empty() {
@@ -1189,6 +1495,16 @@ fn transport_matches_per_item_reference() {
                 want,
                 "tick {tick}: line {l}"
             );
+            assert_eq!(
+                t.toggle(LineId(l as u32 + 1)),
+                Ok(r.line(l).toggle),
+                "tick {tick}: toggle {l}"
+            );
+            assert_eq!(
+                t.out(LineId(l as u32 + 1)),
+                Ok(to_output(r.line(l).out)),
+                "tick {tick}: output {l}"
+            );
         }
     }
     let sunk: u64 = live(&r)
@@ -1210,25 +1526,49 @@ fn transport_matches_per_item_reference() {
         surgery.iter().all(|&n| n >= 4),
         "surgery too rare: {surgery:?} (split, join, extend, shrink, shrink refused, squashing rescale)"
     );
+    // M44 non-vacuity: every merge and fork branch ran, across cuts too, with big steps.
+    let mins = [
+        (Stat::MergeLanded, 100),
+        (Stat::MergeRefused, 20),
+        (Stat::MergeCutMid, 5),
+        (Stat::ForkPreferred, 50),
+        (Stat::ForkDiverted, 10),
+        (Stat::ForkWaited, 10),
+        (Stat::BigStep, 10),
+        (Stat::CutTransfer, 20),
+    ];
+    for (stat, min) in mins {
+        assert!(
+            r.stats[stat as usize] >= min,
+            "{stat:?} ran {} times (< {min}): {:?}",
+            r.stats[stat as usize],
+            r.stats
+        );
+    }
+    assert!(
+        out_changes.iter().all(|&n| n >= 10),
+        "random merges and forks set: {out_changes:?}"
+    );
     round_trip(&t);
 }
 
 /// 0079 §5: the arena `Host::init`'s memory-split check counts, at literal sizes: a line costs
-/// 80 B (record) + 8 (index) + 4 (order) + 17 (Tarjan scratch) + 4 x 32 (segment pool, M43) +
-/// 8 x 16 (tile index, M43) = 365 B, a run node 16 B plus one spare node (none at 0 items), and
+/// 88 B (record; M44 added the fork's second target slot, its toggle and the cut's mid-line
+/// landing count) + 8 (index) + 4 (order) + 17 (Tarjan scratch) + 4 x 32 (segment pool, M43) +
+/// 8 x 16 (tile index, M43) = 373 B, a run node 16 B plus one spare node (none at 0 items), and
 /// the tile index's merge room, `MAX_LINE_TILES` x 16 = 65,536 B (none at 0 lines). At the
-/// recommended caps: 32,768 x 365 + 262,145 x 16 + 65,536 = 16,220,176 B.
+/// recommended caps: 32,768 x 373 + 262,145 x 16 + 65,536 = 16,482,320 B.
 #[test]
 fn transport_reserved_bytes_at_the_defaults() {
     assert_eq!(Transport::reserved_bytes(0, 0), 0);
-    assert_eq!(Transport::reserved_bytes(1, 0), 365 + 65_536);
+    assert_eq!(Transport::reserved_bytes(1, 0), 373 + 65_536);
     assert_eq!(Transport::reserved_bytes(0, 1), 32);
     assert_eq!(
         Transport::reserved_bytes(
             engine::transport::DEFAULT_MAX_LINES,
             engine::transport::DEFAULT_MAX_ITEMS
         ),
-        16_220_176
+        16_482_320
     );
 }
 

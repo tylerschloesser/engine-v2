@@ -40,8 +40,14 @@ pub(super) struct Line {
     pub len: u32,
     pub speed: u16,
     pub out: Output,
-    /// The slot of `out`'s `Next` target (`NIL` otherwise), refreshed by `set_out` and decode.
+    /// The slot of `out`'s first target (`Next`'s, `Merge`'s line, `Fork`'s `a`; `NIL` otherwise),
+    /// refreshed by `set_out`, the surgery redirects and decode.
     pub next_slot: u32,
+    /// The slot of `Fork`'s `b` (`NIL` otherwise), kept like `next_slot` (M44).
+    pub alt_slot: u32,
+    /// A `Fork`'s preferred output (M44, 0076 §1): `false` is `a`. Sim state (encoded with the
+    /// fork's output, `codec.rs`); always `false` on a line whose output is not a `Fork`.
+    pub toggle: bool,
     pub head: u32,
     pub tail: u32,
     pub runs: u32,
@@ -61,6 +67,10 @@ pub(super) struct Line {
     /// Back runs made only of items that crossed a cycle cut onto this line this tick, before it
     /// advanced: they do not move again this tick (0079, M42 review). Zero outside `advance`.
     pub fresh_runs: u32,
+    /// Runs landed by a `Merge` across a cycle cut in the middle of this line before it advanced
+    /// (M44): each is a single item marked by `count == 0` (only inside `advance`), which this
+    /// line's walk restores to 1 without moving it. Zero outside `advance`.
+    pub fresh_mid: u32,
     /// The line may hold a negative gap (a squashed pair, M43): set by `rescale`, `join`, `split`
     /// and decode, cleared by an `advance` walk that saw none. Conservative and unobservable (the
     /// walk with it set reaches exactly the state the early exit reaches when no gap is negative),
@@ -80,6 +90,8 @@ impl Line {
             speed,
             out: Output::DeadEnd,
             next_slot: NIL,
+            alt_slot: NIL,
+            toggle: false,
             head: NIL,
             tail: NIL,
             runs: 0,
@@ -92,9 +104,19 @@ impl Line {
             mark: 0,
             adv_mark: 0,
             fresh_runs: 0,
+            fresh_mid: 0,
             squashed: false,
             seg_start: NIL,
             seg_count: 0,
+        }
+    }
+
+    /// The target slots 0079 §8's hand-off bound applies to (`target.len >= speed`): a `Next`'s and
+    /// both of a `Fork`'s; `NIL` for none (a `Merge` landing is clamped instead).
+    pub fn bound_targets(&self) -> [u32; 2] {
+        match self.out {
+            Output::Next(_) | Output::Fork { .. } => [self.next_slot, self.alt_slot],
+            _ => [NIL, NIL],
         }
     }
 

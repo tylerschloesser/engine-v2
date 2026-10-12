@@ -262,6 +262,9 @@ impl<G: Game> TransportRead for Predicting<'_, G> {
     fn sunk(&self, line: LineId) -> Result<u64, Unknown> {
         self.taint(self.base.transport().sunk(line))
     }
+    fn toggle(&self, line: LineId) -> Result<bool, Unknown> {
+        self.taint(self.base.transport().toggle(line))
+    }
     fn segments(&self, line: LineId, f: &mut dyn FnMut(Segment)) -> Result<(), Unknown> {
         self.taint(self.base.transport().segments(line, f))
     }

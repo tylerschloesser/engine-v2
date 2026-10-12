@@ -19,6 +19,13 @@
 //! (M40's `alloc_deltas`). Both deltas must be 0. `transport_tick_no_alloc_control` injects one
 //! growing `Vec` push per tick and must see the live delta rise.
 //!
+//! M44: the world also holds a `Merge` feeder (speed 96, side-loading into the middle of a
+//! draining line), a `Fork` feeder (speed 72, alternating onto that line and a second drain) and a two-line cycle cut on
+//! a merge (its landings fall in the middle of a line that has not advanced: the `fresh_mid`
+//! path; the ring forks back into the cut line and to a drain), each fed by its own spawner; the churn line created every 50 ticks takes a `Next`, a
+//! `Merge` or a `Fork` output in turn (the order recompute over two-target outputs). The test
+//! asserts merges landed and the fork's toggle flipped inside the window.
+//!
 //! `transport_surgery_no_alloc` (M43) runs the same world with surgery inside the window: every
 //! 100 ticks a line is cut in half and joined back (the run relink, a new line slot and id, the
 //! feeder redirects, the slot freed again), one line is extended at the front and shrunk back,
@@ -62,6 +69,12 @@ struct World {
     spawners: Vec<Spawner>,
     rng: SimRng,
     sunk_lines: Vec<LineId>,
+    /// M44: the merge feeder and the fork feeder; the merge's transfers and the toggle's flips
+    /// seen inside the window.
+    merge: LineId,
+    fork: LineId,
+    transfers: u32,
+    flips: u32,
     /// M43: run surgery every 100 ticks; how many cuts, joins, rescales and segment sets ran.
     surgery: bool,
     done: [u32; 4],
@@ -88,7 +101,7 @@ fn build() -> World {
     // One extra chain at speed 72 (several items cross a front per tick), plus room for churn.
     belts.push(vec![8, 12, 6]);
     let line_count: u32 = belts.iter().map(|b| 2 * b.len() as u32).sum();
-    let mut t = Transport::new(line_count + 4, 8_192);
+    let mut t = Transport::new(line_count + 10, 8_192);
     let fast = belts.len() - 1;
     let mut lines = Vec::new();
     let mut spawners = Vec::new();
@@ -146,9 +159,70 @@ fn build() -> World {
             });
         }
     }
+    // M44: a merge feeder, a fork feeder and a cycle cut on a merge (the feeder has the lowest id
+    // in it, so it advances first and side-loads onto a line that has not moved yet).
+    // Their targets are two fast draining lines (the chains' lanes are packed or dead-ended).
+    let drains = [
+        t.create(8 * TILE, 96).unwrap(),
+        t.create(8 * TILE, 96).unwrap(),
+    ];
+    for d in drains {
+        t.set_out(d, Output::Sink).unwrap();
+        sunk_lines.push(d);
+    }
+    let merge = t.create(4 * TILE, 96).unwrap();
+    t.set_out(
+        merge,
+        Output::Merge {
+            line: drains[0],
+            at: 4 * TILE,
+        },
+    )
+    .unwrap();
+    let fork = t.create(4 * TILE, 72).unwrap();
+    t.set_out(
+        fork,
+        Output::Fork {
+            a: drains[0],
+            b: drains[1],
+        },
+    )
+    .unwrap();
+    let cut = t.create(2 * TILE, 96).unwrap();
+    let ring = t.create(4 * TILE, SPEED).unwrap();
+    t.set_out(
+        cut,
+        Output::Merge {
+            line: ring,
+            at: 700,
+        },
+    )
+    .unwrap();
+    // The ring forks half its items back to `cut` and drains the rest, so the cycle never jams.
+    t.set_out(
+        ring,
+        Output::Fork {
+            a: cut,
+            b: drains[1],
+        },
+    )
+    .unwrap();
+    for (line, rate256) in [(merge, 64), (fork, 32), (ring, 32)] {
+        spawners.push(Spawner {
+            line,
+            rate256,
+            acc: 0,
+            next: 1,
+            cycle: true,
+        });
+    }
     World {
         t,
         lines,
+        merge,
+        fork,
+        transfers: 0,
+        flips: 0,
         churn: Vec::with_capacity(4),
         ticks: 0,
         spawners,
@@ -230,15 +304,29 @@ fn tick(w: &mut World, leak: Option<&mut Vec<u64>>) {
     }
     if w.ticks.is_multiple_of(50) {
         let into = w.lines[w.rng.below(n) as usize];
+        let other = w.lines[w.rng.below(n) as usize];
         let l = w.t.create(8 * TILE, SPEED).expect("room for churn");
-        w.t.set_out(l, Output::Next(into)).unwrap();
+        let out = match (w.ticks / 50) % 3 {
+            0 => Output::Next(into),
+            1 => Output::Merge {
+                line: into,
+                at: 300,
+            },
+            _ if other != into => Output::Fork { a: into, b: other },
+            _ => Output::Next(into),
+        };
+        w.t.set_out(l, out).unwrap();
         let _ = w.t.insert_back(l, Item(1));
         if let Some(old) = w.churn.pop() {
             w.t.destroy(old, &mut |_| {}).unwrap();
         }
         w.churn.push(l);
     }
+    // Nothing feeds the merge feeder during `advance`: what it lost, it side-loaded.
+    let before = (w.t.count(w.merge).unwrap(), w.t.toggle(w.fork).unwrap());
     w.t.advance();
+    w.transfers += before.0 - w.t.count(w.merge).unwrap();
+    w.flips += u32::from(w.t.toggle(w.fork).unwrap() != before.1);
     if let Some(v) = leak {
         v.push(u64::from(w.t.items_len()));
     }
@@ -247,6 +335,23 @@ fn tick(w: &mut World, leak: Option<&mut Vec<u64>>) {
 /// `(live delta, high-water delta, sunk, items at the end)` over [`TICKS`].
 fn run(leak: bool) -> (isize, isize, u64, u32) {
     run_with(leak, false).0
+}
+
+/// M44: merge transfers and fork toggle flips over a clean run.
+fn run_outputs() -> (isize, isize, u32, u32) {
+    let mut w = build();
+    let pad = (thread_high_water_bytes() - thread_live_bytes()).max(0) as usize + 1;
+    let _pad = vec![0u8; pad];
+    let (live0, high0) = (thread_live_bytes(), thread_high_water_bytes());
+    for _ in 0..TICKS {
+        tick(&mut w, None);
+    }
+    (
+        thread_live_bytes() - live0,
+        thread_high_water_bytes() - high0,
+        w.transfers,
+        w.flips,
+    )
 }
 
 /// [`run`], optionally with M43's surgery; also returns the surgery counts.
@@ -279,6 +384,19 @@ fn transport_tick_no_alloc() {
         (live, high),
         (0, 0),
         "transport allocated per tick (live, high-water bytes over {TICKS} ticks)"
+    );
+}
+
+/// M44: the world's merges and fork ran inside the window (module doc), allocating nothing.
+#[test]
+fn transport_merge_fork_no_alloc() {
+    let (live, high, transfers, flips) = run_outputs();
+    assert!(transfers > 100, "only {transfers} merge transfers");
+    assert!(flips > 50, "the fork's toggle flipped only {flips} times");
+    assert_eq!(
+        (live, high),
+        (0, 0),
+        "merges and forks allocated (live, high-water bytes over {TICKS} ticks)"
     );
 }
 

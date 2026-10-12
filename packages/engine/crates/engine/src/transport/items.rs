@@ -10,7 +10,75 @@ use super::{SPACING, Transport, TransportError};
 
 const SP: i64 = SPACING as i64;
 
+/// Where a position falls among a line's runs ([`Transport::locate`]): the run before it (node and
+/// its last item's position) and the run after it (node and its first item's position).
+#[derive(Clone, Copy)]
+pub(super) struct Slot {
+    pub prev: Option<(u32, i64)>,
+    pub next: Option<(u32, i64)>,
+}
+
 impl Transport {
+    /// The runs around `pos` on slot `l`, or `None` when `pos` lies within a run's span (from its
+    /// first to its last item). Walks from the nearer end (M44 review): from the front by prefix
+    /// sums, or from `tail_pos` back through `prev`, so an entry point near the back of a long line
+    /// costs O(runs behind it). A run of `count == 0` (a cut landing inside `advance`) is one item.
+    pub(super) fn locate(&self, l: u32, pos: i64) -> Option<Slot> {
+        let line = &self.lines[l as usize];
+        let mut slot = Slot {
+            prev: None,
+            next: None,
+        };
+        let Some(h) = self.first(l) else {
+            return Some(slot);
+        };
+        let count = |r: Run| i64::from(r.count.max(1));
+        let front = i64::from(self.get(h).gap);
+        let tail = i64::from(line.tail_pos);
+        if pos - front <= tail - pos {
+            let mut prev_last: Option<i64> = None;
+            let mut cur = Some(h);
+            while let Some(c) = cur {
+                let r = self.get(c);
+                let f = Self::first_pos(prev_last, r);
+                if f > pos {
+                    slot.next = Some((c, f));
+                    break;
+                }
+                let last = f + SP * (count(r) - 1);
+                if pos <= last {
+                    return None;
+                }
+                slot.prev = Some((c, last));
+                prev_last = Some(last);
+                cur = self.next(c);
+            }
+        } else {
+            let mut c = line.tail;
+            let mut last = tail;
+            loop {
+                let r = self.get(c);
+                let f = last - SP * (count(r) - 1);
+                if last < pos {
+                    slot.prev = Some((c, last));
+                    break;
+                }
+                if f <= pos {
+                    return None;
+                }
+                slot.next = Some((c, f));
+                match self.prev(c) {
+                    Some(p) => {
+                        last = f - SP - i64::from(r.gap);
+                        c = p;
+                    }
+                    None => break,
+                }
+            }
+        }
+        Some(slot)
+    }
+
     /// Absolute position of a run's first item given the previous run's last item position.
     #[inline]
     fn first_pos(prev_last: Option<i64>, r: Run) -> i64 {
@@ -31,23 +99,10 @@ impl Transport {
         if pos > i64::from(line.len) - 1 {
             return Err(TransportError::NoRoom);
         }
-        let mut prev: Option<u32> = None;
-        let mut prev_last: Option<i64> = None;
-        let mut cur = self.first(l);
-        while let Some(c) = cur {
-            let r = self.get(c);
-            let f = Self::first_pos(prev_last, r);
-            if f > pos {
-                break;
-            }
-            let last = f + SP * (i64::from(r.count) - 1);
-            if pos <= last {
-                return Err(TransportError::NoRoom);
-            }
-            prev = Some(c);
-            prev_last = Some(last);
-            cur = self.next(c);
-        }
+        let slot = self.locate(l, pos).ok_or(TransportError::NoRoom)?;
+        let prev = slot.prev.map(|(c, _)| c);
+        let prev_last = slot.prev.map(|(_, p)| p);
+        let cur = slot.next.map(|(c, _)| c);
         if prev_last.is_some_and(|pl| pos - pl < SP) {
             return Err(TransportError::NoRoom);
         }
@@ -79,7 +134,7 @@ impl Transport {
             }
             Some(c) => {
                 let r = self.get(c);
-                let f = Self::first_pos(prev_last, r);
+                let f = slot.next.expect("cur is the next run").1;
                 if f - pos < SP {
                     return Err(TransportError::NoRoom);
                 }
