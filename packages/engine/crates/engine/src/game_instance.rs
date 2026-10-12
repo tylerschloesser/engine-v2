@@ -1609,6 +1609,44 @@ where
         }
     }
 
+    fn client_line_items(&mut self, line: u32, tx: &mut [u8]) -> isize {
+        let GameInstance::Client(c) = self else {
+            return -(Status::WrongRole as isize);
+        };
+        let r = c.core.replica();
+        let mut held = false;
+        r.structures(|p| held |= p.id.0 == line);
+        if !held {
+            return -(Status::NotCached as isize);
+        }
+        let l = crate::transport::LineId(line);
+        let tick = r.forecast_tick().unwrap_or(u32::MAX);
+        write_line_items(tx, tick, &[l], r.transport(), &|l| r.forecast_unknown(l)) as isize
+    }
+
+    fn client_forecast_catch_up(&mut self, tick: u32) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                c.core.forecast_catch_up(tick);
+                Status::Ok
+            }
+            _ => Status::WrongRole,
+        }
+    }
+
+    fn sim_line_items(&mut self, tx: &mut [u8]) -> usize {
+        let GameInstance::Sim(h) = self else {
+            return 0;
+        };
+        let Some(sim) = h.sim() else {
+            return 0;
+        };
+        let t = sim.authority().store().transport();
+        let mut ids = Vec::new();
+        t.line_ids(&mut |l| ids.push(l));
+        write_line_items(tx, sim.tick().0.wrapping_sub(1), &ids, t, &|_| false)
+    }
+
     fn client_corrupt_line(&mut self, line: u32) -> Status {
         match self {
             GameInstance::Client(c) => {
@@ -1783,6 +1821,39 @@ where
             _ => Status::Unsupported,
         }
     }
+}
+
+/// `client_line_items`' and `sim_line_items`' bytes (`abi::registry`'s doc has the layout); `0`
+/// when they do not fit. Test-only, allocates.
+fn write_line_items(
+    tx: &mut [u8],
+    tick: u32,
+    ids: &[crate::transport::LineId],
+    t: &dyn crate::transport::TransportRead,
+    unknown: &dyn Fn(crate::transport::LineId) -> bool,
+) -> usize {
+    let mut w: Vec<u32> = vec![tick, ids.len() as u32];
+    for &l in ids {
+        let unk = unknown(l);
+        w.push(l.0);
+        w.push(u32::from(unk));
+        let at = w.len();
+        w.push(0);
+        if !unk {
+            let _ = t.items_in(l, &mut |item, pos| {
+                w.push(u32::from(item.0));
+                w.push(pos);
+            });
+        }
+        w[at] = ((w.len() - at - 1) / 2) as u32;
+    }
+    let Some(out) = tx.get_mut(..4 * w.len()) else {
+        return 0;
+    };
+    for (o, v) in out.chunks_exact_mut(4).zip(&w) {
+        o.copy_from_slice(&v.to_le_bytes());
+    }
+    4 * w.len()
 }
 
 /// `client_line_structures`' JSON (`abi::registry`'s doc has the shape). Test-only, allocates.

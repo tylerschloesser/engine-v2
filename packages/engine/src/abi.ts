@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 42
+export const ABI_VERSION = 43
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -267,6 +267,15 @@ export const ABI_EXPORTS = {
   // M47 (`ABI_VERSION` 41 -> 42), `engine/test` only: the client replica's forecast counters as
   // UTF-8 JSON into `Tx`, returning its length; shape in `abi/registry.rs` (`forecastCounters`).
   client_forecast_counters: { role: 'client', params: 0, result: 'len' },
+  // M47b (`ABI_VERSION` 42 -> 43), `engine/test` only: the items of one held line of the client
+  // replica (`client_line_items(line)`, `-NotCached` when not held) or of every line of the sim
+  // role's store (`sim_line_items`), little-endian `u32`s into `Tx`, returning the byte count;
+  // layout in `abi/registry.rs` (`lineItems`, `hostLineItems`).
+  client_line_items: { role: 'client', params: 1, result: 'len' },
+  // M47b, `engine/test` only: steps the client replica's forecast follower to `tick`, as `on_frame`
+  // does before a frame's first section (an arbiter's step on a tick no frame came for).
+  client_forecast_catch_up: { role: 'client', params: 1, result: 'status' },
+  sim_line_items: { role: 'sim', params: 0, result: 'len' },
   // M16: parses one action-ring record (`[seq u32 LE][len u32
   // LE][UTF-8 JSON]`) out of `len` bytes of `RegionId.Rx` (shared with `on_input`'s own,
   // differently-shaped records) into the game's `Action`, queues it for the next uplink batch.

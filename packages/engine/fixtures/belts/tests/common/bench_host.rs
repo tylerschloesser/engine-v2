@@ -11,7 +11,7 @@ use engine::host::Host;
 use engine::host::pacing::BandwidthConfig;
 use engine::sim::WorldParams;
 use engine::wire::{CameraReport, UplinkWriter};
-use fx_belts::bench::world::{BenchWorld, Regime, bench_world_scaled};
+use fx_belts::bench::world::BenchWorld;
 use fx_belts::{Belts, BeltsParams, BenchSpec};
 
 pub const PLAYERS: u32 = 8;
@@ -43,9 +43,10 @@ pub fn params(spec: BenchSpec) -> WorldParams<Belts> {
     }
 }
 
-/// The plain-data world `spec` builds (the counts genesis must reach).
+/// The plain-data world `spec` builds (the counts genesis must reach): `fx_belts::bench::world_of`,
+/// the regime's edits included.
 pub fn world_of(spec: BenchSpec) -> BenchWorld {
-    bench_world_scaled(u64::from(spec.seed), Regime::Mixed, u32::from(spec.scale))
+    fx_belts::bench::world_of(spec)
 }
 
 pub struct BenchHost {

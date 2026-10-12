@@ -47,8 +47,11 @@ import { type DesyncDump, type DesyncLog, readDesyncLog, takeDesyncDumps } from 
 import {
   corruptLine,
   type ForecastCounters,
+  forecastCatchUp,
+  type LineItemsDump,
   type LineStructuresDump,
   readForecastCounters,
+  readLineItems,
   readLineStructures,
 } from './lines.js'
 import {
@@ -175,6 +178,12 @@ export interface HeadlessClient {
   lineStructures(): LineStructuresDump
   /** M47: the replica's forecast counters (`client_forecast_counters`; `forecastCounters`). */
   forecastCounters(): ForecastCounters
+  /** M47b: the items on held line `line` (`client_line_items`; `lineItems`), `null` when the
+   * replica does not hold it. */
+  lineItems(line: number): LineItemsDump | null
+  /** M47b: steps the replica's forecast follower to `tick` as `on_frame` does first
+   * (`client_forecast_catch_up`): an arbiter's step on a tick no frame came for. */
+  forecastCatchUp(tick: number): void
   /** M46 fault injection (`client_corrupt_line`): flips bit 0 of a held line's `speed`. Throws when
    * the line is not held. */
   corruptLineStructure(id: number): void
@@ -693,6 +702,12 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     },
     forecastCounters() {
       return readForecastCounters(inst)
+    },
+    lineItems(line) {
+      return readLineItems(inst, line)
+    },
+    forecastCatchUp(tick) {
+      forecastCatchUp(inst, tick)
     },
     corruptLineStructure(id) {
       corruptLine(inst, id)

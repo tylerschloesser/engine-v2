@@ -4,19 +4,19 @@
     "cpu": "Apple M3 Max",
     "arch": "arm64"
   },
-  "measuredAt": "2026-10-12T05:14:14.588Z",
-  "conditions": "Tyler's Mac (Apple M3 Max), native release (cargo test --release), fx-belts' standard belt world at genesis (M40's Mixed regime, seed 7: 3,810 lines, 50,000 belt tiles, 1,090 spawners; caps 32,768 lines and 393,216 items, so the item cap never binds: 259,795 items at tick 200, 315,444 at tick 1,400, the sink lanes constant at 200,000, the dead-end lanes filling by design) through packages/engine/fixtures/belts/tests/bench_belts.rs: Host<Belts> with 8 connections holding maximum views (256 x 256 tiles, stacked over the 220 x 545-tile world), unpaced, production hashing, no actions; 200 warm-up ticks then 1,200 measured; a tick is admit + seal + tick + build_frame x 8, frames discarded. Promoted with pnpm bench:baseline from the manager's gate run (pnpm test:slow rust -t slow_tick_belts_large) at 2026-10-12 05:14 UTC, 1-min/5-min load 3.10/5.19. Thirteen earlier runs of the same build on 2026-10-11 22:01-22:06 local: three gated runs at 1-min load 3.84-3.96 (0.8645, 0.8628, 0.8542 ms) and ten runs of the release binary alone (--exact, no rebuild) at 1-min load 3.46-3.85 (0.8445-0.8572 ms); all fourteen span 0.8445-0.8815 ms (4.4 %), so no 0047 minDeltaMs is set. One run inside the full pnpm test:slow rust (every slow_* test in parallel) read +5 % over its quiet median. Working tree on top of 864cb3a8 (M45).",
+  "measuredAt": "2026-10-12T12:16:24.469Z",
+  "conditions": "Tyler's Mac (Apple M3 Max), native release (cargo test --release), fx-belts' standard belt world at genesis (M40's Mixed regime, seed 7: 3,810 lines, 50,000 belt tiles, 1,090 spawners, each declaring its schedule to the forecast tracker since M47b; caps 32,768 lines and 393,216 items, so the item cap never binds) through packages/engine/fixtures/belts/tests/bench_belts.rs: Host<Belts> with 8 connections holding maximum views (256 x 256 tiles, stacked over the 220 x 545-tile world), unpaced, production hashing, no actions; 200 warm-up ticks then 1,200 measured; a tick is admit + seal + tick + build_frame x 8 (sections 12 LineStructs and 13 Forecasts included, 54,153 B of frames a tick), frames discarded. Promoted with pnpm bench:baseline from the manager's median gate run of M47b (pnpm test:slow rust -t slow_tick_belts_large) at 2026-10-12 12:16 UTC, 1-min/5-min load 3.10/4.82; the manager's four runs of the same tree read 1.241, 1.274, 1.264 and 1.298 ms (1-min load 1.9-3.3), the implementer's three 1.256-1.280: all seven span 1.241-1.298 (4.6 %), so no 0047 minDeltaMs is set. Up from M45's 0.8815 (promoted 2026-10-12 05:14 UTC, fourteen runs 0.8445-0.8815): +0.38 ms, the reviewed cost of replicating line structures (M46, section 12: about 0.3 ms, most of it build_frame pricing every chunk's anchored structures every tick, cached per chunk by structure_version since M47b, -0.10 ms) and forecasts (M47, the host tracker and section 13: about 0.1 ms); 0079 \u00a719 (d). Working tree on top of 592b94e2 (M47).",
   "gated": ["medianMs"],
   "limits": {
     "medianMs": 5
   },
   "metrics": {
-    "medianMs": 0.8815,
-    "p99Ms": 2.0084,
-    "maxMs": 2.2732,
-    "tickMedianMs": 0.1939,
-    "advanceMedianMs": 0.0452,
-    "framesMedianMs": 0.6972,
-    "frameBytesPerTick": 53501
+    "medianMs": 1.2638,
+    "p99Ms": 2.3495,
+    "maxMs": 2.693,
+    "tickMedianMs": 0.2312,
+    "advanceMedianMs": 0.0602,
+    "framesMedianMs": 1.0397,
+    "frameBytesPerTick": 54153
   }
 }

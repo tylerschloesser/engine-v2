@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 42;
+pub const ABI_VERSION: u32 = 43;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -593,6 +593,31 @@ pub trait Instance: Sized + 'static {
     /// "forecastSeenLate","corrections","listsUnknown","recordsUnheld"}`, a fixed size whatever
     /// the replica holds.
     fn client_forecast_counters(&mut self, _tx: &mut [u8]) -> usize {
+        0
+    }
+
+    /// M47b (`ABI_VERSION` 42 -> 43), `engine/test` only: the items of held line `line` in the
+    /// client replica, into `Tx` as little-endian `u32`s, returning the byte count (`0` when `Tx`,
+    /// 4 KiB on the client, is too small: about 500 items): `tick` (the replica's forecast tick,
+    /// `u32::MAX` before its first frame) · `1` · `line · unknown (1: its list did not fit a
+    /// frame; no items) · n · n x (item · pos)`, items front to back (`engine/test`'s
+    /// `lineItems`); `-(Status::NotCached)` when the replica does not hold the line.
+    fn client_line_items(&mut self, _line: u32, _tx: &mut [u8]) -> isize {
+        0
+    }
+
+    /// M47b (`ABI_VERSION` 42 -> 43), `engine/test` only: steps the replica's forecast follower to
+    /// `tick` as `ClientCore::on_frame` does before a frame's first section (`Replica::
+    /// forecast_catch_up`): an arbiter comparing every tick takes that step itself on a tick no
+    /// frame came for (nothing changed for the client), as the native one does.
+    fn client_forecast_catch_up(&mut self, _tick: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// M47b (`ABI_VERSION` 42 -> 43), `engine/test` only: `client_line_items`' layout for every
+    /// line of the sim role's store (`tick` the last tick it ran, then the line count and each
+    /// line, ascending by id) into its 64 KiB `Tx` (`engine/test`'s `hostLineItems`).
+    fn sim_line_items(&mut self, _tx: &mut [u8]) -> usize {
         0
     }
 
@@ -1215,6 +1240,18 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_forecast_counters() -> i32 {
             $crate::abi::client_forecast_counters(&__ENGINE_SLOT)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_line_items(line: u32) -> i32 {
+            $crate::abi::client_line_items(&__ENGINE_SLOT, line)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_forecast_catch_up(tick: u32) -> u32 {
+            $crate::abi::client_forecast_catch_up(&__ENGINE_SLOT, tick) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn sim_line_items() -> i32 {
+            $crate::abi::sim_line_items(&__ENGINE_SLOT)
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn on_action(len: u32) -> u32 {

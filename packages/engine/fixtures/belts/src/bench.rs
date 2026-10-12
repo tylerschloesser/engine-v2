@@ -9,8 +9,16 @@
 //! reference game's bench marker, `games/reference/sim/src/bench.rs`): with a spec,
 //! [`crate::FlatWorldgen`] writes four tiles at `y = -1`, `x = -1 ..= -4` (chunk `(-1, -1)`, far
 //! from every bench line), each the world's plain tile kind with the data in its 16-bit `aux`
-//! field, which nothing draws: [`MARKER`], the seed's low and high halves, the scale. Genesis
-//! reads them.
+//! field, which nothing draws: [`MARKER`], the seed's low and high halves, the scale; and (M47b)
+//! the regime in three more at `x = -5 ..= -7` ([`BenchRegime`]: its tag and `jam_pct`, `period`,
+//! `speed`), all 0 for `Mixed`, which is the plain tile, so a `Mixed` spec's world is the one it was
+//! (`golden-bench-64.json` holds). Genesis reads them.
+//!
+//! **Regimes (M47b).** [`BenchRegime::Mixed`] is M40's world; `InserterLike` adds one
+//! [`crate::Thing::Inserter`] making M40's `2,000 / scale` edits a tick; `MixedEmpty` is `Mixed`
+//! with no item at rest (M41's "empty at the start"); `SaturatedView { jam_pct, period, speed }` is
+//! M44b's [`world::saturated_view_world`] (`144 / scale` rows of 256 tiles), every line at `speed`
+//! (0: 24), with one [`crate::Thing::Jam`] per toggled sink (M41's jam schedule).
 //!
 //! **What is built.** Per line, in the world's order: `create(len, 24)`; then every `set_out`
 //! (`Next`, `Sink`, `DeadEnd`); every item at rest by `insert_at`, front to back; one straight
@@ -21,8 +29,9 @@
 //! `"spawner"` list from tick 1 (a genesis spawn is woken; `Belts::tick` activates a woken
 //! spawner). Rates: `period = round(65,536 / rate256)` (M40's `rate256` per 256 ticks; 24 becomes
 //! 2,731, 0.01 % slower than the spike's).
-//! Every write stops at the first refusal, so a world whose caps are too small is visibly short
-//! (`bench_world_at_genesis_is_deterministic` asserts the counts). Geometry upkeep at genesis is
+//! A refused write panics, naming the step and the line (M47b: a fixture-only genesis, and a world
+//! cut short by small caps once passed silently; `bench_world_at_genesis_is_deterministic` asserts
+//! the counts). Geometry upkeep at genesis is
 //! O(index) per line (0079 §14): about a second natively in release at full scale.
 
 pub mod world;
@@ -31,10 +40,10 @@ use engine::game::WorldWrite;
 use engine::transport::{Geometry, Item, LineId, Output, Segment};
 use engine::world::{Tile, TilePos, WorldPos};
 
-use crate::{Belts, Pos, Spawner, Thing};
+use crate::{Belts, Inserter, Jam, Pos, Spawner, Thing};
 use world::{Out, Regime, TILE};
 
-/// The bench world to build: M40's `bench_world_scaled(seed, Regime::Mixed, scale)`.
+/// The bench world to build: `bench_world_scaled(seed, regime, scale)` (M40's `Mixed` by default).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BenchSpec {
     /// `bench_world`'s seed (M40 and the gated benchmark: 7).
@@ -42,6 +51,72 @@ pub struct BenchSpec {
     /// 1 = full scale; `n` divides tiles and items by `n` (the fast test and the golden use 64).
     /// At most `u16::MAX` (it rides in one tile's `aux`).
     pub scale: u16,
+    /// M47b: which world (module doc). Absent in JSON is `Mixed`, and `Mixed` is never written, so
+    /// every earlier spec reads and writes as it did.
+    #[serde(default)]
+    pub regime: BenchRegime,
+}
+
+/// The bench world's regime (M47b, module doc). JSON: `"Mixed"`, `"InserterLike"`,
+/// `"MixedEmpty"` or `{"SaturatedView": {"jam_pct": 20, "period": 100, "speed": 0}}` (`speed`
+/// optional, 0 = 24).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub enum BenchRegime {
+    #[default]
+    Mixed,
+    InserterLike,
+    MixedEmpty,
+    SaturatedView {
+        jam_pct: u8,
+        period: u16,
+        #[serde(default)]
+        speed: u16,
+    },
+}
+
+impl BenchRegime {
+    pub fn is_mixed(&self) -> bool {
+        *self == BenchRegime::Mixed
+    }
+
+    /// The plain-data world's regime.
+    pub fn world(self) -> Regime {
+        match self {
+            BenchRegime::Mixed | BenchRegime::MixedEmpty => Regime::Mixed,
+            BenchRegime::InserterLike => Regime::InserterLike,
+            BenchRegime::SaturatedView {
+                jam_pct, period, ..
+            } => Regime::SaturatedView { jam_pct, period },
+        }
+    }
+
+    /// The three marker `aux` values (`x = -5, -6, -7`): all 0 for `Mixed`.
+    fn encode(self) -> [u16; 3] {
+        match self {
+            BenchRegime::Mixed => [0, 0, 0],
+            BenchRegime::InserterLike => [1, 0, 0],
+            BenchRegime::MixedEmpty => [2, 0, 0],
+            BenchRegime::SaturatedView {
+                jam_pct,
+                period,
+                speed,
+            } => [3 | (u16::from(jam_pct) << 8), period, speed],
+        }
+    }
+
+    /// The inverse of [`BenchRegime::encode`]; an unknown tag reads as `Mixed`.
+    fn decode(aux: [u16; 3]) -> Self {
+        match aux[0] & 0xff {
+            1 => BenchRegime::InserterLike,
+            2 => BenchRegime::MixedEmpty,
+            3 => BenchRegime::SaturatedView {
+                jam_pct: (aux[0] >> 8) as u8,
+                period: aux[1],
+                speed: aux[2],
+            },
+            _ => BenchRegime::Mixed,
+        }
+    }
 }
 
 /// `Worldgen::Params` of `fx-belts` (JSON `null` or `{"bench": {"seed": 7, "scale": 1}}`).
@@ -82,13 +157,17 @@ fn plain(aux: u16) -> Tile {
 }
 
 /// The tiles the worldgen writes into chunk `(-1, -1)` for `spec` (`(index in the 32 x 32 chunk,
-/// tile)`): `x = -1, -2, -3, -4` on its last row.
-pub fn marker_tiles(spec: BenchSpec) -> [(usize, Tile); 4] {
+/// tile)`): `x = -1 ..= -7` on its last row (the last three plain for `Mixed`).
+pub fn marker_tiles(spec: BenchSpec) -> [(usize, Tile); 7] {
+    let r = spec.regime.encode();
     [
         (31 * 32 + 31, plain(MARKER)),
         (31 * 32 + 30, plain(spec.seed as u16)),
         (31 * 32 + 29, plain((spec.seed >> 16) as u16)),
         (31 * 32 + 28, plain(spec.scale)),
+        (31 * 32 + 27, plain(r[0])),
+        (31 * 32 + 26, plain(r[1])),
+        (31 * 32 + 25, plain(r[2])),
     ]
 }
 
@@ -106,12 +185,36 @@ pub fn marker(w: &dyn engine::game::WorldRead<Belts>) -> Option<BenchSpec> {
     Some(BenchSpec {
         seed: u32::from(at(-2)?) | (u32::from(at(-3)?) << 16),
         scale: at(-4)?.max(1),
+        regime: BenchRegime::decode([
+            at(-5).unwrap_or(0),
+            at(-6).unwrap_or(0),
+            at(-7).unwrap_or(0),
+        ]),
     })
+}
+
+/// The plain-data world `spec` builds: `bench_world_scaled` with the regime's own edits
+/// (`MixedEmpty` clears every line's items, `SaturatedView.speed` sets every line's speed). Genesis
+/// and the tests' count checks share it.
+pub fn world_of(spec: BenchSpec) -> world::BenchWorld {
+    let mut bw = world::bench_world_scaled(
+        u64::from(spec.seed),
+        spec.regime.world(),
+        u32::from(spec.scale),
+    );
+    match spec.regime {
+        BenchRegime::MixedEmpty => bw.lines.iter_mut().for_each(|l| l.items_at_rest.clear()),
+        BenchRegime::SaturatedView { speed, .. } if speed > 0 => {
+            bw.lines.iter_mut().for_each(|l| l.speed = speed)
+        }
+        _ => {}
+    }
+    bw
 }
 
 /// Builds `spec`'s world (module doc).
 pub fn build(w: &mut dyn WorldWrite<Belts>, spec: BenchSpec) {
-    let bw = world::bench_world_scaled(u64::from(spec.seed), Regime::Mixed, u32::from(spec.scale));
+    let bw = world_of(spec);
     let mut ids: Vec<LineId> = Vec::with_capacity(bw.lines.len());
     {
         let Ok(t) = w.transport_mut() else {
@@ -120,7 +223,7 @@ pub fn build(w: &mut dyn WorldWrite<Belts>, spec: BenchSpec) {
         for l in &bw.lines {
             match t.create(l.len, l.speed) {
                 Ok(id) => ids.push(id),
-                Err(_) => return,
+                Err(e) => panic!("bench genesis: create line {}: {e:?}", ids.len()),
             }
         }
         for (i, l) in bw.lines.iter().enumerate() {
@@ -129,14 +232,14 @@ pub fn build(w: &mut dyn WorldWrite<Belts>, spec: BenchSpec) {
                 Out::Sink => Output::Sink,
                 Out::Next(j) => Output::Next(ids[j as usize]),
             };
-            if t.set_out(ids[i], out).is_err() {
-                return;
+            if let Err(e) = t.set_out(ids[i], out) {
+                panic!("bench genesis: set_out line {i}: {e:?}");
             }
         }
         for (i, l) in bw.lines.iter().enumerate() {
             for &(item, pos) in &l.items_at_rest {
-                if t.insert_at(ids[i], pos, Item(item)).is_err() {
-                    return;
+                if let Err(e) = t.insert_at(ids[i], pos, Item(item)) {
+                    panic!("bench genesis: insert_at line {i} pos {pos}: {e:?}");
                 }
             }
         }
@@ -166,8 +269,8 @@ pub fn build(w: &mut dyn WorldWrite<Belts>, spec: BenchSpec) {
                     },
                 },
             };
-            if t.set_segments(ids[i], &[seg]).is_err() {
-                return;
+            if let Err(e) = t.set_segments(ids[i], &[seg]) {
+                panic!("bench genesis: set_segments line {i}: {e:?}");
             }
         }
     }
@@ -190,5 +293,34 @@ pub fn build(w: &mut dyn WorldWrite<Belts>, spec: BenchSpec) {
         } else {
             Thing::Spawner(spawner)
         });
+    }
+    if let Regime::SaturatedView { period, .. } = bw.regime {
+        for tg in &bw.toggles {
+            let s = bw.spans[tg.line as usize];
+            w.spawn(Thing::Jam(Jam {
+                at: Pos {
+                    x: s.x0 as i32,
+                    y: s.y as i32,
+                },
+                line: ids[tg.line as usize].0,
+                phase: tg.phase,
+                period,
+            }));
+        }
+    }
+    // The edits name lines by id, so they need the ids `create` handed out in order (a fresh
+    // store's are 1, 2, ...): anything else would silently make `InserterLike` a `Mixed` world.
+    if bw.inserter_calls > 0 && !ids.is_empty() {
+        assert!(
+            ids.windows(2).all(|p| p[1].0 == p[0].0 + 1),
+            "InserterLike needs contiguous line ids at genesis"
+        );
+        w.spawn(Thing::Inserter(Inserter {
+            at: Pos { x: 0, y: 0 },
+            first: ids[0].0,
+            lines: ids.len() as u32,
+            calls: bw.inserter_calls,
+            seed: spec.seed,
+        }));
     }
 }

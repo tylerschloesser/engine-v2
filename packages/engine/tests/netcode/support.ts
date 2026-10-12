@@ -131,3 +131,34 @@ export function worstSecondAfter(h: NetHarness, i: number, fromTick: number): nu
   }
   return worst
 }
+
+/** M47b: a `fx-belts` bench regime (`fixtures/belts/src/bench.rs` `BenchRegime`, JSON form). */
+export type BeltsRegime =
+  | 'Mixed'
+  | 'InserterLike'
+  | 'MixedEmpty'
+  | { SaturatedView: { jam_pct: number; period: number; speed?: number } }
+
+/** M47b: `createNetHarness`'s `world` for the `fx-belts` bench world built at genesis (seed 7, as
+ * M40/M41), `scale` 64 for the arbiter's small worlds, 1 for the saturated viewport. */
+export function beltsBenchWorld(
+  regime: BeltsRegime,
+  scale: number,
+  caps: { maxLines: number; maxItems: number },
+) {
+  return {
+    params: { worldgen: { bench: { seed: 7, scale, regime } }, ...caps },
+    // The bench spawners are entities that write on every insert (thousands of chunk deltas a
+    // second at full scale): with the default caps those deltas alone degrade the connection and
+    // collapse chunks into snapshots. The scenarios measure sections 12 and 13, so the chunk
+    // pacing is lifted out of reach (`tick-belts-large node`'s choice) and every tick's frame goes.
+    bandwidth: {
+      softCapBytesPerS: LIFTED,
+      chunkRefillBytesPerS: LIFTED,
+      chunkBurstBytes: LIFTED,
+      hardCapBytesPerS: LIFTED,
+    },
+  }
+}
+
+const LIFTED = 1_000_000_000

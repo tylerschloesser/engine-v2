@@ -592,6 +592,9 @@ pub struct Host<G: Game> {
     /// M46: this frame's `LineStructs` plan (`host/lines.rs`), reserved at attach for the world's
     /// `max_lines`.
     scratch_lines: lines::LinePlan,
+    /// M47b: the collapse price's structure bytes per chunk (`lines::StructPrices`), reserved with
+    /// `scratch_lines`.
+    struct_prices: lines::StructPrices,
 
     // -- M22 steps 4-6: persistence identity, write-ahead sealing, snapshots -------------------
     /// The first 128 bits of the build hash (0005 "Sim identity"), parsed once from `SimConfig::
@@ -883,6 +886,7 @@ impl<G: Game> Host<G> {
             presence: PresenceTable::empty(),
             scratch_presence: Vec::new(),
             scratch_lines: lines::LinePlan::default(),
+            struct_prices: lines::StructPrices::default(),
             build_hash: [0; 16],
             worldgen_fingerprint,
             last_logged_tick: Tick(0),
@@ -1199,6 +1203,7 @@ impl<G: Game> Host<G> {
             lines: lines::LineRoute::with_capacity(line_cap),
         });
         self.scratch_lines.reserve(line_cap);
+        self.struct_prices.reserve(line_cap);
         player
     }
 
@@ -1262,6 +1267,7 @@ impl<G: Game> Host<G> {
             lines: lines::LineRoute::with_capacity(line_cap),
         });
         self.scratch_lines.reserve(line_cap);
+        self.struct_prices.reserve(line_cap);
         player
     }
 
@@ -1514,6 +1520,7 @@ impl<G: Game> Host<G> {
             lines: lines::LineRoute::with_capacity(line_cap),
         });
         self.scratch_lines.reserve(line_cap);
+        self.struct_prices.reserve(line_cap);
 
         self.write_welcome_for(player, epoch, welcome_sink);
         Ok(())
@@ -2058,7 +2065,10 @@ impl<G: Game> Host<G> {
                     &mut VecBytes(&mut self.scratch_snap_bytes),
                 );
                 (self.scratch_snap_bytes.len() - snap_start) as i64
-                    + i64::from(lines::anchored_bytes(store.transport(), c, dims))
+                    + i64::from(
+                        self.struct_prices
+                            .anchored_bytes(store.transport(), c, dims),
+                    )
             } else {
                 PRISTINE_ENTER_COST
             };
@@ -2324,8 +2334,10 @@ impl<G: Game> Host<G> {
                     let mut count = crate::bytes::CountSink::default();
                     encode_chunk_snapshot(store, chunk, version, &mut count);
                     // M46: the snapshot a collapse queues is priced with its anchored puts.
-                    let len =
-                        count.0 as u32 + lines::anchored_bytes(store.transport(), chunk, dims);
+                    let len = count.0 as u32
+                        + self
+                            .struct_prices
+                            .anchored_bytes(store.transport(), chunk, dims);
                     self.scratch_snapshot_len.insert(i, (chunk, len));
                     len
                 }
@@ -3041,6 +3053,7 @@ where
             presence: PresenceTable::empty(),
             scratch_presence: Vec::new(),
             scratch_lines: lines::LinePlan::default(),
+            struct_prices: lines::StructPrices::default(),
             build_hash,
             worldgen_fingerprint,
             last_logged_tick: Tick(0),
@@ -3098,6 +3111,7 @@ where
             return Status::AlreadyInitialised;
         };
         self.sim = Some(Sim::genesis(params));
+        self.struct_prices.clear();
         Status::Ok
     }
 
@@ -3515,6 +3529,7 @@ where
         );
         authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
         self.sim = Some(Sim::from_parts(authority));
+        self.struct_prices.clear();
         self.last_logged_tick = Tick(info.log_ref_tick);
         let Some(out) = result.get_mut(..8) else {
             return Status::BadLength;
@@ -3596,6 +3611,7 @@ where
                 );
                 authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
                 self.sim = Some(Sim::from_parts(authority));
+                self.struct_prices.clear();
                 self.last_logged_tick = Tick(env.log_ref_tick);
                 let Some(out) = result.get_mut(..9) else {
                     return Status::BadLength;
@@ -3642,6 +3658,7 @@ where
                     Ok((mut authority, _outcome)) => {
                         authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
                         self.sim = Some(Sim::from_parts(authority));
+                        self.struct_prices.clear();
                         // decision 6: the tail is dropped whole, never replayed -- the new segment
                         // (opened by the TS host) starts with no frame logged yet.
                         self.last_logged_tick = Tick(0);

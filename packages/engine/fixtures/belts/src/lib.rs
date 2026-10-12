@@ -20,7 +20,13 @@
 //! accumulator reaches `period` (ticks per item in 1/256 tick, at least 256) it makes exactly one
 //! `insert_back` attempt: accepted, `acc -= period` and `spawned += 1`; refused (`NoRoom`, `Full`),
 //! `acc -= 256`, so the credit is held and the next tick is due again, never a burst. `period = 256`
-//! tries every tick (a saturating feed).
+//! tries every tick (a saturating feed). **Declared (M47b):** on the tick a spawner joins the list
+//! (a request's tick, or tick 1 for a genesis spawner) it declares that rule to the engine after its
+//! first step, `set_spawner(line, Schedule { period, acc, kinds, next })` (`kinds` 0 for a
+//! [`Thing::Spawner`], [`CYCLE_KINDS`] for a [`Thing::Cycling`]; `next` the item of its next
+//! insert): the engine's forecast tracker replays exactly this rule (0078 A8), so the line's
+//! inserts reach clients as forecasts, not arrivals. A destroyed line drops its declaration in the
+//! engine; the fixture never destroys a spawner entity.
 //!
 //! **Surgery, items and geometry (M43b).** `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`,
 //! `Remove`, `TakeFront` and `Segments` run M43's API the same way. `Cut` appends the new back line
@@ -39,7 +45,10 @@
 //!
 //! **The bench world (M45).** `BeltsParams.bench` builds M40's standard `Mixed` world at genesis
 //! ([`bench`]); its mixed-kind chains' spawners are [`Thing::Cycling`] (the item steps through
-//! `1..=CYCLE_KINDS`), a variant only the bench genesis makes.
+//! `1..=CYCLE_KINDS`), a variant only the bench genesis makes. Its regime (M47b,
+//! [`bench::BenchRegime`]) may instead build M44b's `SaturatedView` (with [`Thing::Jam`]s, the
+//! scheduled sink toggles), `InserterLike` (with one [`Thing::Inserter`]) or `Mixed` empty at the
+//! start; these schedule entities ride the `"spawner"` list and are made only by the bench genesis.
 //!
 //! Goldens (`golden/scenario-*.json`, `tests/golden_scenarios.rs`): `straight-chain` (also the
 //! canonical `scenario.json`), `deadend-backup`, `spawn-to-sink`, `big-step`, `edit-while-running`,
@@ -50,7 +59,7 @@ use engine::game::{
     EntityId, Game, Growth, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead,
     WorldWrite,
 };
-use engine::transport::{Geometry, Item, LineId, Output, Segment};
+use engine::transport::{Geometry, Item, LineId, Output, Schedule, Segment};
 use engine::world::{
     ChunkCoord, Footprint, PrototypeId, Registry, SystemId, Tile, TilePos, TraitSet, WorldPos,
 };
@@ -58,7 +67,7 @@ use engine::worldgen::Worldgen;
 use ts_rs::TS;
 
 pub mod bench;
-pub use bench::{BeltsParams, BenchSpec};
+pub use bench::{BeltsParams, BenchRegime, BenchSpec};
 
 /// Capacity of [`Global::lines`]: chains a world can name.
 pub const MAX_CHAINS: u32 = 32;
@@ -323,6 +332,60 @@ pub struct Spawner {
     pub spawned: u32,
 }
 
+impl Spawner {
+    /// The item of this spawner's next insert (a cycling one's `k`-th accepted insert is kind
+    /// `(item - 1 + k) % CYCLE_KINDS + 1`).
+    fn next_item(&self, cycling: bool) -> u16 {
+        if cycling {
+            let k = self.spawned % u32::from(CYCLE_KINDS);
+            ((u32::from(self.item.max(1)) - 1 + k) % u32::from(CYCLE_KINDS) + 1) as u16
+        } else {
+            self.item
+        }
+    }
+
+    /// The rule this spawner follows, as `set_spawner` declares it (module doc).
+    fn schedule(&self, cycling: bool) -> Schedule {
+        Schedule {
+            period: self.period,
+            acc: self.acc,
+            kinds: if cycling { CYCLE_KINDS } else { 0 },
+            next: Item(self.next_item(cycling)),
+        }
+    }
+}
+
+/// A scheduled sink toggle of the `SaturatedView` bench world (M47b, M44b's `Toggle`): `line` is a
+/// `Sink` while `(tick + phase) % period >= period / 2` and a `DeadEnd` otherwise, set by
+/// `set_out` on the ticks it changes. Never written after genesis.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Jam {
+    pub at: Pos,
+    pub line: u32,
+    pub phase: u16,
+    pub period: u16,
+}
+
+/// The `InserterLike` bench world's edits (M47b; M40's inserter-like calls): `calls` per tick,
+/// each an `insert_at` or a `remove_at` on one of the `lines` lines from `first`, at a position
+/// drawn from `(seed, tick, call)` by a stateless mix (no state to encode). Never written.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Inserter {
+    pub at: Pos,
+    pub first: u32,
+    pub lines: u32,
+    pub calls: u32,
+    pub seed: u32,
+}
+
+/// SplitMix64's finaliser: the inserter's per-call draw.
+fn mix(mut z: u64) -> u64 {
+    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 /// Accepted item requests over the world's life (module doc): the inserter-like conservation
 /// `inserted + spawned == live + removed + taken + sunk`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -348,6 +411,10 @@ pub enum Thing {
     /// that never merge", 0077 §2). Its own variant rather than a field of [`Spawner`], so every
     /// golden holding a spawner keeps its encoding, and `Op::Spawner`'s `item` keeps its meaning.
     Cycling(Spawner),
+    /// A scheduled sink toggle (M47b, the `SaturatedView` bench world only), on the `"spawner"` list.
+    Jam(Jam),
+    /// The `InserterLike` bench world's edits (M47b), on the `"spawner"` list.
+    Inserter(Inserter),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -561,6 +628,49 @@ impl Belts {
     }
 }
 
+impl Belts {
+    /// A [`Jam`]'s toggle at tick `now`: its line's output follows the schedule.
+    fn jam(cx: &mut TickCx<'_, Self>, j: Jam, now: u32) {
+        let closed = j.period > 0
+            && (now.wrapping_add(u32::from(j.phase))) % u32::from(j.period)
+                < u32::from(j.period / 2);
+        let want = if closed {
+            Output::DeadEnd
+        } else {
+            Output::Sink
+        };
+        if let Ok(t) = cx.transport_mut()
+            && t.out(LineId(j.line)).is_ok_and(|o| o != want)
+        {
+            let _ = t.set_out(LineId(j.line), want);
+        }
+    }
+
+    /// An [`Inserter`]'s calls at tick `now` (refusals dropped).
+    fn insert(cx: &mut TickCx<'_, Self>, ins: Inserter, now: u32) {
+        let Ok(t) = cx.transport_mut() else {
+            return;
+        };
+        if ins.lines == 0 {
+            return;
+        }
+        for k in 0..ins.calls {
+            let h = mix((u64::from(ins.seed) << 32 | u64::from(now)) ^ (u64::from(k) << 48));
+            let line = LineId(ins.first + (h % u64::from(ins.lines)) as u32);
+            let Ok(len) = t.len(line) else {
+                continue;
+            };
+            let pos = ((h >> 16) % u64::from(len.max(1))) as u32;
+            if (h >> 48) & 1 == 0 {
+                let item = ((h >> 49) % u64::from(CYCLE_KINDS)) as u16 + 1;
+                let _ = t.insert_at(line, pos, Item(item));
+            } else {
+                let _ = t.remove_at(line, pos);
+            }
+        }
+    }
+}
+
 impl Game for Belts {
     const SCHEMA_VERSION: u32 = 2;
     type Worldgen = FlatWorldgen;
@@ -589,6 +699,8 @@ impl Game for Belts {
         match e {
             Thing::Request(r) => r.at.tile(),
             Thing::Spawner(s) | Thing::Cycling(s) => s.at.tile(),
+            Thing::Jam(j) => j.at.tile(),
+            Thing::Inserter(i) => i.at.tile(),
             Thing::Tally(_) | Thing::Destroyed(_) => TilePos::new(0, 0),
         }
     }
@@ -625,20 +737,26 @@ impl Game for Belts {
     }
 
     /// Requests woken this tick execute in spawn order; then every spawner makes at most one
-    /// `insert_back` attempt (module doc).
+    /// `insert_back` attempt (module doc), and a spawner new on the list declares its schedule.
     fn tick(cx: &mut TickCx<'_, Self>) {
+        let sys = spawner_sys();
+        // The list only appends between compactions (0007 §7), so the members at or past this
+        // index joined it this tick: they declare their schedule after their first step.
+        let joined_from = cx.active_len(sys);
         while let Some(id) = cx.next_woken() {
             match cx.entity(id).ok().flatten().copied() {
                 Some(Thing::Request(req)) => Self::execute(cx, id, req),
                 // Woken only when spawned at genesis (the bench world, M45; `TickCx` puts never
                 // auto-wake): it joins its list here, and runs below this same tick.
-                Some(Thing::Spawner(_) | Thing::Cycling(_)) => cx.activate(spawner_sys(), id),
+                Some(
+                    Thing::Spawner(_) | Thing::Cycling(_) | Thing::Jam(_) | Thing::Inserter(_),
+                ) => cx.activate(sys, id),
                 // Not woken in practice; already on their lists.
                 Some(Thing::Tally(_) | Thing::Destroyed(_)) | None => {}
             }
         }
 
-        let sys = spawner_sys();
+        let now = cx.tick().0;
         for i in 0..cx.active_len(sys) {
             let Some(id) = cx.active_at(sys, i) else {
                 continue; // a tombstoned slot (0007 §7).
@@ -646,17 +764,20 @@ impl Game for Belts {
             let (was, cycling) = match cx.entity(id).ok().flatten().copied() {
                 Some(Thing::Spawner(s)) => (s, false),
                 Some(Thing::Cycling(s)) => (s, true),
+                Some(Thing::Jam(j)) => {
+                    Self::jam(cx, j, now);
+                    continue;
+                }
+                Some(Thing::Inserter(ins)) => {
+                    Self::insert(cx, ins, now);
+                    continue;
+                }
                 _ => continue,
             };
             let mut s = was;
             s.acc += 256;
             if s.acc >= s.period {
-                let item = if cycling {
-                    let k = s.spawned % u32::from(CYCLE_KINDS);
-                    ((u32::from(s.item.max(1)) - 1 + k) % u32::from(CYCLE_KINDS) + 1) as u16
-                } else {
-                    s.item
-                };
+                let item = s.next_item(cycling);
                 let ok = match cx.transport_mut() {
                     Ok(t) => t.insert_back(LineId(s.line), Item(item)).is_ok(),
                     Err(Unknown) => false,
@@ -667,6 +788,11 @@ impl Game for Belts {
                 } else {
                     s.acc -= 256;
                 }
+            }
+            if i >= joined_from
+                && let Ok(t) = cx.transport_mut()
+            {
+                t.set_spawner(LineId(s.line), Some(s.schedule(cycling)));
             }
             // A held refusal leaves the state as it was: no write, so a backed-up spawner costs
             // no delta (the idle-cost rule of `fx-machines`' `idle-world-costs-zero`).

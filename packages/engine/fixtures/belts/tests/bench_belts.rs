@@ -20,6 +20,8 @@
 
 #[path = "common/bench_host.rs"]
 mod bench_host;
+#[path = "common/props.rs"]
+mod props_world;
 
 use bench_host::{BenchHost, PLAYERS, SEED, params, world_of};
 use engine::abi::Instance;
@@ -27,7 +29,7 @@ use engine::game::Game;
 use engine::sim::Sim;
 use engine::testing::bench::{gate, run_in_release};
 use engine::transport::{LineId, Transport, TransportRead};
-use fx_belts::{Belts, BenchSpec, Thing};
+use fx_belts::{Belts, BenchRegime, BenchSpec, Dir, Op, Pos, Thing};
 
 /// 0020 section 9: 1,200 ticks after 200 warm-up ticks.
 const WARMUP: u32 = 200;
@@ -38,6 +40,7 @@ const SNAPSHOT_PROXY_MS: f64 = 5.0 * 50.0 / 3.0;
 const FULL: BenchSpec = BenchSpec {
     seed: SEED,
     scale: 1,
+    regime: BenchRegime::Mixed,
 };
 const MIB: u64 = 1024 * 1024;
 
@@ -141,6 +144,7 @@ fn bench_world_at_genesis_is_deterministic() {
     let spec = BenchSpec {
         seed: SEED,
         scale: 64,
+        regime: BenchRegime::Mixed,
     };
     let world = world_of(spec);
     let a = Sim::<Belts>::genesis(params(spec));
@@ -196,6 +200,7 @@ fn bench_cycling_spawners_cycle_kinds() {
     let spec = BenchSpec {
         seed: SEED,
         scale: 64,
+        regime: BenchRegime::Mixed,
     };
     let mut sim = Sim::<Belts>::genesis(params(spec));
     let mut out = Vec::new();
@@ -231,6 +236,170 @@ fn bench_cycling_spawners_cycle_kinds() {
     }
     assert!(lines > 0, "no cycling sink lane at 1/64 scale");
 }
+
+/// M47b (0078 A8): every bench spawner declares the rule it runs (`set_spawner` on the tick it
+/// joins the list), and the host's forecast tracker replays it exactly: over 600 ticks on each
+/// 1/64 regime the netcode scenarios use, no outcome differs from the declared schedule
+/// (`spawner_mismatches` 0), no declaration is dropped, and after tick 1 no spawner insert reaches
+/// clients as an arrival (an undeclared insert is a `ROUTE_INSERT` crossing; M47 measured about 330
+/// a tick on the full world before the fixture declared). The spawners do insert, and the
+/// saturated view's toggles and the inserter's edits do happen.
+#[test]
+fn belts_spawner_declares_schedule() {
+    use engine::transport::ROUTE_INSERT;
+    // `(regime, spawned, states, invalidations)`: pinned exactly (seed 7); a moved pin is a finding.
+    let pins: [(BenchRegime, u64, u64, u64); 5] = [
+        (BenchRegime::Mixed, 3_091, 0, 0),
+        (BenchRegime::MixedEmpty, 3_091, 3, 0),
+        (BenchRegime::InserterLike, 3_101, 23, 6_776),
+        (
+            BenchRegime::SaturatedView {
+                jam_pct: 20,
+                period: 20,
+                speed: 0,
+            },
+            3_285,
+            420,
+            0,
+        ),
+        (
+            BenchRegime::SaturatedView {
+                jam_pct: 50,
+                period: 30,
+                speed: 72,
+            },
+            7_507,
+            1_120,
+            0,
+        ),
+    ];
+    for (regime, want_spawned, want_states, want_invalidations) in pins {
+        let spec = BenchSpec {
+            seed: SEED,
+            scale: 64,
+            regime,
+        };
+        let mut bench = BenchHost::new(spec);
+        let mut undeclared = 0u64;
+        for _ in 0..600 {
+            bench.step(false);
+            let t = bench.host.sim().unwrap().authority().store().transport();
+            if bench.tick > 1 {
+                undeclared += t
+                    .forecast_crossings()
+                    .iter()
+                    .filter(|c| c.route() == ROUTE_INSERT)
+                    .count() as u64;
+            }
+        }
+        let sim = bench.host.sim().unwrap();
+        let c = sim.authority().store().transport().forecast_host_counters();
+        let spawned: u64 = sim
+            .authority()
+            .store()
+            .entities()
+            .map(|(_, e)| match e {
+                Thing::Spawner(s) | Thing::Cycling(s) => u64::from(s.spawned),
+                _ => 0,
+            })
+            .sum();
+        if std::env::var_os("MEASURE").is_some() {
+            println!("{regime:?}: spawned {spawned}, {c:?}");
+        }
+        assert_eq!(spawned, want_spawned, "{regime:?}: inserts ({c:?})");
+        assert_eq!(c.states, want_states, "{regime:?}: states ({c:?})");
+        assert_eq!(
+            c.invalidations, want_invalidations,
+            "{regime:?}: invalidations ({c:?})"
+        );
+        assert_eq!(c.spawner_mismatches, 0, "{regime:?}: spawner_mismatches");
+        assert_eq!(
+            c.spawner_declarations_dropped, 0,
+            "{regime:?}: spawner_declarations_dropped"
+        );
+        assert_eq!(undeclared, 0, "{regime:?}: undeclared inserts after tick 1");
+    }
+}
+
+/// M47b: a spawner made by a request mid-game (`Op::Spawner`: `execute` turns the request into the
+/// spawner and activates it, so it joins the list on its request's tick) declares too. A native
+/// `Sim<Belts>` (the store tracks forecasts without a host): a sink lane and a dead-end lane, each
+/// fed from tick 20 by a request spawner (the dead end fills, so later attempts are refused for
+/// room, which the schedule predicts); over 400 ticks no outcome differs from the declared schedule,
+/// nothing is dropped, and after the spawners' first tick no insert is a `ROUTE_INSERT` crossing.
+#[test]
+fn belts_request_spawner_declares_schedule() {
+    use engine::transport::ROUTE_INSERT;
+    let mut w = props_world::World::new(3, 64, 1_024);
+    let chain = |speed| Op::Chain {
+        from: Pos { x: 4, y: 4 },
+        dir: Dir::East,
+        tiles: 8,
+        speed,
+        items_at_rest: [(0, 0); 8],
+    };
+    w.step(&[chain(24), chain(24), Op::Sink { line: 0 }]);
+    for _ in 0..18 {
+        w.step(&[]);
+    }
+    w.step(&[
+        Op::Spawner {
+            line: 0,
+            item: 3,
+            period: 300,
+        },
+        Op::Spawner {
+            line: 1,
+            item: 5,
+            period: 256,
+        },
+    ]);
+    let mut undeclared = 0u64;
+    for _ in 0..400 {
+        w.step(&[]);
+        undeclared += w
+            .sim
+            .authority()
+            .store()
+            .transport()
+            .forecast_crossings()
+            .iter()
+            .filter(|c| c.route() == ROUTE_INSERT)
+            .count() as u64;
+    }
+    let c = w
+        .sim
+        .authority()
+        .store()
+        .transport()
+        .forecast_host_counters();
+    let spawned: u64 = w
+        .sim
+        .authority()
+        .store()
+        .entities()
+        .map(|(_, e)| match e {
+            Thing::Spawner(s) => u64::from(s.spawned),
+            _ => 0,
+        })
+        .sum();
+    if std::env::var_os("MEASURE").is_some() {
+        println!("request spawners: spawned {spawned}, {c:?}");
+    }
+    assert_eq!(spawned, SPAWNED_BY_REQUEST, "inserts ({c:?})");
+    assert_eq!(c.spawner_mismatches, 0, "spawner_mismatches ({c:?})");
+    assert_eq!(
+        c.spawner_declarations_dropped, 0,
+        "spawner_declarations_dropped"
+    );
+    assert_eq!(
+        undeclared, 0,
+        "undeclared inserts after the spawners' first tick"
+    );
+}
+
+/// What the request spawners insert in 400 ticks (pinned).
+const SPAWNED_BY_REQUEST: u64 = 182;
 
 /// 0079 §16: the recommended caps reserve 16.5 MiB, over 0007 §8's 8 MiB slack, so they do not fit
 /// a phone's split. The largest caps of the form `(lines, 8 x lines)`, `lines` a multiple of 1,024,

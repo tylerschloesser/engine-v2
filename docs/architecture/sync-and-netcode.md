@@ -72,7 +72,8 @@ allocate nothing; readers borrow and never panic.
 - **Admission rate limit**: 20 actions/s, burst 40, `EngineReject::RateLimited`; unlogged and leaves the action pending (§10). The client
   refuses to dispatch past 32 pending (`OUTBOX_CAPACITY`).
 - Games must never replicate per-tick progress: replicate parameters (`started_at`, `done_at`) and derive bars from the tick clock. Byte
-  budgets are `counters.net.*` rows in `packages/engine/budgets.json`, asserted with `assertBudget`; measure with production hashing on.
+  budgets are `counters.net.*` and (transport sections 12 and 13, M47b) `counters.transport.*` rows in `packages/engine/budgets.json`,
+  asserted with `assertBudget`; measure with production hashing on.
 
 ## Sessions ([0013](../decisions/0013-sessions-and-integrity.md), [0053](../decisions/0053-connection-slots-and-full-admission.md), [0042](../decisions/0042-remote-client-world-config-from-welcome.md))
 

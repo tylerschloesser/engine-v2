@@ -205,7 +205,7 @@ impl World {
                     g.taken += u64::from(t.taken);
                 }
                 Thing::Destroyed(n) => g.destroyed += u64::from(*n),
-                Thing::Request(_) => {}
+                Thing::Request(_) | Thing::Jam(_) | Thing::Inserter(_) => {}
             }
         }
         g

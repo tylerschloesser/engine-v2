@@ -16,6 +16,7 @@ export const SECTION_NAMES: Record<number, string> = {
   10: 'ChunkTiles',
   11: 'ChunkKeeps',
   12: 'LineStructs',
+  13: 'Forecasts',
 }
 
 const MSG_TYPE_FRAME = 0x01

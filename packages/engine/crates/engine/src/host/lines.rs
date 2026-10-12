@@ -803,7 +803,8 @@ pub fn finish(route: &mut LineRoute, scratch: &mut LinePlan, t: &Transport, sent
 }
 
 /// The bytes of the puts of every line anchored in `chunk` (a snapshot's bucket cost adds them:
-/// they ride the snapshot's frame).
+/// they ride the snapshot's frame), the structures counted afresh. The host prices through
+/// [`StructPrices::anchored_bytes`], which caches the structure part; tests compare the two.
 pub fn anchored_bytes(t: &Transport, chunk: ChunkCoord, dims: ChunkDims) -> u32 {
     let mut count = CountSink::default();
     t.anchored_in(chunk, dims, &mut |l| {
@@ -814,4 +815,93 @@ pub fn anchored_bytes(t: &Transport, chunk: ChunkCoord, dims: ChunkDims) -> u32 
         count.0 += t.run_list_bytes(l);
     });
     count.0 as u32
+}
+
+/// The collapse price's structure part, cached per chunk (M47b, 0079 §18 (d)): the delta-collapse
+/// estimate and the enter bucket price a chunk's snapshot with the puts of its anchored lines every
+/// tick a chunk has deltas, and the bench world's spawners put a delta in every chunk every tick,
+/// while structures change rarely. An entry is `(chunk, version, lines, bytes)`: the newest
+/// `structure_version` among the chunk's anchored lines, their count and their puts' bytes. It is
+/// valid while both still read the same: a line's anchor (the chunk of its front point) moves only
+/// with a structure change, which stamps that line with a tick later than every version the entry
+/// saw, so a line changed, created or moved in raises the newest version, and one destroyed or
+/// moved out alone lowers the count. The lists (`run_list_bytes`) follow the items and are priced
+/// live on the same walk over the anchored lines. Reserved at attach with the line routing
+/// (`max_lines` entries: a chunk with an entry anchors a line; a chunk found with none drops its
+/// entry), never grown: a full table prices without caching.
+#[derive(Default)]
+pub struct StructPrices {
+    /// Ascending by `(chunk.y, chunk.x)`.
+    entries: Vec<PriceEntry>,
+    /// Prices whose structure part was counted afresh (tests read it: the cache was used).
+    recounts: u64,
+}
+
+#[derive(Clone, Copy)]
+struct PriceEntry {
+    chunk: ChunkCoord,
+    version: u32,
+    lines: u32,
+    bytes: u32,
+}
+
+impl StructPrices {
+    /// Reserved at attach for the world's `max_lines` (type doc).
+    pub fn reserve(&mut self, max_lines: u32) {
+        reserve_to(&mut self.entries, max_lines as usize);
+    }
+
+    /// How many prices counted their structures afresh (a cache miss).
+    pub fn recounts(&self) -> u64 {
+        self.recounts
+    }
+
+    /// Forgets every entry (the host's store was replaced: versions restart at 0).
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// [`anchored_bytes`] with the structures' bytes taken from the cache while it is valid.
+    pub fn anchored_bytes(&mut self, t: &Transport, chunk: ChunkCoord, dims: ChunkDims) -> u32 {
+        let (mut version, mut lines, mut lists) = (0u32, 0u32, 0usize);
+        t.anchored_in(chunk, dims, &mut |l| {
+            version = version.max(t.structure_version(l).unwrap_or(0));
+            lines += 1;
+            lists += t.run_list_bytes(l);
+        });
+        let at = self
+            .entries
+            .binary_search_by(|e| (e.chunk.y, e.chunk.x).cmp(&(chunk.y, chunk.x)));
+        if lines == 0 {
+            if let Ok(i) = at {
+                self.entries.remove(i);
+            }
+            return 0;
+        }
+        if let Ok(i) = at
+            && self.entries[i].version == version
+            && self.entries[i].lines == lines
+        {
+            return self.entries[i].bytes + lists as u32;
+        }
+        self.recounts += 1;
+        let mut count = CountSink::default();
+        t.anchored_in(chunk, dims, &mut |l| {
+            if let Ok(put) = t.structure(l) {
+                write_put(&mut count, &put);
+            }
+        });
+        let e = PriceEntry {
+            chunk,
+            version,
+            lines,
+            bytes: count.0 as u32,
+        };
+        match at {
+            Ok(i) => self.entries[i] = e,
+            Err(i) if self.entries.len() < self.entries.capacity() => self.entries.insert(i, e),
+            Err(_) => {}
+        }
+        e.bytes + lists as u32
+    }
 }

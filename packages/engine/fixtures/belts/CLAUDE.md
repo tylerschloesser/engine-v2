@@ -14,8 +14,8 @@ from_line, to_line }` (`Next`), `Spawner { line, item, period }`, `Sink { line }
 = refused by `create`; a `Chain` past 32 creates nothing). A `Spawner` request becomes, in place, a
 `Thing::Spawner` on the `"spawner"` active list: `acc += 256` per tick; at `acc >= period` (1/256
 ticks per item, `>= 256`) one `insert_back`, accepted `acc -= period`, refused `acc -= 256` (held,
-never a burst); it is written only when its state changed. `Action::Noop` stays first;
-`SCHEMA_VERSION` 2. M43b adds `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`, `Remove`,
+never a burst); it is written only when its state changed, and declares that rule (M47b,
+`set_spawner`) after its first step on the list. `Action::Noop` stays first; `SCHEMA_VERSION` 2. M43b adds `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`, `Remove`,
 `TakeFront`, `Segments` and a `Thing::Tally` of accepted item requests; M44b `Merge`, `Fork`
 (`set_out`) and `Destroy` (counted in `Thing::Destroyed`); M46 `Speed` (`set_speed`, appended
 last so no encoded op moved). Semantics: the `src/lib.rs` module doc.
@@ -44,7 +44,9 @@ empty world of every scenario) makes `Belts::genesis` build M40's standard `Mixe
 lines, 50,000 tiles, 250,000 items at seed 7) through `transport_mut()`, one straight segment per
 line, and 1,090 genesis-spawned spawners (activated on tick 1; `Thing::Cycling` for M40's
 mixed-kind chains). The worldgen carries the spec in the `aux` of four plain tiles at `y = -1`,
-`x = -1..=-4`. The benchmark's item cap is 393,216 (`BENCH_MAX_ITEMS`), so it never binds. The dev-dependency on `engine` turns on
+`x = -1..=-4`; M47b's `BenchSpec.regime` (`BenchRegime`, `bench.rs` doc) three more at `x =
+-5..=-7`, plain for `Mixed` (`golden-bench-64.json` holds): `SaturatedView` is built at genesis with
+`Thing::Jam` sink toggles, `InserterLike` with a `Thing::Inserter`. The benchmark's item cap is 393,216 (`BENCH_MAX_ITEMS`), so it never binds. The dev-dependency on `engine` turns on
 `bench-phases`, so a test reads the transport advance from `engine::bench_phase::take()`.
 `tests/bench_belts.rs`: `pnpm test rust -t bench_`, `-t transport_phone_caps`, `-t
 transport_budget_exceeds`; `belts_golden_bench_64` (`golden/scenario-bench-64.json`) replays the
@@ -54,5 +56,4 @@ genesis at 1/64 natively, under Node and under Bun; `pnpm test:slow rust -t slow
 test:slow netcode -t "tick-belts-large node"`.
 
 **The spikes (M40, M41) are deleted (M45).** Their numbers are in 0077's and 0078's Amendments;
-their code (`tests/spike_*.rs`, `tests/common/{repr,repr_a,repr_b,forecast,bench_run}.rs`, the
-forecast `Tracker` M47 reads) is at commit `864cb3a8` (M44b).
+their code (`tests/spike_*.rs`, `tests/common/{repr*,forecast,bench_run}.rs`) is at `864cb3a8`.

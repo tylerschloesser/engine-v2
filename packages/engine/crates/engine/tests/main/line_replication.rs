@@ -1077,3 +1077,63 @@ fn host_change_list_overflow_reconciles() {
         assert_eq!(lb.client(i).desyncs().count(), 0);
     }
 }
+
+/// M47b (0079 §18 (d)): the host's collapse price caches each chunk's structure bytes and must
+/// equal the fresh count (`host::lines::anchored_bytes`) after every kind of structure change that
+/// moves it: an output, a speed, a line moving its anchor in, a line destroyed, a line created in
+/// the same tick another left; item changes move only the live list part. Hits are counted, so a
+/// cache that recounted every time would fail too.
+#[test]
+fn host_struct_price_cache_matches_fresh_count() {
+    use engine::host::lines::{StructPrices, anchored_bytes};
+    let mut t = Transport::new(16, 256);
+    let mut cache = StructPrices::default();
+    cache.reserve(16);
+    let (c0, c1) = (ChunkCoord::new(0, 0), ChunkCoord::new(1, 0));
+    t.set_now(5);
+    let a = t.create(8 * 256, 24).unwrap();
+    t.set_segments(a, &[east(0, 0, 8)]).unwrap();
+    let b = t.create(4 * 256, 24).unwrap();
+    t.set_segments(b, &[east(2, 1, 4)]).unwrap();
+    let c = t.create(4 * 256, 24).unwrap();
+    t.set_segments(c, &[east(40, 0, 4)]).unwrap();
+    let e = t.create(2 * 256, 24).unwrap();
+    t.set_segments(e, &[east(6, 4, 2)]).unwrap();
+    // Prices both chunks; `recounts` is how many of the two prices counted structures afresh (a
+    // chunk that anchors no line answers 0 without counting).
+    let step = |t: &Transport, cache: &mut StructPrices, what: &str, recounts: u64| {
+        let before = cache.recounts();
+        for ch in [c0, c1] {
+            let fresh = anchored_bytes(t, ch, dims());
+            assert_eq!(cache.anchored_bytes(t, ch, dims()), fresh, "{what}: {ch:?}");
+        }
+        assert_eq!(cache.recounts() - before, recounts, "{what}: recounts");
+    };
+    step(&t, &mut cache, "built", 2);
+    step(&t, &mut cache, "unchanged", 0);
+    t.insert_back(a, Item(1)).unwrap();
+    t.insert_back(b, Item(2)).unwrap();
+    step(&t, &mut cache, "items only", 0);
+    t.set_now(6);
+    t.set_out(a, Output::Next(b)).unwrap();
+    step(&t, &mut cache, "an output", 1);
+    t.set_now(7);
+    t.set_speed(b, 300).unwrap();
+    step(&t, &mut cache, "a speed", 1);
+    t.set_now(8);
+    t.set_segments(c, &[east(4, 2, 4)]).unwrap();
+    step(&t, &mut cache, "a line moved in", 1);
+    t.set_now(9);
+    t.destroy(e, &mut |_| {}).unwrap();
+    step(
+        &t,
+        &mut cache,
+        "a line destroyed (no other line touched)",
+        1,
+    );
+    t.set_now(10);
+    t.set_segments(c, &[east(40, 0, 4)]).unwrap();
+    let d = t.create(4 * 256, 24).unwrap();
+    t.set_segments(d, &[east(1, 3, 4)]).unwrap();
+    step(&t, &mut cache, "one out, one in, same tick", 2);
+}

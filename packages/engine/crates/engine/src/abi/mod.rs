@@ -793,6 +793,37 @@ pub fn client_forecast_counters<T: Instance>(slot: &Slot<T>) -> i32 {
     rt.inst.client_forecast_counters(out) as i32
 }
 
+/// `client_line_items(line) -> len`, or `-(status)`: `Instance::client_line_items`, into `Tx`.
+/// `engine/test`-only (M47b).
+pub fn client_line_items<T: Instance>(slot: &Slot<T>, line: u32) -> i32 {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return -(status as i32),
+    };
+    let out = rt.layout.bytes_mut(RegionId::Tx);
+    rt.inst.client_line_items(line, out) as i32
+}
+
+/// `client_forecast_catch_up(tick) -> status`: `Instance::client_forecast_catch_up`.
+/// `engine/test`-only (M47b).
+pub fn client_forecast_catch_up<T: Instance>(slot: &Slot<T>, tick: u32) -> Status {
+    match slot.client() {
+        Ok(rt) => rt.inst.client_forecast_catch_up(tick),
+        Err(status) => status,
+    }
+}
+
+/// `sim_line_items() -> len`, or `-(status)`: `Instance::sim_line_items`, into `Tx`.
+/// `engine/test`-only (M47b).
+pub fn sim_line_items<T: Instance>(slot: &Slot<T>) -> i32 {
+    let rt = match slot.sim() {
+        Ok(rt) => rt,
+        Err(status) => return -(status as i32),
+    };
+    let out = rt.layout.bytes_mut(RegionId::Tx);
+    rt.inst.sim_line_items(out) as i32
+}
+
 /// `client_corrupt_line(line) -> status`: `Instance::client_corrupt_line`. `engine/test`-only.
 pub fn client_corrupt_line<T: Instance>(slot: &Slot<T>, line: u32) -> Status {
     match slot.client() {
