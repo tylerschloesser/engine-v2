@@ -17,6 +17,8 @@ on the `"spawner"` active list: `acc += 256` per tick; at `acc >= period` (1/256
 `>= 256`) one `insert_back`, accepted `acc -= period`, refused `acc -= 256` (held, never a burst);
 the spawner is written only when its state changed, so a backed-up one costs no delta.
 `Action::Noop` stays first; `SCHEMA_VERSION` 2.
+M43b adds `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`, `Remove`, `TakeFront`, `Segments`
+and a `Thing::Tally` of accepted item requests (semantics: the `src/lib.rs` module doc).
 
 **Goldens (M42b, `tests/golden_scenarios.rs`).** `pnpm golden belts` writes them from the `.wasm`
 under Node; the native tests parse the same scenario files (`connect` is `Joined` then `Connected`)
@@ -25,8 +27,10 @@ and assert a property after every tick besides the hash: `scenario.json`/`golden
 hand-off landing), `-deadend-backup` (gaps `>= 64` on every lane every tick, positions pinned at tick 75 mid-squash,
 4 items per tile per lane at 0, 64, 128, 192 at tick 300), `-spawn-to-sink`
 (`spawned == live + sunk`), `-big-step` (speed 72: two items land in one tick). Config: `maxLines` 64,
-`maxItems` 4,096. `transport_request_is_deferred_to_tick` runs `Belts::apply` between steps and
-asserts no line until the next tick. Commands: `pnpm test rust -t belts_golden`,
+`maxItems` 4,096. M43b (`maxLines` 16, `maxItems` 512): `-edit-while-running`, `-inserter-like`,
+`-geometry-arc`, and `belts_op_*` (properties in each test's doc; a script holds at most 32 actions).
+`transport_request_is_deferred_to_tick` runs `Belts::apply` between steps and
+asserts no line until the next tick. Commands: `pnpm test rust -t belts_golden`, `pnpm test rust -t belts_op`,
 `pnpm test rust -t transport_request`; the `.wasm` replays them under Node and Bun in
 `pnpm test wasm -t determinism` (the discovery leg of `determinism.test.ts` and `bun-leg.mjs`).
 

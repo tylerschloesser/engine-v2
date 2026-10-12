@@ -1,0 +1,142 @@
+{
+  "kind": "script",
+  "role": "sim",
+  "config": {
+    "arenaBytes": 100663296,
+    "game": {
+      "seed": "0x6",
+      "params": null,
+      "maxEntities": 4096,
+      "maxModifiedTiles": 4096,
+      "maxActionGrowth": 4096,
+      "maxLines": 16,
+      "maxItems": 512,
+      "cacheChunks": 1024
+    }
+  },
+  "encoderConfig": {
+    "arenaBytes": 50331648,
+    "game": { "seed": "0x6", "params": null, "genWorkers": 1, "cacheChunks": 1024 }
+  },
+  "genesis": true,
+  "checkpointAt": 120,
+  "script": [
+    {
+      "tick": 1,
+      "connect": true,
+      "actions": [
+        {
+          "seq": 1,
+          "action": {
+            "Request": {
+              "Chain": { "from": { "x": 0, "y": 0 }, "dir": "East", "tiles": 8, "speed": 24 }
+            }
+          }
+        },
+        { "seq": 2, "action": { "Request": { "Sink": { "line": 0 } } } },
+        {
+          "seq": 3,
+          "action": { "Request": { "Spawner": { "line": 0, "item": 1, "period": 256 } } }
+        }
+      ]
+    },
+    {
+      "tick": 100,
+      "actions": [
+        { "seq": 4, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 5, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 101,
+      "actions": [
+        { "seq": 6, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 7, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 102,
+      "actions": [
+        { "seq": 8, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 9, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 103,
+      "actions": [
+        { "seq": 10, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 11, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 104,
+      "actions": [
+        { "seq": 12, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 13, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 105,
+      "actions": [
+        { "seq": 14, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 15, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 106,
+      "actions": [
+        { "seq": 16, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 17, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 107,
+      "actions": [
+        { "seq": 18, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 19, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 108,
+      "actions": [
+        { "seq": 20, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 21, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 109,
+      "actions": [
+        { "seq": 22, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 23, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 110,
+      "actions": [
+        { "seq": 24, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 25, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 111,
+      "actions": [
+        { "seq": 26, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 27, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 112,
+      "actions": [
+        { "seq": 28, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 29, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    },
+    {
+      "tick": 113,
+      "actions": [
+        { "seq": 30, "action": { "Request": { "Remove": { "line": 0, "pos": 800 } } } },
+        { "seq": 31, "action": { "Request": { "Insert": { "line": 0, "pos": 800, "item": 7 } } } }
+      ]
+    }
+  ]
+}

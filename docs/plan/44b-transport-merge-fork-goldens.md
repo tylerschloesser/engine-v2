@@ -15,13 +15,14 @@ Rules that apply: `.claude/rules/determinism.md`, `.claude/rules/prediction.md`.
 ## Scope
 - `fx-belts` `Op` gains `Merge { line, into, at }` and `Fork { line, a, b }` (`set_out`), executed by `Belts::tick` like the other ops.
 - Goldens (`pnpm golden belts`): `sideload-saturated` (one feeder lane onto an empty target at the early and the late entry), `sideload-contested` (target fed from behind at 1 item per 8 ticks, feeder saturated: the feeder fills gaps and never starves the target), `fork-50-50` (one input, both outputs draining: counts differ by at most 1 after 1,000 ticks), `fork-blocked-side` (one output dead-ended: everything goes to the other, the toggle holds), `big-step-fork` (speed 96 into a fork). Each native test asserts its property and the hash.
+- Lift the scenario runner's 32-action cap (M43b Deviations: `runScriptScenario` in `packages/engine/tests/support/scenario.ts` sends every action through an encoder client whose pending queue, capacity 32, is never acked, so the 33rd action fails `OutOfMemory`; M43b's `inserter-like` golden runs its insert/remove pair for 14 ticks because of it): acknowledge the encoder client's queue as the real host does, or drain it per scripted tick, so a scenario may carry hundreds of actions; a native and a Node test with 40 actions prove it. This is the one edit outside `fixtures/belts/` this milestone makes.
 - Properties as seeded scripted tests in `fixtures/belts/tests/props.rs` with helpers in `tests/common/props.rs` (M56 reuses them): `prop_conservation` (spawned = live + sunk + destroyed across random edits), `prop_spacing_invariant` (never under `SPACING` on a line or across a plain hand-off except a squashed pair a rescale made, checked every tick), `prop_throughput` (a saturated lane delivers `20 x speed / SPACING` items per second within 1 %), `prop_ring_lap_time` (a closed ring of four lines: an item laps in `total_len / speed` ticks, within one tick).
 
 ## Non-scope
 - Any change to `engine::transport` (a defect found here is reported, fixed in the engine crate and recorded under M44's Deviations). Who wires forks and merges (M52, M54).
 
 ## Files, packages and crates touched
-- `packages/engine/fixtures/belts/` (`src/lib.rs`, `tests/golden_scenarios.rs`, `tests/props.rs`, `tests/common/props.rs`, `golden/*.json`, `CLAUDE.md`).
+- `packages/engine/fixtures/belts/` (`src/lib.rs`, `tests/golden_scenarios.rs`, `tests/props.rs`, `tests/common/props.rs`, `golden/*.json`, `CLAUDE.md`); `packages/engine/tests/support/scenario.ts` (the action cap).
 
 ## Seams
 **Provides:** the two ops; goldens `sideload-saturated`, `sideload-contested`, `fork-50-50`, `fork-blocked-side`, `big-step-fork`; `tests/common/props.rs` (M56).

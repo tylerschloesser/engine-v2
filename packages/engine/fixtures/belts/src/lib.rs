@@ -22,18 +22,26 @@
 //! `acc -= 256`, so the credit is held and the next tick is due again, never a burst. `period = 256`
 //! tries every tick (a saturating feed).
 //!
+//! **Surgery, items and geometry (M43b).** `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`,
+//! `Remove`, `TakeFront` and `Segments` run M43's API the same way. `Cut` appends the new back line
+//! to the table (or `0` when `split` refuses, as `Chain` does); `Join` destroys `back`, whose slot
+//! keeps its dead id (the engine answers `NoLine` from then on). Every accepted `Insert`, `Remove`
+//! and `TakeFront` is counted in the one [`Thing::Tally`] on the `"tally"` active list: the first
+//! success turns its own request into the tally, in place, as a `Spawner` request does.
+//! An op that changes a line's `len` clears its segments (0079 §13); a scenario re-sends `Segments`.
+//!
 //! Goldens (`golden/scenario-*.json`, `tests/golden_scenarios.rs`): `straight-chain` (also the
-//! canonical `scenario.json`), `deadend-backup`, `spawn-to-sink`, `big-step`; the item-
-//! representation and forecast spikes are `tests/spike_*.rs` (native only). `CLAUDE.md` has the
-//! detail.
+//! canonical `scenario.json`), `deadend-backup`, `spawn-to-sink`, `big-step`, `edit-while-running`,
+//! `inserter-like`, `geometry-arc`; the item-representation and forecast spikes are
+//! `tests/spike_*.rs` (native only). `CLAUDE.md` has the detail.
 
 use engine::game::{
     EntityId, Game, Growth, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead,
     WorldWrite,
 };
-use engine::transport::{Item, LineId, Output};
+use engine::transport::{Geometry, Item, LineId, Output, Segment};
 use engine::world::{
-    ChunkCoord, Footprint, PrototypeId, Registry, SystemId, Tile, TilePos, TraitSet,
+    ChunkCoord, Footprint, PrototypeId, Registry, SystemId, Tile, TilePos, TraitSet, WorldPos,
 };
 use engine::worldgen::Worldgen;
 use ts_rs::TS;
@@ -55,6 +63,15 @@ fn spawner_sys() -> SystemId {
         .expect("Belts::register must run before Belts::tick")
 }
 
+/// The tally's active list (at most one member, [`Thing::Tally`]); `SPAWNER_SYS`'s pattern.
+static TALLY_SYS: std::sync::OnceLock<SystemId> = std::sync::OnceLock::new();
+
+fn tally_sys() -> SystemId {
+    *TALLY_SYS
+        .get()
+        .expect("Belts::register must run before Belts::tick")
+}
+
 /// A tile position, plain data (`Action` must stay `Codec + TS`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
@@ -66,6 +83,75 @@ pub struct Pos {
 impl Pos {
     fn tile(self) -> TilePos {
         TilePos::new(self.x, self.y)
+    }
+}
+
+/// A world position in Q24.8 (1/256 tile, `WorldPos`), plain data for [`Seg`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
+pub struct WPos {
+    pub x: i32,
+    pub y: i32,
+}
+
+impl WPos {
+    fn world(self) -> WorldPos {
+        WorldPos {
+            x: self.x,
+            y: self.y,
+        }
+    }
+}
+
+/// One segment of an `Op::Segments` path, plain data for `engine::transport::Segment` (0076 §4;
+/// the mapping is `geometry.rs`'s module doc). `None` entries are skipped, so a path of `k < 4`
+/// segments lists `4 - k` of them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
+pub enum Seg {
+    #[default]
+    None,
+    Straight {
+        len: u32,
+        from: WPos,
+        to: WPos,
+    },
+    Arc {
+        len: u32,
+        centre: WPos,
+        radius_q8: u32,
+        start_turn_q8: u16,
+        sweep_q8: i16,
+    },
+}
+
+impl Seg {
+    fn segment(self) -> Option<Segment> {
+        match self {
+            Seg::None => None,
+            Seg::Straight { len, from, to } => Some(Segment {
+                len,
+                geometry: Geometry::Straight {
+                    from: from.world(),
+                    to: to.world(),
+                },
+            }),
+            Seg::Arc {
+                len,
+                centre,
+                radius_q8,
+                start_turn_q8,
+                sweep_q8,
+            } => Some(Segment {
+                len,
+                geometry: Geometry::Arc {
+                    centre: centre.world(),
+                    radius_q8,
+                    start_turn_q8,
+                    sweep_q8,
+                },
+            }),
+        }
     }
 }
 
@@ -104,6 +190,24 @@ pub enum Op {
     Sink { line: u8 },
     /// `set_out(line, DeadEnd)`.
     DeadEnd { line: u8 },
+    /// `split(line, at)`: the new back line `[at, len)` is appended to the table (`0` if refused).
+    Cut { line: u8, at: u32 },
+    /// `join(front, back)` (`back` must feed `front`); `back`'s slot keeps its dead id.
+    Join { front: u8, back: u8 },
+    /// `extend_front` (`front`) or `extend_back` by `by` positions.
+    Extend { line: u8, front: bool, by: u32 },
+    /// `shrink_front` (`front`) or `shrink_back` by `by` positions.
+    Shrink { line: u8, front: bool, by: u32 },
+    /// `rescale(line, new_len)`: every position scaled by `new_len / len`, rounding down.
+    Rescale { line: u8, new_len: u32 },
+    /// `insert_at(line, pos, item)`, counted in the tally when accepted.
+    Insert { line: u8, pos: u32, item: u16 },
+    /// `remove_at(line, pos)`, counted in the tally when it removed an item.
+    Remove { line: u8, pos: u32 },
+    /// `take_front(line)`, counted in the tally when it took an item.
+    TakeFront { line: u8 },
+    /// `set_segments(line, ..)` with the non-`None` entries, front to back (all `None` clears).
+    Segments { line: u8, segments: [Seg; 4] },
 }
 
 impl Op {
@@ -117,7 +221,16 @@ impl Op {
             } => from.tile().in_range() && tiles >= 1 && speed >= 1,
             Op::Link { from_line, to_line } => idx(from_line) && idx(to_line),
             Op::Spawner { line, item, period } => idx(line) && item != 0 && period >= 256,
-            Op::Sink { line } | Op::DeadEnd { line } => idx(line),
+            Op::Sink { line }
+            | Op::DeadEnd { line }
+            | Op::Remove { line, .. }
+            | Op::TakeFront { line }
+            | Op::Segments { line, .. } => idx(line),
+            Op::Cut { line, at } => idx(line) && at >= 1,
+            Op::Join { front, back } => idx(front) && idx(back),
+            Op::Extend { line, by, .. } | Op::Shrink { line, by, .. } => idx(line) && by >= 1,
+            Op::Rescale { line, new_len } => idx(line) && new_len >= 1,
+            Op::Insert { line, item, .. } => idx(line) && item != 0,
         }
     }
 
@@ -173,11 +286,22 @@ pub struct Spawner {
     pub spawned: u32,
 }
 
-/// The one entity type (0022 §3: a single `G::Entity`), one variant per kind.
+/// Accepted item requests over the world's life (module doc): the inserter-like conservation
+/// `inserted + spawned == live + removed + taken + sunk`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Tally {
+    pub inserted: u32,
+    pub removed: u32,
+    pub taken: u32,
+}
+
+/// The one entity type (0022 §3: a single `G::Entity`), one variant per kind (new kinds appended,
+/// so earlier encoded values keep their variant index).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Thing {
     Request(Request),
     Spawner(Spawner),
+    Tally(Tally),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -204,6 +328,24 @@ impl Global {
 pub struct Belts;
 
 impl Belts {
+    /// Counts one accepted item request in the tally. The first one ever turns request `id` itself
+    /// into the tally and returns `true` (the caller must not despawn it).
+    fn count(cx: &mut TickCx<'_, Self>, id: EntityId, f: fn(&mut Tally)) -> bool {
+        let sys = tally_sys();
+        if let Some(tid) = cx.active_at(sys, 0)
+            && let Some(Thing::Tally(mut c)) = cx.entity(tid).ok().flatten().copied()
+        {
+            f(&mut c);
+            cx.put_entity(tid, Thing::Tally(c));
+            return false;
+        }
+        let mut c = Tally::default();
+        f(&mut c);
+        cx.put_entity(id, Thing::Tally(c));
+        cx.activate(sys, id);
+        true
+    }
+
     /// Executes one request's op (host tick only). Refusals are dropped: a request that cannot
     /// apply changes nothing but the table (`Chain` appends `0`).
     fn execute(cx: &mut TickCx<'_, Self>, id: EntityId, req: Request) {
@@ -263,6 +405,76 @@ impl Belts {
                     return; // the entity lives on as the spawner.
                 }
             }
+            Op::Cut { line, at } => {
+                if g.chains >= MAX_CHAINS {
+                    // A full table: the back part could not be named, so nothing is cut.
+                    cx.despawn(id);
+                    return;
+                }
+                let back = t.split(g.line(u32::from(line)), at).unwrap_or(LineId::NONE);
+                g.lines[g.chains as usize] = back.0;
+                g.chains += 1;
+                cx.put_global(g);
+            }
+            Op::Join { front, back } => {
+                let _ = t.join(g.line(u32::from(front)), g.line(u32::from(back)));
+            }
+            Op::Extend { line, front, by } => {
+                let l = g.line(u32::from(line));
+                let _ = if front {
+                    t.extend_front(l, by)
+                } else {
+                    t.extend_back(l, by)
+                };
+            }
+            Op::Shrink { line, front, by } => {
+                let l = g.line(u32::from(line));
+                let _ = if front {
+                    t.shrink_front(l, by)
+                } else {
+                    t.shrink_back(l, by)
+                };
+            }
+            Op::Rescale { line, new_len } => {
+                let _ = t.rescale(g.line(u32::from(line)), new_len);
+            }
+            Op::Insert { line, pos, item } => {
+                if t.insert_at(g.line(u32::from(line)), pos, Item(item))
+                    .is_ok()
+                    && Self::count(cx, id, |c| c.inserted += 1)
+                {
+                    return; // the request became the tally.
+                }
+            }
+            Op::Remove { line, pos } => {
+                if let Ok(Some(_)) = t.remove_at(g.line(u32::from(line)), pos)
+                    && Self::count(cx, id, |c| c.removed += 1)
+                {
+                    return;
+                }
+            }
+            Op::TakeFront { line } => {
+                if let Ok(Some(_)) = t.take_front(g.line(u32::from(line)))
+                    && Self::count(cx, id, |c| c.taken += 1)
+                {
+                    return;
+                }
+            }
+            Op::Segments { line, segments } => {
+                let mut segs = [Segment {
+                    len: 0,
+                    geometry: Geometry::Straight {
+                        from: WorldPos { x: 0, y: 0 },
+                        to: WorldPos { x: 0, y: 0 },
+                    },
+                }; 4];
+                let mut n = 0;
+                for s in segments.iter().filter_map(|s| s.segment()) {
+                    segs[n] = s;
+                    n += 1;
+                }
+                let _ = t.set_segments(g.line(u32::from(line)), &segs[..n]);
+            }
         }
         cx.despawn(id);
     }
@@ -284,6 +496,7 @@ impl Game for Belts {
         let id = r.add_prototype(TraitSet::EMPTY, Footprint { w: 1, h: 1 });
         debug_assert_eq!(id, PrototypeId(0));
         let _ = SPAWNER_SYS.set(r.system("spawner"));
+        let _ = TALLY_SYS.set(r.system("tally"));
     }
 
     fn prototype(_e: &Thing) -> PrototypeId {
@@ -294,6 +507,7 @@ impl Game for Belts {
         match e {
             Thing::Request(r) => r.at.tile(),
             Thing::Spawner(s) => s.at.tile(),
+            Thing::Tally(_) => TilePos::new(0, 0),
         }
     }
 
@@ -330,8 +544,8 @@ impl Game for Belts {
         while let Some(id) = cx.next_woken() {
             match cx.entity(id).ok().flatten().copied() {
                 Some(Thing::Request(req)) => Self::execute(cx, id, req),
-                // Not woken in practice (`TickCx` puts never auto-wake); already on the list.
-                Some(Thing::Spawner(_)) | None => {}
+                // Not woken in practice (`TickCx` puts never auto-wake); already on their lists.
+                Some(Thing::Spawner(_) | Thing::Tally(_)) | None => {}
             }
         }
 

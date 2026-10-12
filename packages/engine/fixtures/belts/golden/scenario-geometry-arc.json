@@ -1,0 +1,137 @@
+{
+  "kind": "script",
+  "role": "sim",
+  "config": {
+    "arenaBytes": 100663296,
+    "game": {
+      "seed": "0x7",
+      "params": null,
+      "maxEntities": 4096,
+      "maxModifiedTiles": 4096,
+      "maxActionGrowth": 4096,
+      "maxLines": 16,
+      "maxItems": 512,
+      "cacheChunks": 1024
+    }
+  },
+  "encoderConfig": {
+    "arenaBytes": 50331648,
+    "game": { "seed": "0x7", "params": null, "genWorkers": 1, "cacheChunks": 1024 }
+  },
+  "genesis": true,
+  "checkpointAt": 60,
+  "script": [
+    {
+      "tick": 1,
+      "connect": true,
+      "actions": [
+        {
+          "seq": 1,
+          "action": {
+            "Request": {
+              "Chain": { "from": { "x": 31, "y": 30 }, "dir": "North", "tiles": 4, "speed": 24 }
+            }
+          }
+        },
+        {
+          "seq": 2,
+          "action": { "Request": { "Extend": { "line": 0, "front": false, "by": 106 } } }
+        },
+        {
+          "seq": 3,
+          "action": {
+            "Request": {
+              "Segments": {
+                "line": 0,
+                "segments": [
+                  {
+                    "Straight": {
+                      "len": 512,
+                      "from": { "x": 8125, "y": 7680 },
+                      "to": { "x": 8125, "y": 8192 }
+                    }
+                  },
+                  {
+                    "Arc": {
+                      "len": 106,
+                      "centre": { "x": 8192, "y": 8192 },
+                      "radius_q8": 67,
+                      "start_turn_q8": 128,
+                      "sweep_q8": -64
+                    }
+                  },
+                  {
+                    "Straight": {
+                      "len": 512,
+                      "from": { "x": 8192, "y": 8259 },
+                      "to": { "x": 8704, "y": 8259 }
+                    }
+                  },
+                  "None"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "seq": 4,
+          "action": {
+            "Request": {
+              "Chain": { "from": { "x": 31, "y": 30 }, "dir": "North", "tiles": 4, "speed": 24 }
+            }
+          }
+        },
+        {
+          "seq": 5,
+          "action": { "Request": { "Extend": { "line": 1, "front": false, "by": 295 } } }
+        },
+        {
+          "seq": 6,
+          "action": {
+            "Request": {
+              "Segments": {
+                "line": 1,
+                "segments": [
+                  {
+                    "Straight": {
+                      "len": 512,
+                      "from": { "x": 8004, "y": 7680 },
+                      "to": { "x": 8004, "y": 8192 }
+                    }
+                  },
+                  {
+                    "Arc": {
+                      "len": 295,
+                      "centre": { "x": 8192, "y": 8192 },
+                      "radius_q8": 188,
+                      "start_turn_q8": 128,
+                      "sweep_q8": -64
+                    }
+                  },
+                  {
+                    "Straight": {
+                      "len": 512,
+                      "from": { "x": 8192, "y": 8380 },
+                      "to": { "x": 8704, "y": 8380 }
+                    }
+                  },
+                  "None"
+                ]
+              }
+            }
+          }
+        },
+        { "seq": 7, "action": { "Request": { "Sink": { "line": 0 } } } },
+        { "seq": 8, "action": { "Request": { "Sink": { "line": 1 } } } },
+        {
+          "seq": 9,
+          "action": { "Request": { "Spawner": { "line": 0, "item": 1, "period": 512 } } }
+        },
+        {
+          "seq": 10,
+          "action": { "Request": { "Spawner": { "line": 1, "item": 2, "period": 512 } } }
+        }
+      ]
+    }
+  ]
+}
