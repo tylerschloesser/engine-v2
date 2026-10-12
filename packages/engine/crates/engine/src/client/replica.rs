@@ -187,6 +187,12 @@ impl<G: Game> Replica<G> {
         self.store.transport().forecast_tick()
     }
 
+    /// The replica's transport, follower included (M49: `FrameView::with_transport`, the item
+    /// clock).
+    pub fn forecast_transport(&self) -> &crate::transport::Transport {
+        self.store.transport()
+    }
+
     /// 0078 §2 at render time (`Transport::pos_at`).
     pub fn pos_at(&self, line: LineId, idx: u32, render_t: f64) -> Option<(LineId, f64)> {
         self.store.transport().pos_at(line, idx, render_t)

@@ -64,6 +64,10 @@ export interface ConditionedLink {
   /** Ends the link: both ends' `onClose` fire (`code ?? 0`), and every not-yet-released pending
    * delivery on either direction is dropped, never delivered late. */
   disconnect(code?: number): void
+  /** M49: the next `n` messages `ends[0]` sends (the host's end in `createNetHarness`) are lost:
+   * never scheduled, never delivered, the sender none the wiser. A scripted loss for a test whose
+   * dropped messages carry nothing the receiver needs (a frame with no section but hashes). */
+  dropNext(n: number): void
 }
 
 interface DirectionState {
@@ -107,9 +111,14 @@ function makeSend(
   getConditions: () => ConditionerConditions,
   disconnected: { value: boolean },
   closing: { value: boolean },
+  drops: { value: number } = { value: 0 },
 ): ConnectionSend {
   return (cls, bytes, len?: number) => {
     if (disconnected.value || closing.value) return
+    if (drops.value > 0) {
+      drops.value--
+      return
+    }
     // "engine-owned buffer, valid only during the call" (0009): copy now, released later from
     // `advanceTo`'s own deferred pass. `len` (Deviations, M27 steps 3-4, the same gap found and
     // fixed in `memory-connection.ts`'s own `send`): the optional third parameter `RingConnection.
@@ -227,13 +236,14 @@ export function conditionLink(
   // graceful `close()` only ever stops *that* end's own future sends, never the peer's, and never
   // drops what is already queued.
   const aClosing = { value: false }
+  const aDrops = { value: 0 }
   const bClosing = { value: false }
 
   const endA: Connection = {
     datagrams: a.datagrams,
     onMessage: null,
     onClose: null,
-    send: makeSend(a, dirAtoB, link, clock, () => cond, disconnected, aClosing),
+    send: makeSend(a, dirAtoB, link, clock, () => cond, disconnected, aClosing, aDrops),
     close(code) {
       scheduleClose(a, dirAtoB, link, clock, disconnected, aClosing, code)
     },
@@ -269,6 +279,9 @@ export function conditionLink(
     ends: [endA, endB],
     set(conditions) {
       cond = { ...cond, ...conditions }
+    },
+    dropNext(n) {
+      aDrops.value = n
     },
     stall(ms) {
       const until = clock.now() + ms

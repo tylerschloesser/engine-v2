@@ -1059,12 +1059,24 @@ thread_local! {
     static ACT_AT: core::cell::Cell<u32> = const { core::cell::Cell::new(u32::MAX) };
 }
 
-/// M47 review 2, finding 1: a client steps only inside a frame. After ticks the host sent nothing
-/// for (free flow into a sink makes no record), a frame that changes a structure (the sink closes)
-/// must find the skipped ticks stepped under the old structure. Here the replica is stepped by
-/// frames alone, as `ClientCore` does, and compared on every tick a frame came for.
+/// A frame with nothing to say but hashes: no section other than `Hashes` (M49: what a line holder
+/// gets on a tick it would once have been silent).
+fn quiet_frame(bytes: &[u8]) -> bool {
+    let mut r = FrameReader::new(bytes).unwrap();
+    while let Some((sid, _)) = r.next_section().unwrap() {
+        if sid != SectionId::Hashes {
+            return false;
+        }
+    }
+    true
+}
+
+/// M49: the hashes-only variant of `forecast_quiet_gap_then_structure_change`. A connection
+/// holding a line is never silenced (0078 A12 revised), so ticks with nothing to say bring frames
+/// with no section but the hashes: after a stretch of them, a frame that changes a structure (the
+/// sink closes) finds every tick stepped, and the replica equals the host on every tick.
 #[test]
-fn forecast_quiet_gap_then_structure_change() {
+fn forecast_hashes_only_frames_then_structure_change() {
     reset();
     ACT_AT.with(|c| c.set(u32::MAX));
     once(1, |t| {
@@ -1092,15 +1104,20 @@ fn forecast_quiet_gap_then_structure_change() {
     for _ in 0..200 {
         lb.step();
         let host_tick = lb.host.sim().unwrap().tick().0 - 1;
-        if lb.last_build_frame_len(0) == 0 {
+        assert_ne!(
+            lb.last_build_frame_len(0),
+            0,
+            "tick {host_tick}: a line holder is silenced"
+        );
+        if quiet_frame(lb.last_built_frame(0)) {
             quiet += 1;
             if quiet >= 4 && ACT_AT.with(|c| c.get()) == u32::MAX && host_tick > 20 {
                 ACT_AT.with(|c| c.set(host_tick + 1));
                 gap_before = Some(quiet);
             }
-            continue;
+        } else {
+            quiet = 0;
         }
-        quiet = 0;
         assert_eq!(lb.client(0).replica().forecast_tick(), Some(host_tick));
         for l in held_lines(&lb) {
             assert_eq!(
@@ -1118,6 +1135,95 @@ fn forecast_quiet_gap_then_structure_change() {
     );
     println!("closed at {at} after {gap_before:?} quiet ticks; {compared} compared");
     assert!(compared > 20);
+}
+
+/// M47 review 2, finding 1: a client steps only inside a frame. After ticks it got no frame for
+/// (free flow into a sink, nothing to say), a frame that changes a structure (the sink closes) must
+/// find those ticks stepped under the old structure (`Follower::frame`'s catch-up). M49: a line
+/// holder now gets a frame every tick, so the gap is made by losing four of them on the way
+/// (`Loopback::drop_frames`; each carries no section but hashes, which the client survives); the
+/// structure changes on the tick after. The replica is compared on every tick a frame came for.
+#[test]
+fn forecast_quiet_gap_then_structure_change() {
+    reset();
+    ACT_AT.with(|c| c.set(u32::MAX));
+    once(1, |t| {
+        let b = line(t, 0, 4, 8, 24);
+        let m = line(t, 8, 4, 8, 24);
+        let f = line(t, 16, 4, 8, 24);
+        t.set_out(b, Output::Next(m)).unwrap();
+        t.set_out(m, Output::Next(f)).unwrap();
+        t.set_out(f, Output::Sink).unwrap();
+        // Packed from the start, so items leave through the sink in every quiet tick.
+        for l in [b, m, f] {
+            for k in 0..30 {
+                t.insert_at(l, 10 + SP * k, Item(1 + (k % 3) as u16))
+                    .unwrap();
+            }
+        }
+    });
+    rule(|now, t| {
+        if ACT_AT.with(|c| c.get()) == now {
+            t.set_out(id(2), Output::DeadEnd).unwrap();
+        }
+    });
+    let mut lb = loopback();
+    const GAP_AT: u32 = 30;
+    let (mut compared, mut dropped, mut lag_before) = (0u32, 0u32, None);
+    for _ in 0..200 {
+        let next = lb.host.sim().unwrap().tick().0;
+        if next == GAP_AT {
+            lb.drop_frames(0, 4);
+            ACT_AT.with(|c| c.set(GAP_AT + 4));
+        }
+        if next == GAP_AT + 4 {
+            // Before the structure frame: the follower still at the tick before the gap.
+            lag_before = lb.client(0).replica().forecast_tick();
+        }
+        lb.step();
+        let host_tick = lb.host.sim().unwrap().tick().0 - 1;
+        if (GAP_AT..GAP_AT + 4).contains(&host_tick) {
+            assert!(
+                quiet_frame(lb.last_built_frame(0)),
+                "tick {host_tick}: a dropped frame said something"
+            );
+            dropped += 1;
+            continue;
+        }
+        if host_tick == GAP_AT + 4 {
+            // The frame after the gap carries the structure change (the sink closed: a put).
+            let bytes = lb.last_built_frame(0);
+            assert!(
+                !quiet_frame(bytes),
+                "tick {host_tick}: the structure frame is quiet"
+            );
+            let mut r = FrameReader::new(bytes).unwrap();
+            let mut structs = false;
+            while let Some((sid, _)) = r.next_section().unwrap() {
+                structs |= sid == SectionId::LineStructs;
+            }
+            assert!(
+                structs,
+                "tick {host_tick}: the structure frame carries `LineStructs`"
+            );
+        }
+        assert_eq!(lb.client(0).replica().forecast_tick(), Some(host_tick));
+        for l in held_lines(&lb) {
+            assert_eq!(
+                client_items_of(&lb, 0, l),
+                host_items(&lb, l),
+                "tick {host_tick}: line {l:?}"
+            );
+            compared += 1;
+        }
+    }
+    assert_eq!(dropped, 4, "the gap's frames were lost");
+    assert_eq!(
+        lag_before,
+        Some(GAP_AT - 1),
+        "the structure frame found the follower four ticks behind"
+    );
+    assert_eq!(compared, 585, "line-ticks compared");
 }
 
 /// M47 review 2, finding 3, and review 3: a lost frame carrying a change to `A` only, on a packed

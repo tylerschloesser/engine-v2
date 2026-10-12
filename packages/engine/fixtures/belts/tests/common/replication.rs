@@ -287,14 +287,18 @@ fn host_degraded_bundles_carry_forecasts() {
     }
     assert_eq!(levels, 0b10110, "degrade levels seen (1, 2, 4)");
     assert_eq!(end_level, 1, "recovered");
+    // M49 (0078 A12 revised): a line holder gets a frame every tick (header-only when nothing
+    // changed), so more ticks bring a frame to hold and compare: (72, 204) and (24,341, 1,844,315)
+    // before; and a hold keeps the latest header-only frame instead of dropping it (fix round 2), (82,
+    // 244) and (30,875, 2,338,827) before that.
     assert_eq!(
         (bundles, frames_in_bundles),
-        (72, 204),
+        (90, 280),
         "bundles and their frames"
     );
     assert_eq!(
         (compared, items),
-        (24_341, 1_844_315),
+        (32_387, 2_453_298),
         "line-ticks and items compared"
     );
     assert_eq!(unknown, 0, "line-ticks skipped as `forecast_unknown`");

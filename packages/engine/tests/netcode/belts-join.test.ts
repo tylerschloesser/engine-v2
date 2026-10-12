@@ -218,30 +218,36 @@ const LIFTED_PINS = {
 }
 
 /** M48c: the `MixedFeeders` cell (seed 4821), the same lines and items at rest fed by stateless
- * feeders (0079 §19 (e)): no chunk delta, no collapse; 127 ticks (6.35 s), 948,754 B. */
+ * feeders (0079 §19 (e)): no chunk delta, no collapse; 126 ticks (6.30 s), 949,162 B. M49 (0078 A12
+ * revised): a line holder gets a frame every tick, header-only when nothing changed, so 18 more
+ * frames (89 before: 180 B of headers, 30 B of bundle framing, 15 B of hashes) and 4 more bundles;
+ * the join settles a tick sooner (127 ticks, 948,754 B before). Fix rounds 2-3: a hold keeps the
+ * latest header-only frame (replacing the header-only one held before it) instead of dropping it,
+ * and holds a hashes-only frame whole: 123 frames, 39 bundles, hashes 391 B (339 when round 2 let
+ * hashes-only frames be replaced too), 949,162 B. */
 const FEEDERS_PINS = {
-  joinTicks: 127,
+  joinTicks: 126,
   held: 1_850,
   lists: 1_850,
   listsUnknown: 0,
   recordsUnheld: 0,
   unknownHeld: 0,
-  bytesDown: 948_754,
+  bytesDown: 949_162,
   sections: {
     Global: 39,
     OwnPlayer: 3,
     ChunkSnapshots: 5_489,
     LineStructs: 64_751,
     Forecasts: 876_849,
-    Hashes: 376,
+    Hashes: 391,
     ChunkEnterPristine: 76,
   },
-  header: 890,
-  other: 281,
-  frames: 89,
+  header: 1_230,
+  other: 334,
+  frames: 123,
   heldChunks: 88,
   collapses: 0,
-  bundles: 33,
+  bundles: 39,
   level: 4,
 }
 /** Each second of the paced `MixedFeeders` join. */

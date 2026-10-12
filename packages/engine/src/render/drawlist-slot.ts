@@ -21,7 +21,8 @@ import { TripleReader } from '../sab/triple.js'
 // `OFF_*` constants mirror the Rust layout (that file's own precedent).
 const OFF_FRAME_SEQ = 0
 const OFF_RECORD_COUNT = 4
-const OFF_WINDOW_ORIGIN = 8
+/** The header's `window_origin` (two LE `i32`); `engine/test`'s `HeadlessClient.drawsOrigin` reads it too. */
+export const OFF_WINDOW_ORIGIN = 8
 const OFF_FOLLOW_VALID = 48
 const OFF_FOLLOW = 56
 const OFF_DROPPED = 88

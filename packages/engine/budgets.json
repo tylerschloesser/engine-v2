@@ -417,6 +417,43 @@
           }
         }
       },
+      "gc-belts": {
+        "isolates": {
+          "main": {
+            "class": "strict",
+            "bytesPerFrame": 100,
+            "formula": "M49, 0016 \u00a71's formula (`ceil(measured clean) + 8 B` margin, no attribution), `drawables`' shape: a real WebGPU adapter (terrain and drawables renderers, one shared pass), about 2,070 items drawn a frame. Measured (`playwright test --project gc --grep \"gc-belts clean\" --repeat-each 8 --workers 1`, this machine, 1-min load 3.2-3.5, M49 fix round 2): 91.48-91.63 B/frame across 8 clean runs (`byFn`: `draw@terrain`, `drain@upload`, `drive@gc-page`; this page dispatches nothing and does not pan, so it reads under `drawables`' 108 and that page's 110 B figure is not this one's floor). ceil(91.63) = 92, + 8 B margin = 100. The `object` and `burst` controls trip it (2 of 2 each, load 3.1-3.6).",
+            "attributionRoots": ["drive"]
+          },
+          "client": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 \u00a71: the shared \"8 B\" worker figure. Measured (`playwright test --project gc --grep \"gc-belts clean\" --repeat-each 8 --workers 1`, this machine, 1-min load 3.2-3.5, M49 fix round 2): a constant 3.4 B/frame across 8 clean runs with `draw_items` drawing about 2,070 items a frame (native: `no_alloc_drawlist_belts_2000_items`, 0 B). Its `object` and `burst` controls trip it (2 of 2 each).",
+            "attributionRoots": ["body"]
+          },
+          "sim": {
+            "class": "strict",
+            "bytesPerFrame": 14,
+            "formula": "`connected-terrain`'s shape (a real connected host tick each frame, downlink building), `ceil(measured clean) + 8 B` margin. Measured (`playwright test --project gc --grep \"gc-belts clean\" --repeat-each 8 --workers 1`, this machine, 1-min load 3.2-3.5, M49 fix round 2): 4.9533-5.0133 B/frame across 8 clean runs (12.37-12.39 before fix round 2). ceil(5.0133) = 6, + 8 B margin = 14. Its `object` and `burst` controls trip it (2 of 2 each).",
+            "attributionRoots": ["body"]
+          },
+          "gen0": {
+            "class": "strict",
+            "bytesPerFrame": 8,
+            "formula": "0016 \u00a71: the shared \"8 B\" worker figure. Measured (`playwright test --project gc --grep \"gc-belts clean\" --repeat-each 8 --workers 1`, this machine, 1-min load 3.2-3.5, M49 fix round 2): a constant 0.8667 B/frame across 8 clean runs (a static camera: its chunks generated during setup).",
+            "attributionRoots": ["body"]
+          }
+        },
+        "software": {
+          "frames": 600,
+          "isolates": {
+            "main": {
+              "attributedBytesPerFrame": 77,
+              "formula": "ADR 0029: software mode attributes only `main` via `attributionRoots` (`[\"drive\"]`). Measured (`GC_MODE=software playwright test --project gc --grep \"gc-belts clean\" --repeat-each 6 --workers 1`, this machine, 1-min load 3.5, M49 fix round 2): 68.04 B/frame attributed in all 6 clean runs. ceil(68.04) = 69, + 8 B margin = 77."
+            }
+          }
+        }
+      },
       "anchors": {
         "isolates": {
           "main": {

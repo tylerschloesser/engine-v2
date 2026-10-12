@@ -247,7 +247,7 @@ fn walk_tiles<'a>(
 
 /// The tile box `(min, max)` of the segment's positions `0 ..= len - 1`: each monotone piece's
 /// extremes are its endpoints.
-fn tile_box(seg: &Segment) -> (TilePos, TilePos) {
+pub(crate) fn tile_box(seg: &Segment) -> (TilePos, TilePos) {
     let mut lo = TilePos::new(i32::MAX, i32::MAX);
     let mut hi = TilePos::new(i32::MIN, i32::MIN);
     let mut add = |t: TilePos| {

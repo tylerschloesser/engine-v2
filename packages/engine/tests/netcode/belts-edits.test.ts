@@ -210,8 +210,10 @@ test(
 )
 
 /** `edit_during_flow_converges`' counts, pinned (seed 4801): a moved pin is a finding. */
+// M49 (0078 A12 revised): `caughtUp` was 10 (ticks no frame came for); a line holder now gets a
+// frame every tick.
 const EDIT_PINS = {
-  caughtUp: 10,
+  caughtUp: 0,
   compared: 17_313,
   items: 1_279_680,
   maxHeld: 57,

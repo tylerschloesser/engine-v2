@@ -56,5 +56,5 @@ genesis at 1/64 natively, under Node and under Bun; `pnpm test:slow rust -t slow
 test:slow netcode -t "tick-belts-large node"`. M48: `-t belts_restore_keeps`, and `Loopback` tests in
 `tests/common/replication.rs` (a module here): `-t region_hash_agrees`, `-t degraded_bundles`.
 
-**The spikes (M40, M41) are deleted (M45).** Their numbers are in 0077's and 0078's Amendments;
-their code (`tests/spike_*.rs`, `tests/common/{repr*,forecast,bench_run}.rs`) is at `864cb3a8`.
+**The client (M49, `src/client.rs`).** `BeltsClient::extract` is `transport::draw::draw_items` with `FixtureStyle` (sprite = kind mod 3, the test atlas's ids, half a tile, colour by kind, layer 2, nothing below 4 px a tile; `LAST_STATS` holds the last call's stats). `tests/drawlist_belts.rs`: `drawlist_belts_hash_golden` (1/64 `SaturatedView` (20, 20), 16 ticks, a frame at 775 ms; `tests/golden/drawlist_belts_hash.hash`, also read by `tests/wasm/drawlist.test.ts`), `no_alloc_drawlist_belts_2000_items` (the gc page's world: 0 B over 300 frames), `slow_draw_items_time` (ns per 1,000 items, reported). Page: `gc-belts`.
+**The spikes (M40, M41) are deleted (M45):** numbers in 0077's and 0078's Amendments, code (`tests/spike_*.rs`, `tests/common/{repr*,forecast,bench_run}.rs`) at `864cb3a8`.

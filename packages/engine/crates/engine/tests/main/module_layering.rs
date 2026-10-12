@@ -32,6 +32,11 @@ fn scan(dir: &Path, out: &mut Vec<(std::path::PathBuf, usize, String)>) {
         if matches!(name, "client.rs" | "game_instance.rs" | "game.rs") {
             continue;
         }
+        // M49: `transport/draw.rs` is the client role's item drawing (`FrameView`, `DrawList`),
+        // outside the deterministic core like `client/`; nothing in `transport/` imports it.
+        if path.ends_with("transport/draw.rs") {
+            continue;
+        }
         let text = std::fs::read_to_string(&path).unwrap();
         for (i, line) in text.lines().enumerate() {
             if line.contains("crate::host") || line.contains("crate::client") {

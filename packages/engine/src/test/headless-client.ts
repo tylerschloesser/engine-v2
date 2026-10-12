@@ -32,6 +32,7 @@ import type { EngineInstance } from '../loader.js'
 import { EngineTrap, instantiate } from '../loader.js'
 import { createLink, type DownReason } from '../net/link.js'
 import { createBytePump } from '../net/pump.js'
+import { OFF_WINDOW_ORIGIN } from '../render/drawlist-slot.js'
 import { readU32LE, writeU32LE } from '../sab/bytes.js'
 import { ControlBlock, WORKER_CLIENT } from '../sab/control.js'
 import { createSabSet, DRAWLIST_HEADER_BYTES } from '../sab/layout.js'
@@ -142,6 +143,10 @@ export interface HeadlessClient {
   /** The full `CameraReport`-shaped primitive (Deviations above): takes effect on the next
    * `stepFrame`/`pump()` call, not immediately. */
   setView(report: ViewReport): void
+  /** M49: the device-pixel viewport the camera block reports (`viewportPxW`/`H`, 0 until set), so
+   * `FrameView::px_per_tile()` is real (`max(w, h) / tilesAcross`), as `engine/test`'s
+   * `setViewport` does for a browser client. Takes effect on the next `stepFrame`. */
+  setViewportPx(widthPx: number, heightPx: number): void
   /** The friendly convenience: `x`/`y`/`tilesAcross` only, `halfExtentTiles{X,Y}` derived from a
    * synthetic square viewport (Deviations above) so a real subscription still forms. Takes effect
    * on the next `stepFrame` call. */
@@ -159,6 +164,10 @@ export interface HeadlessClient {
    * as `drawListRecords` does for a real client; empty before the first frame or for a game with no
    * draw list. Test-only: allocates one object per record. */
   draws(): DrawRecord[]
+  /** M49: the window origin (integer world tiles, a multiple of 64) the last frame's `draws()` are
+   * relative to (the DrawList header's `window_origin`): `recordWorldPos(rec, drawsOrigin())` is a
+   * record's world position, as `drawListWindowOrigin` gives it for a real client. */
+  drawsOrigin(): { x: number; y: number }
   /** `client_region_hash()`, 16-digit lowercase hex. */
   replicaHash(): string
   /** `client_chunk_hash(cx, cy)`: FNV hash (16 hex digits) of a resident chunk's effective slab
@@ -616,6 +625,10 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
 
   return {
     dispatch,
+    setViewportPx(widthPx, heightPx) {
+      cameraState.viewportPxW = widthPx
+      cameraState.viewportPxH = heightPx
+    },
     setView(report) {
       pan = null
       cameraState.centreX = report.x
@@ -662,6 +675,15 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
         })
       }
       return out
+    },
+    drawsOrigin() {
+      const region = inst.region(RegionId.DrawList)
+      if (!region) return { x: 0, y: 0 }
+      const view = new DataView(region.u8.buffer, region.u8.byteOffset, region.u8.byteLength)
+      return {
+        x: view.getInt32(OFF_WINDOW_ORIGIN, true),
+        y: view.getInt32(OFF_WINDOW_ORIGIN + 4, true),
+      }
     },
     replicaHash() {
       const status = inst.call0(inst.x.client_region_hash)

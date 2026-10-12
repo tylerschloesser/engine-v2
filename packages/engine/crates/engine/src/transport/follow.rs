@@ -642,6 +642,49 @@ impl Follower {
         Some((Item(r.item), r.pos as u32))
     }
 
+    /// Every item of the slot at the item clock (0078 A12, M49), front to back, as `(item, slot,
+    /// pos)`: item `k` of a run at `max(pos - speed x frac, stop)` floored to a position, `frac`
+    /// the item clock's fraction past the forecast tick (0 to 4). Below the front it follows `next`
+    /// once (`(slot, len)` of the held, known target of a plain `Next`), landing at `len + p` on
+    /// that line as the step lands it; with no `next` (a merge, fork, sink, dead end or unheld
+    /// `Next`) it is drawn at the front (0) until the next step moves it on. Walks the runs once
+    /// (never `item` per item); nothing for an `unknown` line. Allocates nothing.
+    pub fn for_each_item(
+        &self,
+        slot: u32,
+        speed: u32,
+        frac: f64,
+        next: Option<(u32, u32)>,
+        f: &mut impl FnMut(Item, u32, u32),
+    ) {
+        let Some(l) = self.line(slot) else {
+            return;
+        };
+        if l.unknown {
+            return;
+        }
+        let d = f64::from(speed) * frac;
+        let mut cur = l.head;
+        while cur != NIL {
+            let r = self.runs[cur as usize];
+            for k in 0..i64::from(r.count) {
+                let mut p = (i64::from(r.pos) + SP * k) as f64 - d;
+                let stop = add(r.stop, SP * k);
+                if stop != NONE && p < f64::from(stop) {
+                    p = f64::from(stop);
+                }
+                let p = p.floor();
+                match next {
+                    Some((ns, len)) if p < 0.0 => {
+                        f(Item(r.item), ns, (f64::from(len) + p).max(0.0) as u32)
+                    }
+                    _ => f(Item(r.item), slot, p.max(0.0) as u32),
+                }
+            }
+            cur = r.next;
+        }
+    }
+
     /// Item `idx`'s position and stop at the forecast tick.
     fn item(&self, slot: u32, idx: u32) -> Option<(i64, i32)> {
         let l = self.line(slot)?;
@@ -742,9 +785,124 @@ impl Transport {
         self.fl.counters
     }
 
+    /// The replica (M49): every item of held slot `slot` at the item clock, `frac` past the forecast
+    /// tick, as `(item, slot, pos)` ([`Follower::for_each_item`]): an item past the front of a plain
+    /// `Next` whose target is held and known is on the target (as `pos_at` follows it).
+    pub(crate) fn for_each_item(&self, slot: u32, frac: f64, f: &mut impl FnMut(Item, u32, u32)) {
+        let rec = &self.lines[slot as usize];
+        let next = match rec.out {
+            Output::Next(id) => self
+                .slot(id)
+                .filter(|&s| s != slot && (s as usize) < self.fl.fl.len() && !self.fl.unknown(s))
+                .map(|s| (s, self.lines[s as usize].len)),
+            _ => None,
+        };
+        self.fl
+            .for_each_item(slot, u32::from(rec.speed), frac, next, f);
+    }
+
     /// The replica (0078 §2): where item `idx` of `line` is at render time `render_t`
     /// ([`Follower::pos_at`]).
     pub fn pos_at(&self, line: LineId, idx: u32, render_t: f64) -> Option<(LineId, f64)> {
         self.fl.pos_at(self, line, idx, render_t)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A follower holding one line (slot 0) with the given runs `(item, pos, stop, count)`.
+    fn one_line(runs: &[(u16, i32, i32, u16)]) -> Follower {
+        let mut f = Follower::default();
+        f.reserve(1, 64);
+        f.init_line(0);
+        for &(item, pos, stop, count) in runs {
+            for k in 0..i64::from(count) {
+                f.push_back(0, item, pos + (SP * k) as i32, add(stop, SP * k), true);
+            }
+        }
+        f
+    }
+
+    fn drawn(f: &Follower, speed: u32, frac: f64) -> Vec<(u16, u32)> {
+        let mut out = Vec::new();
+        f.for_each_item(0, speed, frac, None, &mut |item, _, pos| {
+            out.push((item.0, pos))
+        });
+        out
+    }
+
+    /// M49: at `frac` 0 the items are where the forecast tick holds them, one run walked front
+    /// to back (two runs: kinds 1 and 2).
+    #[test]
+    fn follow_for_each_item_at_frac_0() {
+        let f = one_line(&[(1, 100, NONE, 3), (2, 400, NONE, 1)]);
+        assert_eq!(drawn(&f, 24, 0.0), [(1, 100), (1, 164), (1, 228), (2, 400)]);
+    }
+
+    /// M49: at `frac` 1 every free item moved one tick (`speed`), as the step moves it; a
+    /// fraction between moves it `floor(pos - speed x frac)`.
+    #[test]
+    fn follow_for_each_item_at_frac_1_and_between() {
+        let f = one_line(&[(1, 100, NONE, 2)]);
+        assert_eq!(drawn(&f, 24, 1.0), [(1, 76), (1, 140)]);
+        // 24 x 0.3 = 7.2: 92.8 floors to 92.
+        assert_eq!(drawn(&f, 24, 0.3), [(1, 92), (1, 156)]);
+    }
+
+    /// M49: an item never passes its stop within the tick (stops 64 and 128 for a run of two).
+    #[test]
+    fn follow_for_each_item_holds_at_a_stop() {
+        let f = one_line(&[(3, 70, 64, 2)]);
+        assert_eq!(drawn(&f, 24, 0.5), [(3, 64), (3, 128)]);
+        assert_eq!(drawn(&f, 24, 0.25), [(3, 64), (3, 128)]);
+        assert_eq!(drawn(&f, 24, 0.0), [(3, 70), (3, 134)]);
+    }
+
+    /// M49: an item that would cross the front within the tick is drawn at the front (0) until the
+    /// step moves it on; nothing is drawn for an `unknown` line.
+    #[test]
+    fn follow_for_each_item_front_crossing_draws_at_0() {
+        let mut f = one_line(&[(1, 10, NONE, 2)]);
+        assert_eq!(drawn(&f, 24, 1.0), [(1, 0), (1, 50)]);
+        assert_eq!(drawn(&f, 24, 0.25), [(1, 4), (1, 68)]);
+        f.fl[0].unknown = true;
+        assert_eq!(drawn(&f, 24, 0.25), []);
+    }
+
+    /// M49 (0078 A12 revised): the item clock runs up to four ticks past `T` (held frames):
+    /// `frac` 2, 3 and 4 move free items two, three and four ticks, clamp at a stop, and draw an item that
+    /// would cross the front at the front.
+    #[test]
+    fn follow_for_each_item_at_frac_2_3_and_4() {
+        let f = one_line(&[(4, 40, NONE, 1), (1, 300, NONE, 2), (2, 600, 560, 1)]);
+        assert_eq!(drawn(&f, 24, 2.0), [(4, 0), (1, 252), (1, 316), (2, 560)]);
+        assert_eq!(drawn(&f, 24, 3.0), [(4, 0), (1, 228), (1, 292), (2, 560)]);
+        assert_eq!(drawn(&f, 24, 2.5), [(4, 0), (1, 240), (1, 304), (2, 560)]);
+        assert_eq!(drawn(&f, 24, 4.0), [(4, 0), (1, 204), (1, 268), (2, 560)]);
+    }
+
+    /// M49: an item past the front follows a held `Next` once: on the target (slot 1, `len` 2,560)
+    /// at `len + p`, `p` its position below the front (40 - 72 = -32 -> 2,528; 104 - 72 = 32 stays
+    /// on its line); with no held `Next` (a merge, fork, sink or unheld target) it stays at 0.
+    #[test]
+    fn follow_for_each_item_crossing_follows_next_or_holds_at_0() {
+        let f = one_line(&[(1, 40, NONE, 2)]);
+        let mut out = Vec::new();
+        f.for_each_item(0, 24, 3.0, Some((1, 2_560)), &mut |i, s, p| {
+            out.push((i.0, s, p))
+        });
+        assert_eq!(out, [(1, 1, 2_528), (1, 0, 32)]);
+        // A merge (or fork, sink, unheld `Next`): no `next`, the crossing item held at the front.
+        let mut out = Vec::new();
+        f.for_each_item(0, 24, 3.0, None, &mut |i, s, p| out.push((i.0, s, p)));
+        assert_eq!(out, [(1, 0, 0), (1, 0, 32)]);
+        // A fraction: 40 - 24 x 2.5 = -20 -> 2,540 on the target.
+        let mut out = Vec::new();
+        f.for_each_item(0, 24, 2.5, Some((1, 2_560)), &mut |i, s, p| {
+            out.push((i.0, s, p))
+        });
+        assert_eq!(out, [(1, 1, 2_540), (1, 0, 44)]);
     }
 }

@@ -46,9 +46,13 @@
 //! tick's corrections, which `host::lines` routes into frame section 13 (`wire::forecast`); on a
 //! replica, `follow.rs` keeps one trajectory per held item and answers `count`/`front`/`items_in`
 //! from them at its forecast tick.
+//!
+//! M49 (0078 A12): `draw.rs` is the client role's item drawing (`draw::draw_items`, called from a
+//! game's `extract`): every visible item of every held line at the item clock, `T + frac`.
 
 mod advance;
 mod codec;
+pub mod draw;
 mod follow;
 mod forecast;
 mod geometry;

@@ -52,7 +52,8 @@ const WORLDS: {
     pins: {
       lagging: 3,
       partial: 1,
-      caughtUp: 73,
+      // M49 (0078 A12 revised): 73 before; a line holder now gets a frame every tick.
+      caughtUp: 0,
       compared: 16_025,
       items: 1_213_871,
       maxHeld: 54,
@@ -70,7 +71,8 @@ const WORLDS: {
     pins: {
       lagging: 3,
       partial: 1,
-      caughtUp: 7,
+      // M49: 7 before (a frame every tick for a line holder).
+      caughtUp: 0,
       compared: 16_025,
       items: 1_214_129,
       maxHeld: 54,
@@ -267,3 +269,40 @@ test(
   },
   FAST_TIMEOUT_MS,
 )
+
+test(
+  'belts/forecast_catches_up_a_lost_frame',
+  async () => {
+    // M49 (0078 A12 revised): a line holder gets a frame every tick, so the follower's catch-up
+    // (a tick no frame came for, stepped when the next frame lands) runs only when frames are held
+    // or lost. On the 1/64 `MixedFeeders` world (stateless feeders: no chunk delta, a frame with no
+    // section but hashes on a tick without a correction) two such frames are lost on the way
+    // (`link(0).dropNext(2)`): the arbiter steps the client over them and every tick still matches.
+    const h = await createNetHarness({
+      fixture: await beltsFixture(),
+      seed: 4712,
+      clients: 1,
+      world: beltsBenchWorld('MixedFeeders', 64, SMALL),
+    })
+    try {
+      const client = h.clients[0]
+      if (!client) throw new Error('one client')
+      client.setView({ x: 128, y: 72, halfW: 128, halfH: 72 })
+      const seen = await arbitrate(h, 0, 'mixed feeders, two frames lost', 120, false, (i) => {
+        if (i === DROP_AT) h.link(0).dropNext(2)
+      })
+      if (process.env.MEASURE) console.log(`MEASURE lost ${JSON.stringify(seen)}`)
+      expect(
+        { caughtUp: seen.caughtUp, compared: seen.compared, items: seen.items, ticks: seen.ticks },
+        'the measured counts',
+      ).toEqual({ caughtUp: 2, compared: 9_099, items: 485_462, ticks: 117 })
+      h.assertConverged()
+    } finally {
+      await h.dispose()
+    }
+  },
+  FAST_TIMEOUT_MS,
+)
+
+/** The arbiter tick before which `forecast_catches_up_a_lost_frame` loses two frames. */
+const DROP_AT = 60

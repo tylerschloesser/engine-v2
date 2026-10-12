@@ -23,7 +23,7 @@ is the single home of the byte layouts, type bytes and section ids; do not copy 
 allocate nothing; readers borrow and never panic.
 
 - **Frame** `[type][flags][tick u32][ack_seq u32]` plus ascending sections; no sections is a heartbeat. Idle ticks send nothing; a
-  heartbeat goes out at least every 500 ms (`HEARTBEAT_MS` in `host/mod.rs`). `FrameBundle` carries several whole frames, each applied
+  heartbeat goes out at least every 500 ms (`HEARTBEAT_MS` in `host/mod.rs`); a connection holding any transport line gets a frame every tick, header-only when nothing changed, so its follower's tick tracks the host's (0078 A12 revised, M49): about 20 messages and 270 B a second for an idle holder under production hashing (`belts/line_holder_frames_every_tick`); under a degraded hold a header-only frame replaces a header-only frame held last, so a bundle ends at the current tick (a frame with hashes is held whole: its hashes are never sent again). `FrameBundle` carries several whole frames, each applied
   alone, in order (degrade concatenation); `ClientCore::on_frame` validates the whole bundle first.
 - **Deltas are the only write path.** `delta.rs` `Delta<G>` is what every `WorldWrite` put becomes; `Store::apply` is the only
   interpreter. `Delta::Ack` and `Delta::Roster` are engine-only: `Ack` goes straight to `Store` via `Authority::record_ack` and never
@@ -48,7 +48,9 @@ allocate nothing; readers borrow and never panic.
   `States` and `Arrivals` are unbudgeted; puts and run lists share the put budget, and a held line whose correction does not fit is dropped
   and put again, so no client ever steps a stale model. The client runs no belt rule: `transport/follow.rs` moves each item to
   `max(pos - speed, stop)` per tick, follows `Next` links it holds, replays declared spawners, and applies each frame's records around
-  that step; its items are never hashed (0078 §6).
+  that step; its items are never hashed (0078 §6). They are drawn at the item clock `clamp(host_now, T, T + 4)` (0078 A12 revised, M49; 4 because a degrade-level-4 bundle, which ends at the current tick, steps `T` by 4): `T` the follower's
+  tick, `host_now` the host-clock estimate (it follows the earliest arrivals, so at a steady frame rate the clock sits in `[T, T + 1)`), not at
+  the render time; items lead entities by the interpolation delay.
 - **Versions, not acks.** A chunk's version is the tick of its last replicated change. The host stamps a tile write's chunk, every
   chunk of every write of an entity that existed at tick start, and only the tick-end footprint of one born this tick, so an entity
   born and gone in one tick stamps nothing (M48, `Host::tick`). The replica bumps a coalesced op's tick-start and tick-end footprints,

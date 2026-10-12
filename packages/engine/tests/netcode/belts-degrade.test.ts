@@ -181,19 +181,21 @@ test(
 // `late` is `forecastSeenLate`: corrections (States, and lists of lines held before their frame)
 // applied from a frame whose tick the client had already rendered (`transport/follow.rs`, per
 // record, not per delivery). All 30 come in one delivery (`lateDeliveries`, pinned), the bundle that
-// ends the stall (host tick 71, frames up to 69): the client's render clock ran on through the
-// stall. That it equals `deliveredDegraded` is a coincidence of this run.
+// ends the stall (host tick 71, frames up to 71): the client's render clock ran on through the
+// stall. M49 (0078 A12 revised): a line holder gets a frame every tick, header-only when nothing
+// changed, so more frames are delivered, held and compared (before: delivered 163, degraded 30,
+// compared 8,789, items 665,987, the late bundle's frames up to 69, 35 bundles, max emit gap 5).
 const DEGRADED_PINS = {
-  delivered: 163,
-  deliveredDegraded: 30,
-  compared: 8_789,
-  items: 665_987,
+  delivered: 209,
+  deliveredDegraded: 33,
+  compared: 11_273,
+  items: 853_940,
   skipped: 13,
   skippedAfterWhole: 0,
   whole: true,
-  lateDeliveries: [{ tick: 69, host: 71, late: 30 }],
-  bundles: 35,
-  maxEmitGap: 5,
+  lateDeliveries: [{ tick: 71, host: 71, late: 30 }],
+  bundles: 45,
+  maxEmitGap: 4,
   states: 210,
   lists: 0,
   arrivals: 0,

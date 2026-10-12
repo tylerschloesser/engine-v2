@@ -64,6 +64,9 @@
 //! rule that attempt is. So it costs no chunk delta, unlike a [`Thing::Spawner`], whose accumulator
 //! is written on every insert (0079 §19 (e): the shape the reference game's spawners must take).
 //!
+//! **The client (M49, [`client`]).** `extract` draws every visible item through the engine's
+//! `draw_items` with a fixture style (sprite = kind mod 3, half a tile, colour by kind, layer 2).
+//!
 //! Goldens (`golden/scenario-*.json`, `tests/golden_scenarios.rs`): `straight-chain` (also the
 //! canonical `scenario.json`), `deadend-backup`, `spawn-to-sink`, `big-step`, `edit-while-running`,
 //! `inserter-like`, `geometry-arc`, `sideload-saturated`, `sideload-contested`, `fork-50-50`,
@@ -78,6 +81,8 @@ use engine::world::{
     ChunkCoord, Footprint, PrototypeId, Registry, SystemId, Tile, TilePos, TraitSet, WorldPos,
 };
 use engine::worldgen::Worldgen;
+
+pub mod client;
 use ts_rs::TS;
 
 pub mod bench;
@@ -790,7 +795,7 @@ impl Game for Belts {
     type Global = Global;
     type Presence = ();
     type Ui = ();
-    type Client = ();
+    type Client = client::BeltsClient;
 
     fn register(r: &mut Registry) {
         let id = r.add_prototype(TraitSet::EMPTY, Footprint { w: 1, h: 1 });

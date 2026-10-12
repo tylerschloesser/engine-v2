@@ -935,7 +935,8 @@ where
                     replica.remote_presences(),
                 )
                 .with_prediction(core.overlay(), core.pending_queue())
-                .with_render_time(core.render_time());
+                .with_render_time(core.render_time())
+                .with_transport(replica.forecast_transport(), core.host_now());
 
                 // M18 Scope, steps 4-6: "frame(t_ms) order becomes
                 // build FrameView -> ClientSide::frame -> extract -> header (follow, anchors) ->

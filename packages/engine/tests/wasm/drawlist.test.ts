@@ -162,3 +162,98 @@ test('drawlist_hash_matches_native_golden', async () => {
   const golden = readFileSync(goldenPath, 'utf8').trim()
   expect(hash).toBe(golden)
 })
+
+// M49: the belts DrawList golden. `fixtures/belts/tests/drawlist_belts.rs`'s
+// `drawlist_belts_hash_golden` drives `GameInstance<Belts>` natively; this drives the `.wasm`
+// through the same steps (the attach input, the camera, 16 ticks with the frame time advanced 50 ms
+// a tick, one frame at 775 ms: the item clock half a tick past the follower's tick) and reads the
+// same `tests/golden/drawlist_belts_hash.hash`.
+
+/** `drawlist_belts.rs`'s `GOLDEN_CFG`. */
+function beltsConfig() {
+  return {
+    arenaBytes: ARENA_BYTES,
+    game: {
+      seed: '0x7',
+      params: {
+        bench: { seed: 7, scale: 64, regime: { SaturatedView: { jam_pct: 20, period: 20 } } },
+      },
+      maxLines: 4096,
+      maxItems: 16384,
+      unpaced: true,
+    },
+  }
+}
+
+/** `drawlist_belts.rs`'s `ATTACH` (`buildAttachInput`: player 1, epoch 1, joined). */
+const BELTS_ATTACH = new Uint8Array([1, 1, 0, 0, 0, 1, 0, 0])
+
+/** `drawlist_belts.rs`'s `golden_camera()` at frame time `tMs`. */
+function writeBeltsCamera(client: EngineInstance, tMs: number): void {
+  const camSab = createCameraBlock()
+  const camView = new CameraBlockView(camSab)
+  const state = new CameraState()
+  state.centreX = 128
+  state.centreY = 1
+  state.tilesAcross = 40
+  state.halfExtentTilesX = 20
+  state.halfExtentTilesY = 8
+  state.viewportPxW = 800
+  state.viewportPxH = 320
+  state.frameTimeMs = tMs
+  writeCameraBlock(camView, state)
+  const region = client.region(RegionId.Camera)
+  if (!region) throw new Error('client instance has no Camera region')
+  region.u8.set(new Uint8Array(camSab))
+}
+
+test('drawlist_belts_hash_matches_native_golden', async () => {
+  const { wasm } = await loadFixture('belts')
+  const sim = instantiate(wasm, Role.Sim, beltsConfig(), { onLog() {} })
+  const client = instantiate(wasm, Role.Client, beltsConfig(), { onLog() {} })
+  expect(sim.call0(sim.x.sim_genesis)).toBe(0)
+  const clientTx = client.region(RegionId.Tx)
+  const simRx = sim.region(RegionId.Rx)
+  const simTx = sim.region(RegionId.Tx)
+  const clientDownlink = client.region(RegionId.Downlink)
+  if (!clientTx || !simRx || !simTx || !clientDownlink) throw new Error('expected region missing')
+
+  simRx.u8.set(BELTS_ATTACH)
+  const welcomeLen = sim.call2(sim.x.sim_attach, 0, BELTS_ATTACH.length)
+  if (welcomeLen <= 0) throw new Error(`sim_attach failed: status ${-welcomeLen}`)
+  copyRegion(clientDownlink, simTx, welcomeLen)
+  expect(client.call2(client.x.client_on_welcome, welcomeLen, 0)).toBe(0)
+
+  for (let k = 0; k < 16; k++) {
+    writeBeltsCamera(client, 50 * k)
+    client.call1(client.x.frame, 50 * k)
+    const upLen = client.call1(client.x.client_poll_uplink, 0)
+    if (upLen > 0) {
+      copyRegion(simRx, clientTx, upLen)
+      expect(sim.call2(sim.x.sim_admit, 0, upLen)).toBe(0)
+    }
+    expect(sim.call0(sim.x.sim_tick)).toBe(0)
+    const downLen = sim.call1(sim.x.sim_build_frame, 0)
+    if (downLen > 0) {
+      copyRegion(clientDownlink, simTx, downLen)
+      expect(client.call1(client.x.on_frame, downLen)).toBe(0)
+    }
+  }
+  writeBeltsCamera(client, 15 * 50 + 25)
+  client.call1(client.x.frame, 15 * 50 + 25)
+
+  const recordCount = client.call0(client.x.drawlist_len)
+  expect(recordCount).toBe(720)
+  const region = client.region(RegionId.DrawList)
+  if (!region) throw new Error('client instance has no DrawList region')
+  const hash = hashDrawListFields(
+    region.u8.subarray(0, DRAWLIST_HEADER_BYTES),
+    region.u8.subarray(DRAWLIST_HEADER_BYTES),
+    recordCount,
+  )
+  const golden = readFileSync(
+    `${fixtureDir('belts')}/tests/golden/drawlist_belts_hash.hash`,
+    'utf8',
+  ).trim()
+  expect(hash).toBe(golden)
+})

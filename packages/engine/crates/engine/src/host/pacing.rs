@@ -173,7 +173,10 @@ pub struct Pacing {
     /// Whole frames waiting to go out together (`[len varint][frame]` records).
     pub hold: Vec<u8>,
     pub hold_frames: u32,
-    /// The tick the oldest held frame was built.
+    /// M49: where the last held record starts when that frame is header-only
+    /// ([`header_only`]); a later header-only frame replaces it.
+    hold_header_tail: Option<usize>,
+    /// The tick the hold opened (its first frame was held; a replaced header-only frame keeps it).
     pub held_since: u32,
     pub last_emit_tick: u32,
     // -- delta collapse
@@ -253,6 +256,7 @@ impl Pacing {
             // Sized from the frame buffer by the host (`with_hold_for`, M48).
             hold: Vec::new(),
             hold_frames: 0,
+            hold_header_tail: None,
             held_since: now,
             last_emit_tick: now,
             delta_est: Vec::with_capacity(160),
@@ -584,7 +588,8 @@ impl Pacing {
     }
 
     /// The pacing tail of a degraded (or holding) connection (`Host::build_frame`): holds this
-    /// tick's frame (`out[..n]`, a pure heartbeat only when nothing is held) and, when the hold is
+    /// tick's frame (`out[..n]`; M49: a header-only frame replaces a header-only frame held last, so
+    /// the bundle's last frame carries the current tick) and, when the hold is
     /// due (`level` frames waited, the heartbeat gap reached, or `out.len() / 2` bytes held),
     /// writes the held frames that fit into `out` ([`Pacing::take_bundle`]). `Some(bytes)` when a
     /// message was written, `None` when nothing goes this tick.
@@ -598,12 +603,22 @@ impl Pacing {
     ) -> Option<usize> {
         use crate::bytes::{ByteSink, SliceSink};
         let level = self.level as u32;
-        // A pure heartbeat rides only when nothing is held (it exists to break silence).
-        let heartbeat_only = n == 10;
-        if n > 0 && !(heartbeat_only && self.hold_frames > 0) {
-            if self.hold_frames == 0 {
+        // M49 (0078 A12 revised): a header-only frame (a line holder's per-tick frame with nothing
+        // to say, or a heartbeat) replaces a header-only frame held last instead of being dropped,
+        // so a held line holder's bundle ends at the current tick and its follower reaches it. A
+        // frame with hashes is held whole and never replaced: its hashes are committed on the host
+        // (`HashSchedule::commit`) and never sent again. The hold's opening tick stays.
+        if n > 0 {
+            let quiet = header_only(&out[..n]);
+            let replacing = quiet && self.hold_header_tail.is_some();
+            if let (true, Some(start)) = (replacing, self.hold_header_tail) {
+                self.hold.truncate(start);
+                self.hold_frames -= 1;
+            }
+            if self.hold_frames == 0 && !replacing {
                 self.held_since = tick;
             }
+            let start = self.hold.len();
             let mut len = [0u8; 10];
             let mut ls = SliceSink::new(&mut len);
             ls.put_varint(n as u64);
@@ -611,6 +626,7 @@ impl Pacing {
             self.hold.extend_from_slice(&len[..ln]);
             self.hold.extend_from_slice(&out[..n]);
             self.hold_frames += 1;
+            self.hold_header_tail = quiet.then_some(start);
             self.hold_high_water = self.hold_high_water.max(self.hold.len());
         }
         let waited = tick.wrapping_sub(self.held_since) + 1;
@@ -671,6 +687,7 @@ impl Pacing {
         if frames == 0 {
             self.hold.clear();
             self.hold_frames = 0;
+            self.hold_header_tail = None;
             return Ok((0, 0));
         }
         let written = if frames == 1 {
@@ -689,6 +706,7 @@ impl Pacing {
         };
         self.hold.drain(..end);
         self.hold_frames -= frames;
+        self.hold_header_tail = self.hold_header_tail.and_then(|s| s.checked_sub(end));
         Ok((written, frames))
     }
 
@@ -713,6 +731,12 @@ impl Pacing {
             camera_reports_dropped: self.camera_reports_dropped,
         }
     }
+}
+
+/// M49: a frame with no section (the heartbeat shape), what a line holder gets on a tick with
+/// nothing to say and no hash due.
+pub fn header_only(frame: &[u8]) -> bool {
+    crate::wire::FrameReader::new(frame).is_ok_and(|mut r| matches!(r.next_section(), Ok(None)))
 }
 
 #[cfg(test)]
@@ -1076,6 +1100,83 @@ mod tests {
                 "level {level}: messages and bundles"
             );
         }
+    }
+
+    /// M49 (0078 A12 revised): at level 4 a content frame (tick 1) then three quiet ones (header
+    /// only, ticks 2-4): each quiet frame replaces the quiet one held before it, so the bundle due
+    /// at tick 4 carries ticks 1 and 4 (the follower reaches the current tick). Under the old rule
+    /// (a pure heartbeat dropped while anything is held) it carried tick 1 alone.
+    #[test]
+    fn pacing_hold_keeps_the_latest_quiet_frame() {
+        use crate::bytes::SliceSink;
+        use crate::wire::{FrameHeader, FrameReader, FrameWriter, SectionId};
+        let frame = |tick: u32, content: bool, out: &mut [u8]| -> usize {
+            let mut sink = SliceSink::new(out);
+            let mut w = FrameWriter::new(&mut sink, FrameHeader { tick, ack_seq: 0 });
+            if content {
+                w.section(SectionId::Global, |s| s.put_u8(7));
+            }
+            sink.finish().unwrap()
+        };
+        let mut p = pacing().with_hold_for(1024);
+        p.level = 4;
+        let mut out = vec![0u8; 1024];
+        let mut emitted = None;
+        for tick in 1..=4u32 {
+            let n = frame(tick, tick == 1, &mut out);
+            assert_eq!(header_only(&out[..n]), tick != 1);
+            emitted = p.hold_or_bundle(tick, n, &mut out, tick, 20);
+            if tick < 4 {
+                assert_eq!(emitted, None, "tick {tick}: held");
+            }
+        }
+        let n = emitted.expect("due at tick 4");
+        let mut r = crate::wire::BundleReader::new(&out[..n]).unwrap();
+        let mut ticks = Vec::new();
+        while let Some(f) = r.next_frame().unwrap() {
+            ticks.push(FrameReader::new(f).unwrap().header().tick);
+        }
+        assert_eq!(ticks, [1, 4], "the bundle's frames");
+        assert_eq!((p.hold.len(), p.hold_frames), (0, 0));
+    }
+
+    /// M49 fix round 3: a frame with hashes is held whole and never replaced (its hashes are
+    /// committed on the host and never sent again). Level 4: header-only (tick 1), hashes-only (2),
+    /// header-only (3, 4): the bundle due at tick 4 carries ticks 1, 2 and 4 (4 replaced 3, the
+    /// header-only tail). Under fix round 2's rule (any quiet frame replaceable) it carried tick 4
+    /// alone and the tick-2 hashes were lost.
+    #[test]
+    fn pacing_hold_keeps_a_hashes_frame() {
+        use crate::bytes::SliceSink;
+        use crate::wire::{FrameHeader, FrameReader, FrameWriter, SectionId};
+        let mut p = pacing().with_hold_for(1024);
+        p.level = 4;
+        let mut out = vec![0u8; 1024];
+        let mut emitted = None;
+        for tick in 1..=4u32 {
+            let n = {
+                let mut sink = SliceSink::new(&mut out);
+                let mut w = FrameWriter::new(&mut sink, FrameHeader { tick, ack_seq: 0 });
+                if tick == 2 {
+                    w.section(SectionId::Hashes, |s| s.put_u8(9));
+                }
+                sink.finish().unwrap()
+            };
+            assert_eq!(header_only(&out[..n]), tick != 2);
+            emitted = p.hold_or_bundle(tick, n, &mut out, tick, 20);
+        }
+        let n = emitted.expect("due at tick 4");
+        let mut r = crate::wire::BundleReader::new(&out[..n]).unwrap();
+        let mut ticks = Vec::new();
+        while let Some(f) = r.next_frame().unwrap() {
+            ticks.push(FrameReader::new(f).unwrap().header().tick);
+        }
+        assert_eq!(ticks, [1, 2, 4], "the bundle's frames");
+        assert_eq!(
+            (p.hold.len(), p.hold_frames),
+            (0, 0),
+            "the hold is empty after the bundle"
+        );
     }
 
     #[test]

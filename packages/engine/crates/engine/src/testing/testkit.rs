@@ -142,6 +142,8 @@ struct LoopbackClient<G: Game> {
     /// The bytes `build_frame` produced for this client on the most recent `Loopback::step`
     /// (empty if it returned 0): test/diagnostic convenience, independent of delivery delay.
     last_built: Vec<u8>,
+    /// M49: frames still to drop ([`Loopback::drop_frames`]): built, never delivered.
+    drop: u32,
 }
 
 /// A native, byte-level loopback (Goal: "proven natively by a byte-level loopback"): one
@@ -456,6 +458,7 @@ where
             delay: delay_ticks,
             queue: VecDeque::new(),
             last_built: Vec::new(),
+            drop: 0,
         });
         (self.clients.len() - 1, player)
     }
@@ -540,6 +543,10 @@ where
                 Vec::new()
             };
             self.clients[idx].last_built = bytes.clone();
+            if self.clients[idx].drop > 0 {
+                self.clients[idx].drop -= 1;
+                continue;
+            }
             self.clients[idx].queue.push_back(bytes);
         }
         self.host.seal();
@@ -560,6 +567,12 @@ where
     /// a frame overflow (M31 Deviations, "Gate round 2").
     pub fn set_frame_buf_len(&mut self, len: usize) {
         self.frame_buf = vec![0u8; len];
+    }
+
+    /// M49: the next `n` frames built for client `i` are lost on the way (never delivered; the host
+    /// does not know). A test drops only frames whose loss the client survives (no records).
+    pub fn drop_frames(&mut self, i: usize, n: u32) {
+        self.clients[i].drop = n;
     }
 
     /// Runs `n` ticks with no camera changes (`Loopback::step` alone).

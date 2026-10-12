@@ -254,3 +254,46 @@ test('belts/resume_keeps_carry_structures', async () => {
     await harness.dispose()
   }
 })
+
+test('belts/line_holder_frames_every_tick', async () => {
+  // M49 (0078 A12 revised): a connection holding a line gets a frame every tick, header-only when
+  // nothing changed, so its follower's tick tracks the host's. The idle cost: one client holding one
+  // empty request-built line in a world with nothing else moving, 10 s at the default rates.
+  const h = await createNetHarness({
+    fixture: await beltsFixture(),
+    seed: 4_621,
+    clients: 1,
+    // Production hashing (the 0013 schedule), not hash-all: the row pins the real hash bytes.
+    hashAll: false,
+    world: { ...WORLD, debugHashMode: 'production' },
+  })
+  try {
+    const client = h.clients[0]
+    if (!client) throw new Error('one client')
+    client.setCamera(NEAR)
+    await h.advanceTicks(10)
+    await run(h, client, [chain(8, 24), segments(0, 8, 4, 8)])
+    expect(lineStructures(client).map((l) => l.id)).toEqual([1])
+    const c0 = h.counters(0)
+    await h.advanceTicks(200)
+    const c1 = h.counters(0)
+    const section = (c: typeof c0, name: string) => c.sections[name] ?? 0
+    const m = {
+      frames: c1.frames - c0.frames,
+      bytesPerSec: (c1.bytesDown - c0.bytesDown) / 10,
+      headerPerSec: (c1.header - c0.header) / 10,
+      hashesPerSec: (section(c1, 'Hashes') - section(c0, 'Hashes')) / 10,
+    }
+    if (process.env.MEASURE) console.log(`MEASURE holder ${JSON.stringify({ m, c1 })}`)
+    // 20 frames (messages) a second: 10 B headers (200 B/s) and the 0013 hash schedule riding them
+    // (68.6 B/s); a holder with nothing to say before M49 got the 500 ms heartbeat alone.
+    expect(m, 'an idle line holder, 10 s').toEqual({
+      frames: 200,
+      bytesPerSec: 268.6,
+      headerPerSec: 200,
+      hashesPerSec: 68.6,
+    })
+  } finally {
+    await h.dispose()
+  }
+})

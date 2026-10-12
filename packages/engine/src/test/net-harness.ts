@@ -1136,6 +1136,7 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
         ends: e.link.ends,
         set: (c) => e.link.set(c),
         stall: (ms) => e.link.stall(ms),
+        dropNext: (n) => e.link.dropNext(n),
         disconnect: (code) => e.link.disconnect(code),
         reconnect: () => reconnectEntry(i),
       }

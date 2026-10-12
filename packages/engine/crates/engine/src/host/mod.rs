@@ -7,6 +7,11 @@
 //! needs to choose between "fresh world" and "world restored from storage" after `engine_init`
 //! has already reserved the arena and parsed config, so `Host::init` only parses and holds the
 //! parameters; `sim_genesis` is what actually builds the `Sim<G>`.
+//!
+//! Frames (`build_frame`): a connection with nothing to say gets none, except the 0010 heartbeat
+//! every 500 ms; M49 (0078 A12 revised): a connection holding any line (`LineRoute::last_sent`
+//! non-empty) gets a frame every tick, header-only when nothing changed, so its follower's tick
+//! tracks the host's.
 
 pub mod hashes;
 pub mod lines;
@@ -2540,7 +2545,11 @@ impl<G: Game> Host<G> {
         {
             let heartbeat_ticks = G::TICK_RATE.millis(HEARTBEAT_MS).0;
             let since_last_send = self.last_tick.0.wrapping_sub(slot.last_sent_tick.0);
-            if since_last_send < heartbeat_ticks {
+            // M49 (0078 A12 revised): a connection holding any line is never silenced. Its items
+            // move every tick, and the client's follower steps a tick only when a frame for it
+            // (or a later one) arrives, so it gets a frame every tick, header-only (the heartbeat
+            // shape) when nothing changed; under a hold, `hold_or_bundle` treats it as a heartbeat.
+            if since_last_send < heartbeat_ticks && slot.lines.last_sent.is_empty() {
                 build = false;
             }
         }

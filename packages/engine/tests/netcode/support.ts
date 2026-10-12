@@ -361,11 +361,15 @@ export async function arbitrate(
     let held = 0
     let lagging = false
     let caught = false
+    // M49: a line holder gets a frame every tick, so a tick without one is a held frame (degrade)
+    // or a lost one (`link(i).dropNext`, a header-only or hashes-only frame): the client's last frame
+    // is older than this tick. Read once a tick (`status()` crosses the ABI).
+    const noFrame = h.counters(index).frames === frames || client.status().tick < hd.tick
     for (const hl of hd.lines) {
       let cd = lineItems(client, hl.id)
       if (cd === null) continue
       held++
-      if (cd.tick !== hd.tick && cd.tick >= 0 && !caught && h.counters(index).frames === frames) {
+      if (cd.tick !== hd.tick && cd.tick >= 0 && !caught && noFrame) {
         // No frame for this tick: nothing changed for the client. It steps this tick when its
         // next frame comes, by the same call (`on_frame` catches up first); the arbiter takes
         // that step now to compare this tick (the native arbiter's rule).

@@ -11,6 +11,7 @@ use crate::game::{EntityId, Game, PlayerId, Unknown};
 use crate::predict::{NO_OVERLAY_ENTRY, Overlay, PendingQueue, Prediction, footprint_of};
 use crate::presence::Presence as _;
 use crate::time::{Tick, Ticks};
+use crate::transport::Transport;
 use crate::world::{Registry, Tile, TilePos, TileRect, WorldPos};
 use crate::world_access::WorldRead;
 
@@ -251,6 +252,12 @@ fn merge_render_ids<G: Game>(
     scratch.truncate(w);
 }
 
+/// M49 (0078 A12 revised): how far past the follower's tick `T` the item clock may run. At a steady
+/// degrade level 4 a bundle ends at the current tick (`host/pacing.rs` keeps the latest header-only
+/// frame), so `T` steps by 4 a bundle; a cap of 3 stood items still for about a tick in every
+/// 200 ms.
+pub const ITEM_CLOCK_CAP: f64 = 4.0;
+
 /// The read-only view `ClientSide::extract`/`ui` receive (0003 "Contexts": the `View` role).
 /// Borrows the replica for its own lifetime `'a` through `&dyn WorldRead<G>` (object-safe by
 /// design, 0003: "`dyn` is deliberate ... trait-object upcasting") rather than owning a copy, so
@@ -281,6 +288,9 @@ pub struct FrameView<'a, G: Game> {
     /// keeps its exact prior behaviour and hashes.
     overlay: Option<&'a Overlay<G>>,
     pending: Option<&'a PendingQueue<G>>,
+    /// M49: the replica's transport (its follower) and the client's host-clock estimate in host
+    /// ticks, for the item clock ([`Self::item_time`]); `None` until [`Self::with_transport`].
+    transport: Option<(&'a Transport, f64)>,
 }
 
 /// One remote player's presence, as `FrameView::presences()` hands it to a game's own callback
@@ -337,6 +347,7 @@ impl<'a, G: Game> FrameView<'a, G> {
             render_t: None,
             overlay: None,
             pending: None,
+            transport: None,
         }
     }
 
@@ -401,6 +412,39 @@ impl<'a, G: Game> FrameView<'a, G> {
     pub fn with_render_time(mut self, render_t: f64) -> Self {
         self.render_t = Some(render_t);
         self
+    }
+
+    /// Attaches the replica's transport and the client's host-clock estimate `host_now` (host
+    /// ticks): the item clock (M49, 0078 A12 revised). The client worker calls it on every frame; a
+    /// caller that never does draws no item.
+    pub fn with_transport(mut self, transport: &'a Transport, host_now: f64) -> Self {
+        self.transport = Some((transport, host_now));
+        self
+    }
+
+    /// The replica's transport, whose follower holds the items at its forecast tick (M49); `None`
+    /// without [`Self::with_transport`].
+    pub fn transport_follow(&self) -> Option<&'a Transport> {
+        self.transport.map(|(t, _)| t)
+    }
+
+    /// The item clock (0078 A12 revised), host ticks: `clamp(host_now, T, T + 4)` with `T` the
+    /// follower's forecast tick. Items are drawn at it, not at the render time (which trails by the
+    /// interpolation delay); past `T + 1` the follower's model extrapolates (frames held under
+    /// degrade). `host_now` follows the earliest arrivals (`HostClock` keeps the largest offset), so
+    /// at a steady frame rate it sits in `[T, T + 1)`. `None` without [`Self::with_transport`] or
+    /// before the first frame.
+    pub fn item_time(&self) -> Option<f64> {
+        let (t, host_now) = self.transport?;
+        let tick = f64::from(t.forecast_tick()?);
+        // Written out rather than `clamp`: a NaN estimate reads as `T`.
+        Some(if host_now > tick + ITEM_CLOCK_CAP {
+            tick + ITEM_CLOCK_CAP
+        } else if host_now > tick {
+            host_now
+        } else {
+            tick
+        })
     }
 
     pub fn world(&self) -> &dyn WorldRead<G> {
