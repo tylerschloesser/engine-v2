@@ -111,3 +111,68 @@ Inject-fail-revert for the fixes (each reverted):
 - In-block merge with the run ahead disabled -> `merge_across_a_cut_joins_a_packed_block` "one run for the packed pair", `[(5,1,476), (1,1,396), (1,1,0)]` vs `[(5,1,476), (1,2,396)]`.
 
 **Manager's gate and review (2026-10-12).** Reran: `merge_` 6, `fork_` 7, `outputs_` 3, `transport_` 57, `no_alloc` 16, `belts_` 12, `pnpm lint` green; full `pnpm test` green at load 1.4 (rust 3.6 s of 10 s). Two earlier full runs at a one-minute load under 4 but a five-minute load of 11-13 (an hour of back-to-back suites) went red on the reference game's `reference_world_mismatch_reloads_once_onto_the_new_world`, which passed 5 of 5 alone at load 9 and in the quiet run: contention, not charged (the run-tests skill already names it). Adversarial review (an Opus reviewer, read-only): no correctness defect in `advance` or the cut mechanism; six findings, all fixed in "Review fixes": a blocked side-load's walk from the front every tick (now from the nearer end: 7.7 µs against 164 µs median for 50 blocked side-loads on a 1,000-tile alternating main line, `slow_blocked_sideloads_cost`, M45's input for a per-merge cursor), a merge's `at` left behind by `extend_front`/`shrink_front`/`rescale` (now follows them), the `m == at` split boundary (pinned), `set_out` with an identical output (a no-op, the toggle kept), the cut-link wording, canonical form after an in-block landing. Decisions are [0079](../decisions/0079-transport-core-decisions.md) §15-§16.
+
+**Cut budget** (the defect M44b's `prop_ring_lap_time_packed_block` found; the manager's brief; 0079 §11's rule becomes "an item moves at most `speed` in one tick"):
+- *The brief's budget alone does not fix it.* The packed follower never crosses. It is held at `p >= 0` by the target's rearmost item before that item moves (seed 6: item 2 at 11), so there is no landing to give a budget to. A fully packed loop does not rotate at all.
+- *Built: the cut line sees its target as already moved* (`Transport::cut_leader`, `advance.rs`, now 632 lines).
+  - Applies when the first line of a component is part of a simple cycle of `Next` links: `L0 -> L1 -> ... -> L0`, update order `L0, L(n-1), ..., L1`, checked against `order`, `L1` not empty.
+  - `L0`'s front leader is where `L1`'s rearmost item will be after `L1`'s advance, as every other line sees its target. `NONE` if `L1` ends empty.
+  - That value is the least constrained fixed point of dry passes around the cycle. `dry_leader` follows `advance_line`'s rule without writing: one pass is `L0, L(n-1), ..., L1`, starting from "no leader", at most 4 passes (`CUT_PASSES`). A rotating or compressing loop settles in 2.
+  - No fixed point in 4 passes: the leader is the target as it stands (the old, safe rule). The exact fixed point means the target's real tail move equals the predicted one.
+  - A landing may therefore sit transiently inside the spacing of, or even ahead of, the target's unmoved tail. `land` accepts that for a fresh landing (negative gap, the target's `squashed` set), and the target's walk resolves it to a gap `>= 0`.
+- *The budget, as the brief asked* (`Line::fresh_cap`, a `u16`). A landing across a cut records `speed - moved`, `moved` being what it moved on its feeder (`cut_moved` scratch).
+  - When the target advances, its back block (and the front run, if that is fresh) moves `clamp(gap + d_prev, 0, cap)` by the ordinary walk. Its followers follow the usual rule, the early exit is used inside the block, and a fresh front item stops at 0 (one hand-off per item per tick). The old "stop the walk and widen the gap" path is gone.
+  - Two landings in one tick with different budgets set the line's cap to 0.
+  - Mid-line merge landings (§16) get the same per-line cap. A side-load moves its feeder's full `speed` (no leader), so their budget is `target.speed - feeder.speed`, 0 at equal speeds: unchanged in practice.
+  - With the exact leader, the budget only matters for cut landings outside simple `Next` cycles (fork or merge components) and for side-loads onto a faster line.
+- *Record size.* `fresh_mid` became a `u16`, which keeps the record at 88 B. A further mid landing at `u16::MAX` in one tick is refused and waits (unreachable).
+- *Reference* (`transport_rules.rs`) has the same rules, written over its per-item lists:
+  - a dry pass per line;
+  - the same fixed point and pass limit;
+  - per-line budgets;
+  - fresh back items identified by place (`fresh_back`) rather than by position, since a transient landing can share a position with an unmoved item.
+- *Tests.*
+  - `cut_packed_cycle_moves_every_item_speed`: three lines of 512 filled end to end (24 items), speeds 24 and 72, 100 ticks. Every item moves exactly `speed` every tick and every gap, the cut's included, stays `SPACING`.
+  - `cut_merge_landing_moves_its_budget`: a speed-24 side-load at 700 onto a speed-72 line that has not moved lands and then moves its 48 (`(2, 652)`).
+  - `prop_ring_lap_time_packed_block` is un-ignored (the only fixture edit) and passes.
+- *Inject-fail-revert.*
+  - Old leader (`cut_leader` always `None`):
+    - `cut_packed_cycle_moves_every_item_speed` "speed 24 tick 0: item 1 moved 24", left 1024, right 1000 (held);
+    - `prop_ring_lap_time_packed_block` "seed 6 tick 0: item 2 moved 53 (ring 2816)", left 2059, right 2006;
+    - `transport_matches_per_item_reference` "tick 5: line 63", `(2, 48)...` vs `(2, 24)...`.
+  - Cap 0: `cut_merge_landing_moves_its_budget`, `(2, 700)` vs `(2, 652)`. The ring tests stay green under a cap of 0, because the exact leader leaves bounded crossers a gap of 0; the budget is not what fixes the ring.
+- *Verification.* `transport_` 59, `outputs_` 3, `prop_` 5, `belts_` 20, `no_alloc` 16 pass. `pnpm golden belts` moved no golden (checksums of all 26 files under `fixtures/belts/golden/` identical before and after).
+- *For the ADR* (0079 §11): the rule, the fixed point and its pass limit, the fallback, the per-line budget and its disagreement rule, the transient negative gap at a cut landing.
+
+**Cut round 2** (review `m44-cut-review.md`, the manager's decisions):
+- *Known limitation, not fixed (finding 1).* A loop with a `Fork` or `Merge` link is not a simple `Next` cycle. So are a cut whose own output is a fork or merge, and every back-edge cut in a fork component. All of these still see their target as it stands, so a packed block holds one tick at such a cut and spreads to `SPACING + speed`. The budget cannot help, because nothing crosses. The trigger to revisit is M56's loop scenarios; no test pins the spread.
+- *The fallback is counted and tested (finding 2).*
+  - `cut_leader` now returns `Cut::{No, Fixed(lead), Fallback}`, and `advance` counts fallbacks (`Transport::cut_fallbacks()`, tests and tools, not state).
+  - The doc now says when the fixed point is reached: with every gap of the loop `>= 0` the first pass lands on it and the second confirms; each squashed pair makes the iterates creep by the loop's deficit per pass.
+  - Only a fixed point may be used: a lead below it lets a landing overrun the target's real tail by the deficit.
+  - Test `cut_fallback_holds_and_stays_valid`: packed 3 x 512 loops at 24, 72 and 96 (line 2 rescaled to 505, overfull by 7), and 3 x 2048 at speed 300 rescaled to 1976 (overfull by 72). It checks, for 30 ticks:
+    - one fallback per tick;
+    - the cut's front item holds at 0;
+    - every stored gap stays above `-64`;
+    - then `encode`/`decode` restores the store, and both advance byte-identically for 20 ticks.
+- *Gap invariant asserted (findings 2 and 4).* `check_line` (debug builds) runs after every line's advance. It asserts:
+  - no `count == 0` run left;
+  - front item at `>= 0`;
+  - every later gap above `-SPACING`;
+  - item count and `tail_pos` exact, and the tail below `len`.
+
+  `line.rs`'s doc now states the exception: inside `advance` a cut landing may sit down to `-target.speed` behind the target's unmoved tail until the target's walk resolves it. At the end of `advance` every gap is above `-SPACING`.
+- *Loop tests (finding 6), in `transport_rules.rs` against the per-item reference.* The helper `loop_run` compares every line every tick, checks spacing `>= SPACING` around the loop, and checks that no item moves more than the faster of its two lines.
+  - `transport_cut_gapped_loops_rotate`: 30 items with packed runs and gaps of 10-150 on 3 x 1024, at speeds 72 and 96 (two crossings per tick), 120 ticks. Every item moves exactly `speed` every tick.
+  - `transport_cut_mixed_speed_loop`: a 24 -> 72 -> 24 loop, 22 items, 200 ticks. Moves of 24, 72 and a compression front are all seen.
+  - `cut_caps_disagree_fall_to_zero` (`transport_outputs.rs`): line 1 hands off (moved 50, budget 22) and line 2 side-loads (moved 24, budget 48) onto line 3 in one tick. Both landings then move 0: `[(5, 228), (2, 700), (5, 868), (1, 1004)]`.
+- *Cost (finding 3), measured, no optimisation.* `slow_cut_dry_pass_visits` (slow tier): a stalled 4-line loop of 4 x 1,000 tiles, 16,000 alternating-kind runs, one line rescaled by -1. The dry passes visit **52,003 run nodes per tick** (`dry_visits()`, a per-thread counter, not state), with a fallback every tick; the real pass is O(1) per line through `jam`. Free loops cost O(lines). This is M45/M56's input.
+- *Inject-fail-revert.*
+  - Fallback returns `Fixed(lead)`: `cut_fallback_holds_and_stays_valid` fails with "speed 24 tick 0: no fixed point, fallback", left 0, right 1. With the counter and front-hold assertions disabled, the invariant itself trips at speed 300: "gap -72 at or below -SPACING on line LineId(2)" (`check_line`).
+  - Budget disagreement keeping the latest budget (`_ => cap`): `cut_caps_disagree_fall_to_zero`, `[.., (2, 652), .., (1, 956)]` vs `[.., (2, 700), .., (1, 1004)]`. The reference test stays green under it.
+  - Cut leader never used (`Cut::Fixed(_) => None`): `transport_cut_mixed_speed_loop` "tick 0: line 0" and `transport_cut_gapped_loops_rotate` "tick 1: line 0".
+  - **`CUT_PASSES = 2` survives everything** (`transport_`, `cut_`, `prop_`, `belts_` all green). Every tested loop either converges in two passes or falls back under both limits; 4 is a choice, not a pinned value.
+- *Verification.* `pnpm format`; `pnpm lint` green; `transport_` 63, `outputs_` 3, `cut_` 10, `no_alloc` 16, `prop_` 5, `belts_` 20 pass; `pnpm golden belts` moved nothing (26 files byte-identical). Full `pnpm test` at load 1.43/4.88: green (rust 923, unit 381, wasm 213, netcode 149, browser 259). An earlier run during a load spike was red in browser gc pages, with every suite 2-3x over its budget; not charged.
+- *For the ADR.* 0079 §11 should state the fixed-point leader, its fallback and limitation (simple `Next` cycles only), the budget and its disagreement rule (finding 5: up to `target.speed - feeder.speed` lost), and the transient gap. §16's "stays put" is now "moves at most `fresh_cap`".
+
+**Manager's gate, cut rounds (2026-10-12).** M44b's ring property found that a packed block crossing a loop's cut spread by `speed` for good (the cut line bounded its front against the unmoved tail); the first fix round built the budget rule and found it insufficient (a held follower never crosses), then built the fixed-point dry-pass leader for simple `Next` loops with a bounded fallback; a focused adversarial review of the cut rules (an Opus reviewer, read-only) confirmed the dry pass writes nothing, sees the right state and has a unique fixed point, and named the gaps the second round closed (the fallback tested with overfull loops at speeds 24-300 and an encode/decode check, a debug-only invariant after every line's advance, loops with gaps at 72 and 96, a 24 -> 72 -> 24 loop, disagreeing budgets, the dry pass's cost counted: 52,003 node visits per tick on a stalled 16,000-run loop). Recorded, not fixed (0079 §11, trigger M56): a loop whose links include a `Fork` or `Merge` still spreads at its cut. `CUT_PASSES = 2` survives every test (recorded). Reran: `transport_` 63, `cut_` 10, `prop_` 5, `belts_` 20, `no_alloc` 16, lint green, `pnpm golden belts` idempotent, full `pnpm test` green at load 1.5/5.0.

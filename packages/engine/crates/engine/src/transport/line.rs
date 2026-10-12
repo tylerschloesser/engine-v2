@@ -4,7 +4,10 @@
 //! (`pos - leader_pos - SPACING`; for the front run, its first item's position). A later run's
 //! `gap` is negative for a squashed pair (M43: `rescale` and `join` keep them, 12 §3e; the squash
 //! rule of `advance` resolves them), never below `1 - SPACING` (positions strictly increase), and
-//! only on a line whose `squashed` flag is set. Canonical form:
+//! only on a line whose `squashed` flag is set. One exception, inside `advance` only (M44): a
+//! landing across a cycle's cut may sit down to `-target.speed` behind the target's unmoved
+//! rearmost item (even ahead of it, out of order) until the target's own walk resolves it; at the
+//! end of `advance` every gap is above `-SPACING` (debug-asserted per line, `check_line`). Canonical form:
 //! two adjacent runs merge when the rear one's gap is 0 and the item is the same, unless the merged
 //! `count` would overflow `u16` (0077 A6b (ii)).
 //!
@@ -17,6 +20,8 @@
 use super::{LineId, Output, Transport};
 
 pub(super) const NIL: u32 = u32::MAX;
+/// `Line::fresh_cap` with no landing across a cut this tick.
+pub(super) const NO_CAP: u16 = u16::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(super) struct Run {
@@ -65,12 +70,19 @@ pub(super) struct Line {
     /// `adv_mark` is not the current epoch lands on a line that has not moved yet (a cycle cut).
     pub adv_mark: u32,
     /// Back runs made only of items that crossed a cycle cut onto this line this tick, before it
-    /// advanced: they do not move again this tick (0079, M42 review). Zero outside `advance`.
+    /// advanced: they move at most `fresh_cap` more this tick (0079 §11). Zero outside `advance`.
     pub fresh_runs: u32,
     /// Runs landed by a `Merge` across a cycle cut in the middle of this line before it advanced
     /// (M44): each is a single item marked by `count == 0` (only inside `advance`), which this
-    /// line's walk restores to 1 without moving it. Zero outside `advance`.
-    pub fresh_mid: u32,
+    /// line's walk restores to 1 (it moves at most `fresh_cap`). Zero outside `advance`. A `u16`
+    /// (the record stays 88 B): at `u16::MAX` such landings in one tick a further one is refused
+    /// and waits (unreachable in practice: it needs 65,535 side-loads onto one line in a tick).
+    pub fresh_mid: u16,
+    /// How far this tick's cut landings may still move when this line advances (0079 §11 as
+    /// amended in M44: an item moves at most `speed` in one tick): `speed - moved`, `moved` being
+    /// what the item already moved on its feeder; 0 when two landings disagree; [`NO_CAP`] when
+    /// none landed (a budget is below `u16::MAX`: `moved >= 1`). Only inside `advance`.
+    pub fresh_cap: u16,
     /// The line may hold a negative gap (a squashed pair, M43): set by `rescale`, `join`, `split`
     /// and decode, cleared by an `advance` walk that saw none. Conservative and unobservable (the
     /// walk with it set reaches exactly the state the early exit reaches when no gap is negative),
@@ -105,6 +117,7 @@ impl Line {
             adv_mark: 0,
             fresh_runs: 0,
             fresh_mid: 0,
+            fresh_cap: NO_CAP,
             squashed: false,
             seg_start: NIL,
             seg_count: 0,

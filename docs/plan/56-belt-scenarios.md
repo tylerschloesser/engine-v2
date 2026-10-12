@@ -5,6 +5,8 @@ Status: not started · After: 50, 54, 55 · Tyler-dependent: no
 Later-phase brief: goal, exit criteria and open questions. Filled in at the start of its phase.
 
 ## Goal
+(Note 2026-10-12, 0079 §11: a loop whose links include a `Fork` or a `Merge` still spreads a packed block by `speed` at its cut, because the cut leader's dry pass handles simple `Next` loops only; the loop scenarios here measure it and this milestone extends the dry pass to fork and merge links if the spread shows, recording the result in 0079. The dry pass also walks a stalled loop's runs on every pass: measure on the largest loop scenario.)
+
 Complex belt layouts are built and tested end to end: natively on `fx-belts` (mixed speeds, which the reference game lacks) and on the reference game in the browser and the netcode harness: a 4x4 balancer, closed loops, saturated splitter chains, side-loaded undergrounds, a saturated world with jams forming and clearing, edits during flow. Conservation, spacing, throughput and lap-time properties hold on every scenario, and forecasts stay under budget on each.
 
 ## Read first

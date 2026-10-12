@@ -611,9 +611,11 @@ fn transport_full_at_caps() {
 
 /// A per-item reference of the same rule (M40's candidate A, written plainly): every line a `Vec`
 /// of `(item, pos)` front to back, with its own update order (a recursive Tarjan, not production's
-/// iterative `order_into`) and its own reading of the cycle cut (0079: an item that crosses the cut
-/// onto a line that has not advanced yet does not move again that tick). M44: `Merge` and `Fork`
-/// written from 0076 §1 and the `Output` docs, not from `advance.rs`.
+/// iterative `order_into`) and its own reading of the cycle cut (0079 §11 as amended in M44: an
+/// item moves at most `speed` in one tick; the first line of a simple `Next` cycle sees its target
+/// as it will be after it moves, by dry passes over the per-item lists; an item that crossed the
+/// cut moves only the budget it has left). M44: `Merge` and `Fork` written from 0076 §1 and the
+/// `Output` docs, not from `advance.rs`.
 struct Reference {
     lines: Vec<Option<RefLine>>, // by `LineId - 1`; `None` once destroyed
     sunk: u64,
@@ -621,6 +623,8 @@ struct Reference {
     cut_landings: u64,
     /// M44 non-vacuity counts, see [`Stat`].
     stats: [u64; 8],
+    /// What the item crossing now moved on its feeder this tick.
+    moved: i64,
 }
 
 /// Indices into `Reference::stats`.
@@ -645,8 +649,16 @@ struct RefLine {
     out: Out,
     toggle: bool,
     items: Vec<(u16, i64)>,
-    /// Positions of the items that crossed a cut onto this line this tick (they do not move again).
+    /// Positions of the items that crossed a cut onto this line this tick: they move at most
+    /// `cap` more (0079 §11 as amended in M44: an item moves at most `speed` in one tick).
     fresh: Vec<i64>,
+    /// How many items at the back crossed a cut onto this line this tick (identified by place, not
+    /// position: a landing seen against the target's moved tail may share a position with an item
+    /// that has not moved yet).
+    fresh_back: usize,
+    /// `speed - moved` of this tick's cut landings (`moved`: what they moved on their feeder); 0
+    /// when two landings disagree.
+    cap: Option<i64>,
 }
 
 const SP: i64 = SPACING as i64;
@@ -659,6 +671,7 @@ impl Reference {
             sunk: 0,
             cut_landings: 0,
             stats: [0; 8],
+            moved: 0,
         }
     }
 
@@ -678,6 +691,8 @@ impl Reference {
             toggle: false,
             items: Vec::new(),
             fresh: Vec::new(),
+            fresh_back: 0,
+            cap: None,
         }));
     }
 
@@ -761,36 +776,112 @@ impl Reference {
         tj.out
     }
 
+    /// Where line `k`'s rearmost item ends if `k` advanced with front leader `leader`, as its
+    /// feeder's leader (`NO_LEADER`: `k` is or ends empty); nothing written.
+    fn dry(&self, k: usize, mut leader: i64) -> i64 {
+        let line = self.line(k);
+        for &(_, pos) in &line.items {
+            let bound = leader + SP;
+            leader = if pos < bound {
+                pos
+            } else {
+                (pos - line.speed).max(bound)
+            };
+        }
+        if line.items.is_empty() || leader < 0 {
+            NO_LEADER
+        } else {
+            leader - line.len
+        }
+    }
+
+    /// 0079 §11 as amended in M44: the first line of a simple `Next` cycle (`order[i]`, its
+    /// target not advanced yet) sees its target as it will be after it moves: the least
+    /// constrained fixed point of dry passes around the cycle in update order, from no leader, at
+    /// most four passes; `None` otherwise (the target as it stands).
+    fn cut_leader(&self, order: &[usize], i: usize, advanced: &[bool]) -> Option<i64> {
+        let l = order[i];
+        let Out::Next(t) = self.line(l).out else {
+            return None;
+        };
+        let t = t as usize;
+        if advanced[t] || self.line(t).items.is_empty() {
+            return None;
+        }
+        let mut cycle = vec![l];
+        let mut x = t;
+        while x != l {
+            let Out::Next(y) = self.line(x).out else {
+                return None;
+            };
+            cycle.push(x);
+            x = y as usize;
+            if cycle.len() > self.lines.len() {
+                return None;
+            }
+        }
+        // Update order: `L0`, then backwards against the links.
+        let want: Vec<usize> = std::iter::once(l)
+            .chain(cycle[1..].iter().rev().copied())
+            .collect();
+        if order.get(i..i + want.len()) != Some(&want[..]) {
+            return None;
+        }
+        let mut lead = NO_LEADER;
+        for _ in 0..4 {
+            let next = want.iter().fold(lead, |ld, &k| self.dry(k, ld));
+            if next == lead {
+                return Some(lead);
+            }
+            lead = next;
+        }
+        None
+    }
+
     fn advance(&mut self) {
         let mut advanced = vec![false; self.lines.len()];
-        for l in self.order() {
+        let order = self.order();
+        for (i, &l) in order.iter().enumerate() {
             let (speed, out) = (self.line(l).speed, self.line(l).out);
+            let cut = self.cut_leader(&order, i, &advanced);
             let mut leader = match out {
                 Out::DeadEnd => -SP,
                 Out::Sink | Out::Merge(..) | Out::Fork(..) => NO_LEADER,
+                Out::Next(_) if cut.is_some() => cut.expect("checked"),
                 Out::Next(t) => {
                     let t = self.line(t as usize);
                     t.items.last().map_or(NO_LEADER, |&(_, p)| p - t.len)
                 }
             };
             let fresh = std::mem::take(&mut self.line_mut(l).fresh);
+            let fresh_back = std::mem::take(&mut self.line_mut(l).fresh_back);
+            let cap = self.line_mut(l).cap.take().unwrap_or(0);
             let mut transfers = 0;
             let mut k = 0;
             while k < self.line(l).items.len() {
                 let (item, pos) = self.line(l).items[k];
-                if fresh.contains(&pos) {
-                    // Crossed a cut onto this line this tick: stays, and holds the items behind.
-                    leader = pos;
+                let bound = leader + SP;
+                let back = k >= self.line(l).items.len() - fresh_back;
+                if back || fresh.contains(&pos) {
+                    // Crossed a cut onto this line this tick: moves what is left of its budget,
+                    // never across this line's front.
+                    let p = if pos < bound {
+                        pos
+                    } else {
+                        (pos - cap).max(bound).max(0)
+                    };
+                    self.line_mut(l).items[k].1 = p;
+                    leader = p;
                     k += 1;
                     continue;
                 }
-                let bound = leader + SP;
                 let mut p = if pos < bound {
                     pos
                 } else {
                     (pos - speed).max(bound)
                 };
                 if p < 0 {
+                    self.moved = pos - p;
                     let landed = match out {
                         Out::Merge(t, at) => self.merge(t as usize, at, -p, item, &advanced),
                         Out::Fork(..) => self.fork(l, -p, item, &advanced),
@@ -815,7 +906,8 @@ impl Reference {
                         let tlen = self.line(t).len;
                         self.line_mut(t).items.push((item, tlen + p));
                         if !advanced[t] {
-                            self.line_mut(t).fresh.push(tlen + p);
+                            self.line_mut(t).fresh_back += 1;
+                            self.cut_budget(t);
                             self.cut_landings += 1;
                         }
                     }
@@ -834,6 +926,19 @@ impl Reference {
         }
     }
 
+    /// A landing across a cut on `t`: its budget is `t.speed - moved`; two landings with
+    /// different budgets in one tick leave 0.
+    fn cut_budget(&mut self, t: usize) {
+        let moved = self.moved;
+        let line = self.line_mut(t);
+        let cap = (line.speed - moved).max(0);
+        line.cap = Some(match line.cap {
+            None => cap,
+            Some(c) if c == cap => cap,
+            Some(_) => 0,
+        });
+    }
+
     /// A side-load (0076 §1): `at - o` clamped to the target, iff no item of the target is closer
     /// than `SPACING` to it.
     fn merge(&mut self, t: usize, at: u32, o: i64, item: u16, advanced: &[bool]) -> bool {
@@ -845,9 +950,15 @@ impl Reference {
         }
         let mid = tl.items.last().is_some_and(|&(_, q)| q > pos);
         let k = tl.items.partition_point(|&(_, q)| q < pos);
+        let in_back = k >= tl.items.len() - tl.fresh_back;
         self.line_mut(t).items.insert(k, (item, pos));
         if !advanced[t] {
-            self.line_mut(t).fresh.push(pos);
+            if in_back {
+                self.line_mut(t).fresh_back += 1;
+            } else {
+                self.line_mut(t).fresh.push(pos);
+            }
+            self.cut_budget(t);
             self.stats[Stat::CutTransfer as usize] += 1;
             if mid {
                 self.stats[Stat::MergeCutMid as usize] += 1;
@@ -873,7 +984,8 @@ impl Reference {
             }
             self.line_mut(t).items.push((item, pos));
             if !advanced[t] {
-                self.line_mut(t).fresh.push(pos);
+                self.line_mut(t).fresh_back += 1;
+                self.cut_budget(t);
                 self.stats[Stat::CutTransfer as usize] += 1;
             }
             if k == 0 {
@@ -1063,6 +1175,8 @@ impl Reference {
             toggle: false,
             items: back.into_iter().map(|(i, p)| (i, p - at)).collect(),
             fresh: Vec::new(),
+            fresh_back: 0,
+            cap: None,
         }));
         Ok(n)
     }
@@ -1572,8 +1686,8 @@ fn transport_reserved_bytes_at_the_defaults() {
     );
 }
 
-/// 0079 (M42 review, finding 8): an item that crosses a cycle's cut lands on a line that has not
-/// advanced yet this tick and does not move again. Three lines of 512 in a loop at speed 24, four
+/// 0079 (M42 review, finding 8; §11 as amended in M44): an item that crosses a cycle's cut lands on
+/// a line that has not advanced yet this tick and moves no more than its tick's travel. Three lines of 512 in a loop at speed 24, four
 /// items of distinct kinds spread around it: over 100 ticks every item moves exactly 24 per tick
 /// along the loop (never 48 at the cut), and the items stay at least `SPACING` apart.
 #[test]
@@ -1772,4 +1886,128 @@ fn transport_merges_stop_at_u16_max() {
     );
     assert_eq!(t.count(l), Ok(full + 1));
     round_trip(&t);
+}
+
+/// A `Next` loop of lines `lens[k]` long at `speeds[k]` (line k feeds k + 1), in the production
+/// store and the reference, with items of distinct kinds at loop coordinates `coords` (a line's
+/// position plus the lengths of the lines after it). Every tick both advance and must agree; at
+/// the end of every tick every pair of consecutive items around the loop is at least `SPACING`
+/// apart and no item moved more than the faster of the line it left and the line it is on.
+/// Returns the moves of every tick.
+fn loop_run(lens: &[i64], speeds: &[i64], coords: &[i64], ticks: u32) -> Vec<Vec<i64>> {
+    let n = lens.len();
+    let total: i64 = lens.iter().sum();
+    let mut t = Transport::new(16, 256);
+    let mut r = Reference::new();
+    for k in 0..n {
+        assert_eq!(t.create(lens[k] as u32, speeds[k] as u16), Ok(id(k as u32)));
+        r.create(lens[k], speeds[k]);
+    }
+    for k in 0..n {
+        let out = Out::Next(((k + 1) % n) as u32);
+        assert_eq!(t.set_out(id(k as u32), to_output(out)), r.set_out(k, out));
+    }
+    let after = |k: usize| -> i64 { lens[k + 1..].iter().sum() };
+    for (j, &c) in coords.iter().enumerate() {
+        let k = (0..n).find(|&k| c >= after(k)).expect("on the loop");
+        let p = c - after(k);
+        assert_eq!(
+            t.insert_at(id(k as u32), p as u32, Item(j as u16 + 1)),
+            Ok(())
+        );
+        r.insert_at(k, p, j as u16 + 1).unwrap();
+    }
+    let place = |t: &Transport| -> Vec<(i64, usize)> {
+        let mut v = vec![(0, 0); coords.len()];
+        for k in 0..n {
+            for (item, p) in items(t, id(k as u32)) {
+                v[usize::from(item) - 1] = (i64::from(p) + after(k), k);
+            }
+        }
+        v
+    };
+    let mut prev = place(&t);
+    let mut moves = Vec::new();
+    for tick in 0..ticks {
+        t.advance();
+        r.advance();
+        for k in 0..n {
+            let want: Vec<(u16, u32)> = r
+                .line(k)
+                .items
+                .iter()
+                .map(|&(i, p)| (i, p as u32))
+                .collect();
+            assert_eq!(items(&t, id(k as u32)), want, "tick {tick}: line {k}");
+        }
+        let now = place(&t);
+        let mut tick_moves = Vec::new();
+        for (j, (&(c0, k0), &(c1, k1))) in prev.iter().zip(&now).enumerate() {
+            let d = (c0 - c1).rem_euclid(total);
+            assert!(
+                d <= speeds[k0].max(speeds[k1]),
+                "tick {tick}: item {} moved {d}",
+                j + 1
+            );
+            tick_moves.push(d);
+        }
+        let mut sorted: Vec<i64> = now.iter().map(|&(c, _)| c).collect();
+        sorted.sort_unstable();
+        let wrap = sorted[0] + total - sorted[sorted.len() - 1];
+        for gap in sorted.windows(2).map(|w| w[1] - w[0]).chain([wrap]) {
+            assert!(gap >= i64::from(SPACING), "tick {tick}: items {gap} apart");
+        }
+        moves.push(tick_moves);
+        prev = now;
+    }
+    moves
+}
+
+/// M44 cut review (finding 6): `Next` loops with gaps at target speeds 72 and 96 (two items cross a
+/// front per tick), packed pairs included, the cut's target among them. With every gap `>= 0` and
+/// one speed a loop rotates rigidly: every item moves exactly `speed` every tick (and the
+/// reference agrees).
+#[test]
+fn transport_cut_gapped_loops_rotate() {
+    // Packed runs and gaps of 10-150 around a 3 x 1024 loop; item 1 sits at line 0's front, packed
+    // behind line 1's rearmost item (the cut).
+    let mut coords = Vec::new();
+    let mut c = 2048i64;
+    for k in 0..30i64 {
+        coords.push(c % 3072);
+        c += 64 + [0, 0, 10, 0, 150, 37, 0, 0, 88][(k % 9) as usize];
+    }
+    assert!(c - 2048 < 3072, "fits the loop");
+    for speed in [72i64, 96] {
+        let moves = loop_run(&[1024, 1024, 1024], &[speed; 3], &coords, 120);
+        for (tick, m) in moves.iter().enumerate() {
+            assert!(
+                m.iter().all(|&d| d == speed),
+                "speed {speed} tick {tick}: moves {m:?}"
+            );
+        }
+    }
+}
+
+/// M44 cut review (finding 6): a 24 -> 72 -> 24 loop (the cut line at 24 feeds the fast line),
+/// gapped and packed, against the reference, spacing held, nothing moving more than the faster of
+/// its two lines; the fast line's items bunch up behind the slow one.
+#[test]
+fn transport_cut_mixed_speed_loop() {
+    let coords: Vec<i64> = (0..22)
+        .scan(1535i64, |c, k| {
+            let at = *c;
+            *c -= 64 + [0, 6][k % 2];
+            Some(at)
+        })
+        .collect();
+    let moves = loop_run(&[512, 512, 512], &[24, 72, 24], &coords, 200);
+    let all: Vec<i64> = moves.iter().flatten().copied().collect();
+    assert!(all.contains(&72), "the fast line ran at 72");
+    assert!(all.contains(&24), "the slow lines ran at 24");
+    assert!(
+        all.iter().any(|&d| d != 24 && d != 72),
+        "items bunched behind a slow line: {:?}",
+        all.iter().collect::<std::collections::BTreeSet<_>>()
+    );
 }

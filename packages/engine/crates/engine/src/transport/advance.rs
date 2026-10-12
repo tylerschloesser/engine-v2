@@ -18,10 +18,14 @@
 //! stops (a free line is O(1)); a stopped front skips its packed runs through the `jam` cursor (a
 //! jammed line is O(1)); only the compression front is walked.
 //!
-//! The cycle cut (0079, M42 review): an item that crosses onto a line that has not advanced yet
-//! this tick (only the cut link of a cycle can do that) joins a back run of such items
-//! (`Line::fresh_runs`); that line's advance stops its walk before them and widens the gap in front
-//! of them by what the runs ahead moved, so every item moves at most one tick's travel per tick.
+//! The cycle cut (0079 §11, amended in M44: an item moves at most `speed` in one tick). The first
+//! line of a simple cycle of `Next` links sees its target as it will be after the target moves
+//! (`cut_leader`: the fixed point of dry passes around the cycle), so a packed loop rotates
+//! rigidly. An item that crosses onto a line that has not advanced yet (only a cut link can do
+//! that) joins a back run of such items (`Line::fresh_runs`), which may transiently sit inside
+//! the spacing of the target's unmoved rearmost item. When the target advances, those runs move
+//! by the ordinary rule with their limit lowered to the budget left, `speed - moved`
+//! (`Line::fresh_cap`; 0 when two landings in the tick disagree), never across the front.
 //! A plain `Next` needs `target.len >= feeder.speed` (`set_out`, `set_speed`, decode), so a landing
 //! `target.len + p` is never negative. Positions are `i64` here so no
 //! `len` near `u32::MAX` can overflow the arithmetic; stored values stay `u32`.
@@ -35,14 +39,39 @@
 //! leader behind (the next item is free again); a refused one waits at 0 and the walk squashes the
 //! items behind it. Several items cross in one tick front to back, each against the target as the
 //! previous landing left it. A merge landing in the middle of a target that has not advanced yet
-//! (a cut link) is a `count == 0` run (`Line::fresh_mid`) the target's walk keeps in place.
+//! (a cut link) is a `count == 0` run (`Line::fresh_mid`) under the same budget (a side-load
+//! moved its feeder's full `speed`, so it is `target.speed - feeder.speed`, 0 at equal speeds).
 
-use super::line::{NIL, Run, opt as opt_node};
+use super::line::{NIL, NO_CAP, Run, opt as opt_node};
 use super::{Output, SPACING, Transport, TransportError};
 
 const SP: i64 = SPACING as i64;
 /// "No leader": far below any position, so `NONE + SP - speed` cannot overflow.
 const NONE: i64 = i64::MIN / 4;
+/// The most dry passes [`Transport::cut_leader`] runs around a cycle looking for its fixed point
+/// (a loop without squashed pairs settles in two: the second confirms the first).
+const CUT_PASSES: usize = 4;
+
+/// What [`Transport::cut_leader`] found for a line.
+enum Cut {
+    /// Not the first line of a simple `Next` cycle with a non-empty target.
+    No,
+    /// The fixed point: the leader the line sees.
+    Fixed(i64),
+    /// No fixed point in [`CUT_PASSES`]: the target as it stands.
+    Fallback,
+}
+
+std::thread_local! {
+    /// Run nodes the cut's dry passes visited on this thread (tests and tools; not state).
+    static DRY_VISITS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+}
+
+/// Run nodes [`Transport::cut_leader`]'s dry passes visited on the calling thread so far: the
+/// pass's cost as a counter a test reads instead of a timer (M44 cut review). Not state.
+pub fn dry_visits() -> u64 {
+    DRY_VISITS.with(|v| v.get())
+}
 
 impl Transport {
     /// One tick of every line, in update order (recomputed first if the graph changed). Runs in
@@ -56,7 +85,17 @@ impl Transport {
         let before = std::mem::take(&mut self.changed);
         for i in 0..self.order.len() {
             let l = self.order[i];
-            self.advance_line(l);
+            let cut_leader = match self.cut_leader(i) {
+                Cut::No => None,
+                Cut::Fixed(lead) => Some(lead),
+                Cut::Fallback => {
+                    self.cut_fallbacks = self.cut_fallbacks.wrapping_add(1);
+                    None
+                }
+            };
+            self.advance_line(l, cut_leader);
+            #[cfg(debug_assertions)]
+            self.check_line(l);
         }
         let moved = self.changed;
         self.changed |= before;
@@ -65,20 +104,164 @@ impl Transport {
         moved
     }
 
-    fn advance_line(&mut self, l: u32) {
+    /// The leader a cycle's cut line sees (0079 §11 as amended in M44): `order[i]` is the first
+    /// line of a simple cycle of `Next` links (`L0 -> L1 -> ... -> L(n-1) -> L0`, advanced as
+    /// `L0, L(n-1), ..., L1`), so its target `L1` has not moved yet. Its front item is bounded by
+    /// `L1`'s rearmost item where that item *will be* after `L1`'s advance, as every other line
+    /// sees its target: the least constrained fixed point of one dry pass around the cycle
+    /// ([`Transport::dry_leader`], from "no leader", at most [`CUT_PASSES`] passes). Without that a
+    /// packed block holds one tick at the cut and laps spread to `SPACING + speed`. [`Cut::No`]
+    /// (the line sees its target as it stands) for any other line or an empty target;
+    /// [`Cut::Fallback`] (the same, counted) when the passes reach no fixed point. With every gap of
+    /// the loop `>= 0` the first pass lands on the fixed point and the second confirms it; a
+    /// squashed pair makes the iterates creep up by the loop's deficit per pass, so an overfull
+    /// loop can fall back (`cut_fallback_holds_and_stays_valid`). Only a fixed point may be used:
+    /// a lead below it lets a landing overrun the target's real tail.
+    fn cut_leader(&self, i: usize) -> Cut {
+        let l = self.order[i];
+        let line = &self.lines[l as usize];
+        let Output::Next(_) = line.out else {
+            return Cut::No;
+        };
+        let t = line.next_slot;
+        if self.lines[t as usize].adv_mark == self.epoch || self.lines[t as usize].items == 0 {
+            return Cut::No;
+        }
+        // The cycle `L1, ..., L(n-1), L0` by its `Next` links; the order holds it as
+        // `order[i..i + n]` = `L0, L(n-1), ..., L1` (checked).
+        let mut n = 1usize;
+        let mut x = t;
+        while x != l {
+            let rec = &self.lines[x as usize];
+            if !matches!(rec.out, Output::Next(_)) || n > self.order.len() - i {
+                return Cut::No;
+            }
+            x = rec.next_slot;
+            n += 1;
+        }
+        for j in i + 1..i + n {
+            if self.lines[self.order[j] as usize].next_slot != self.order[j - 1] {
+                return Cut::No;
+            }
+        }
+        let mut lead = NONE;
+        for _ in 0..CUT_PASSES {
+            let mut next = lead;
+            for j in i..i + n {
+                next = self.dry_leader(self.order[j], next);
+            }
+            if next == lead {
+                return Cut::Fixed(lead);
+            }
+            lead = next;
+        }
+        Cut::Fallback
+    }
+
+    /// Debug builds: the run store's invariants for slot `l` once it advanced (M44 cut review). A
+    /// landing across a cut may sit, inside `advance`, down to `-target.speed` behind the target's
+    /// unmoved rearmost item, but once the target's own walk ran, every later run's gap is above
+    /// `-SPACING` (positions strictly increase), the front item is at `>= 0`, the rearmost at
+    /// `tail_pos < len`, and no `count == 0` run is left.
+    #[cfg(debug_assertions)]
+    fn check_line(&self, l: u32) {
+        let line = &self.lines[l as usize];
+        let mut cur = line.head;
+        let mut last: Option<i64> = None;
+        let mut items = 0u32;
+        while cur != NIL {
+            let r = self.nodes[cur as usize].run;
+            assert!(
+                r.count > 0,
+                "a cut landing left unwalked on line {:?}",
+                line.id
+            );
+            let first = match last {
+                None => {
+                    assert!(r.gap >= 0, "front item below 0 on line {:?}", line.id);
+                    i64::from(r.gap)
+                }
+                Some(p) => {
+                    assert!(
+                        r.gap > -(SPACING as i32),
+                        "gap {} at or below -SPACING on line {:?}",
+                        r.gap,
+                        line.id
+                    );
+                    p + SP + i64::from(r.gap)
+                }
+            };
+            last = Some(first + SP * (i64::from(r.count) - 1));
+            items += u32::from(r.count);
+            cur = self.nodes[cur as usize].next;
+        }
+        assert_eq!(items, line.items, "item count of line {:?}", line.id);
+        if let Some(p) = last {
+            assert_eq!(p, i64::from(line.tail_pos), "tail of line {:?}", line.id);
+            assert!(
+                p < i64::from(line.len),
+                "tail past the end of line {:?}",
+                line.id
+            );
+        }
+    }
+
+    /// Without writing: the leader slot `k`'s feeder would see after `k` advanced with front
+    /// leader `leader` (`NONE`: none), by the walk of [`Transport::advance_line`]'s rule (no
+    /// line of a cycle holds landings across a cut before the cycle's first line advances):
+    /// `tail - d - len` for the rearmost item's move `d`, or `NONE` when the line is empty or
+    /// ends empty (every item crossed).
+    fn dry_leader(&self, k: u32, leader: i64) -> i64 {
+        let line = &self.lines[k as usize];
+        let Some(h) = self.first(k) else {
+            return NONE;
+        };
+        let mut visits = 1u64;
+        let speed = i64::from(line.speed);
+        let pos0 = i64::from(self.get(h).gap);
+        let bound = leader + SP;
+        let p = if pos0 < bound {
+            pos0
+        } else {
+            (pos0 - speed).max(bound)
+        };
+        // The front run's items all move as its first (the next is bounded by `p + SPACING`).
+        let mut d = pos0 - p;
+        let mut cur = self.next(h);
+        while let Some(c) = cur {
+            if d == speed && !line.squashed {
+                break;
+            }
+            d = (i64::from(self.get(c).gap) + d).clamp(0, speed);
+            cur = self.next(c);
+            visits += 1;
+        }
+        DRY_VISITS.with(|v| v.set(v.get() + visits));
+        let tail = i64::from(line.tail_pos) - d;
+        if tail < 0 {
+            NONE
+        } else {
+            tail - i64::from(line.len)
+        }
+    }
+
+    fn advance_line(&mut self, l: u32, cut_leader: Option<i64>) {
         let epoch = self.epoch;
         let fresh_runs = self.lines[l as usize].fresh_runs;
         // Merge landings across a cut in the middle of this line (`count == 0` runs, M44).
-        let mut mid_left = self.lines[l as usize].fresh_mid;
+        let mut mid_left = u32::from(self.lines[l as usize].fresh_mid);
+        // What this tick's cut landings may still move (`Line::fresh_cap`).
+        let cap = i64::from(self.lines[l as usize].fresh_cap);
         self.lines[l as usize].adv_mark = epoch;
         self.lines[l as usize].fresh_runs = 0;
         self.lines[l as usize].fresh_mid = 0;
+        self.lines[l as usize].fresh_cap = NO_CAP;
         let Some(mut h) = self.first(l) else {
             self.lines[l as usize].held = false;
             return;
         };
-        // The first of the back runs that crossed a cycle cut onto this line this tick (0079, M42
-        // review): they do not move again; the gap in front of them widens instead.
+        // The first of the back runs that crossed a cycle cut onto this line this tick (0079 §11):
+        // they move at most `cap` more (their budget left), never across this line's front.
         let mut fresh = NIL;
         if fresh_runs > 0 {
             fresh = self.lines[l as usize].tail;
@@ -86,16 +269,13 @@ impl Transport {
                 fresh = self.prev(fresh).expect("fresh runs are on the line");
             }
         }
-        if h == fresh {
-            self.lines[l as usize].held = false;
-            return;
-        }
         let line = self.lines[l as usize];
         let speed = i64::from(line.speed);
         let out = line.out;
         let target = line.next_slot;
         let mut leader = match out {
             Output::Sink | Output::Merge { .. } | Output::Fork { .. } => NONE,
+            Output::Next(_) if cut_leader.is_some() => cut_leader.expect("checked"),
             Output::Next(_) => {
                 let t = &self.lines[target as usize];
                 if t.items > 0 {
@@ -107,25 +287,35 @@ impl Transport {
             Output::DeadEnd => -SP,
         };
         let mut crossed = false;
-        // The front run is a merge landing across a cut (M44): it stays where it landed.
+        // The front run landed across a cut this tick (a merge's `count == 0` run, or the back
+        // block): it moves at most `cap` and stops at 0 (one hand-off per item per tick).
         let mut front_fresh = false;
         // The front items, one at a time while they cross.
         let d0 = loop {
             let r = self.get(h);
-            if r.count == 0 {
-                self.get_mut(h).count = 1;
-                mid_left -= 1;
-                front_fresh = true;
-                break 0;
-            }
             let pos0 = i64::from(r.gap);
             let bound = leader + SP;
+            if r.count == 0 || h == fresh {
+                if r.count == 0 {
+                    self.get_mut(h).count = 1;
+                    mid_left -= 1;
+                }
+                front_fresh = true;
+                let p = if pos0 < bound {
+                    pos0
+                } else {
+                    (pos0 - cap).max(bound).max(0)
+                };
+                self.get_mut(h).gap = p as i32;
+                break pos0 - p;
+            }
             let mut p = if pos0 < bound {
                 pos0
             } else {
                 (pos0 - speed).max(bound)
             };
             if p < 0 {
+                self.cut_moved = pos0 - p;
                 let taken = match out {
                     Output::Merge { at, .. } => self.merge_land(target, at, -p, r.item),
                     Output::Fork { .. } => self.fork_land(l, target, line.alt_slot, -p, r.item),
@@ -182,14 +372,6 @@ impl Transport {
                     self.pop_front(l);
                     h = self.first(l).expect("a run followed");
                     self.get_mut(h).gap = next_pos as i32;
-                    if h == fresh {
-                        // Only items that crossed the cut are left: they stay where they landed.
-                        let rec = &mut self.lines[l as usize];
-                        rec.held = false;
-                        rec.mark = epoch;
-                        self.changed = true;
-                        return;
-                    }
                 }
             }
         };
@@ -210,6 +392,9 @@ impl Transport {
         let mut last_d = d0;
         let mut cur = start;
         let mut all_rest_at_speed = false;
+        // The limit of the runs walked now: `speed`, or `cap` from the cut's back block on.
+        let mut lim = if h == fresh { cap } else { speed };
+        let mut in_block = h == fresh;
         // A squashed line (M43) has no early exit: a negative gap behind a run that moved the full
         // `speed` still holds its item. Behind such a run every gap `>= 0` is skipped untouched
         // (exactly what the early exit leaves), so the flag being stale changes nothing.
@@ -217,19 +402,23 @@ impl Transport {
         let mut saw_negative = false;
         while let Some(c) = cur {
             if c == fresh {
-                break;
+                in_block = true;
+                lim = cap;
             }
             let mut r = self.get(c);
             let fresh_mid = r.count == 0;
+            // A merge landing across a cut (M44) moves at most `cap`; the runs behind it are
+            // held by it as by any leader.
+            let run_lim = if fresh_mid { cap } else { lim };
             if fresh_mid {
-                // A merge landing across a cut (M44): it stays; its gap widens by what the item
-                // ahead moved, and the items behind it are held by it.
                 self.get_mut(c).count = 1;
                 r.count = 1;
                 mid_left -= 1;
-            } else if last_d == speed {
-                // With a cut's landing still ahead the walk goes on, skipping like a squashed line.
-                if !squashed && mid_left == 0 {
+            } else if last_d == run_lim {
+                // Every run behind moves `run_lim` with its gap unchanged, unless a cut landing
+                // with another limit is still ahead (then the walk goes on, skipping like a
+                // squashed line).
+                if !squashed && mid_left == 0 && (fresh == NIL || in_block) {
                     all_rest_at_speed = true;
                     break;
                 }
@@ -240,7 +429,7 @@ impl Transport {
             }
             let g = i64::from(r.gap) + last_d;
             // The squash rule: an item inside its bound (`g < 0`) does not move.
-            let d = if fresh_mid { 0 } else { g.min(speed).max(0) };
+            let d = g.min(run_lim).max(0);
             let ng = g - d;
             last_d = d;
             if ng < 0 {
@@ -270,20 +459,14 @@ impl Transport {
             }
         }
         debug_assert_eq!(mid_left, 0, "every merge landing across a cut was walked");
-        let moved = if all_rest_at_speed { speed } else { last_d };
-        if fresh != NIL {
-            // The runs ahead moved `moved`; the cut's items stay, so their gap widens by it.
-            self.get_mut(fresh).gap += moved as i32;
-        }
+        let moved = if all_rest_at_speed { lim } else { last_d };
         let rec = &mut self.lines[l as usize];
         if squashed && !saw_negative {
             // Every run but the packed ones the cursor skipped (gap 0) and the cut's landed ones
             // (gap >= 0) was walked: none is squashed any more.
             rec.squashed = false;
         }
-        if fresh == NIL {
-            rec.tail_pos -= moved as u32;
-        }
+        rec.tail_pos -= moved as u32;
         rec.held = d0 == 0 && !front_fresh;
         if crossed || d0 > 0 || moved > 0 {
             rec.mark = epoch;
@@ -315,8 +498,18 @@ impl Transport {
                 self.lines[l as usize].fresh_runs += 1;
             }
         } else {
-            debug_assert!(pos >= line.tail_pos + SPACING, "landing inside the spacing");
-            let gap = (pos - line.tail_pos - SPACING) as i32;
+            // A landing across a cut may sit inside the spacing of (even ahead of) the target's
+            // rearmost item as it stands before the target moves: the cut line saw the target as it
+            // will be after its move (`cut_leader`), and the target's walk resolves the gap.
+            debug_assert!(
+                fresh || pos >= line.tail_pos + SPACING,
+                "landing inside the spacing"
+            );
+            let gap = i64::from(pos) - i64::from(line.tail_pos) - SP;
+            if gap < 0 {
+                self.lines[l as usize].squashed = true;
+            }
+            let gap = gap as i32;
             let b = line.tail;
             let joinable = !fresh || line.fresh_runs > 0;
             let back = self.get_mut(b);
@@ -337,11 +530,27 @@ impl Transport {
             }
         }
         let epoch = self.epoch;
+        if fresh {
+            self.note_cut_landing(l);
+        }
         let rec = &mut self.lines[l as usize];
         rec.tail_pos = pos;
         rec.items += 1;
         rec.mark = epoch;
         self.changed = true;
+    }
+
+    /// Records a landing across a cut on slot `l` (0079 §11 as amended in M44): the item may move
+    /// `speed - moved` more when `l` advances, `moved` (`cut_moved`) being what it already moved on
+    /// its feeder. One budget per line per tick: a second landing with another budget sets it to 0.
+    fn note_cut_landing(&mut self, l: u32) {
+        let rec = &mut self.lines[l as usize];
+        let cap = (i64::from(rec.speed) - self.cut_moved).max(0) as u16;
+        rec.fresh_cap = match rec.fresh_cap {
+            NO_CAP => cap,
+            c if c == cap => cap,
+            _ => 0,
+        };
     }
 
     /// A `Merge` transfer onto slot `t` with overshoot `o` (module doc): `true` if the item landed.
@@ -399,6 +608,9 @@ impl Transport {
     /// its own run marked `count == 0` (`fresh_mid`), restored by the line's walk. `true` if it
     /// landed.
     fn land_fresh_at(&mut self, l: u32, pos: i64, item: u16) -> bool {
+        if self.lines[l as usize].fresh_mid == u16::MAX {
+            return false;
+        }
         let Some(slot) = self.locate(l, pos) else {
             return false;
         };
@@ -479,6 +691,7 @@ impl Transport {
             );
             self.lines[l as usize].fresh_mid += 1;
         }
+        self.note_cut_landing(l);
         let rec = &mut self.lines[l as usize];
         rec.items += 1;
         rec.mark = epoch;

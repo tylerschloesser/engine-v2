@@ -927,3 +927,222 @@ fn slow_blocked_sideloads_cost() {
         times[199].as_secs_f64() * 1e6
     );
 }
+
+/// 0079 §11 as amended in M44 (the cut budget): a cycle of three lines filled end to end with
+/// items exactly `SPACING` apart (24 items on 3 x 512) rotates rigidly. Every item moves exactly
+/// `speed` along the loop every tick and every gap, the cut's included, stays `SPACING`, at
+/// speeds 24 and 72, for 100 ticks. Before the amendment the cut line's front item was bounded by
+/// its target's rearmost item before that line moved, so a packed loop held at the cut.
+#[test]
+fn cut_packed_cycle_moves_every_item_speed() {
+    for speed in [24u16, 72] {
+        let mut t = Transport::new(8, 64);
+        let lines: Vec<LineId> = (0..3).map(|_| t.create(512, speed).unwrap()).collect();
+        for k in 0..3 {
+            t.set_out(lines[k], Output::Next(lines[(k + 1) % 3]))
+                .unwrap();
+        }
+        let mut kind = 1u16;
+        for &l in &lines {
+            for pos in (0..512).step_by(64) {
+                t.insert_at(l, pos, Item(kind)).unwrap();
+                kind += 1;
+            }
+        }
+        let total = 3 * 512;
+        // Loop coordinate: the position on line k plus the lengths of the lines it feeds into
+        // before the loop closes (line k feeds k + 1).
+        let coords = |t: &Transport| -> std::collections::BTreeMap<u16, u32> {
+            let mut m = std::collections::BTreeMap::new();
+            for (k, &l) in lines.iter().enumerate() {
+                for (item, p) in items(t, l) {
+                    m.insert(item, p + 512 * (2 - k as u32));
+                }
+            }
+            m
+        };
+        let mut prev = coords(&t);
+        for tick in 0..100 {
+            t.advance();
+            let now = coords(&t);
+            assert_eq!(now.len(), 24, "speed {speed} tick {tick}: nothing lost");
+            for (item, &c) in &now {
+                let want = (prev[item] + total - u32::from(speed)) % total;
+                assert_eq!(
+                    c, want,
+                    "speed {speed} tick {tick}: item {item} moved {speed}"
+                );
+            }
+            let mut sorted: Vec<u32> = now.values().copied().collect();
+            sorted.sort_unstable();
+            for w in sorted.windows(2) {
+                assert_eq!(w[1] - w[0], 64, "speed {speed} tick {tick}: spacing");
+            }
+            prev = now;
+        }
+    }
+}
+
+/// The cut budget for a merge landing across a cut (§16): it may still move `speed - moved` on
+/// the target, `moved` being what it moved on its feeder. A feeder at speed 24 side-loads at 700
+/// onto a line at speed 72 that has not moved yet: the landing then moves 48 behind the item
+/// ahead (500 -> 428), and the item behind it moves its full 72.
+#[test]
+fn cut_merge_landing_moves_its_budget() {
+    let l = LineId;
+    let mut t = Transport::new(8, 64);
+    t.create(512, 72).unwrap();
+    t.create(512, 24).unwrap();
+    t.create(1024, 72).unwrap();
+    t.set_out(l(1), Output::Next(l(3))).unwrap();
+    t.set_out(
+        l(2),
+        Output::Merge {
+            line: l(3),
+            at: 724,
+        },
+    )
+    .unwrap();
+    t.set_out(l(3), Output::Fork { a: l(1), b: l(2) }).unwrap();
+    assert_eq!(order(&mut t), vec![1, 2, 3]);
+    t.insert_at(l(2), 0, Item(2)).unwrap();
+    put(&mut t, l(3), 5, &[500, 900]);
+    t.advance();
+    assert_eq!(items(&t, l(3)), vec![(5, 428), (2, 652), (5, 828)]);
+}
+
+/// M44 cut review (finding 2): the fallback. A packed loop of 3 x 512 (24 items) whose second line
+/// was rescaled 512 -> 505 holds seven pairs squashed by 1: it is overfull by 7, and each dry pass
+/// around it moves the front 7 less than the one before (`speed`, `speed - 7`, ...), so no fixed
+/// point is reached in four passes and the cut line sees its target as it stands. The same at 3 x
+/// 2048, speed 300, rescaled to 1976 (overfull by 72: 300, 228, 156, 84, ...), where a lead taken
+/// from the fourth pass would let the landing overrun the target's real tail by more than
+/// `SPACING`. The loop holds:
+/// line 1's front item stays at 0 every tick. At the end of every tick every stored gap is above
+/// `-SPACING`, and the store encodes, decodes and then advances byte-identically for 20 ticks. At
+/// speeds 24, 72, 96 and 300.
+#[test]
+fn cut_fallback_holds_and_stays_valid() {
+    for (len, speed, squeezed) in [
+        (512, 24u16, 505),
+        (512, 72, 505),
+        (512, 96, 505),
+        (2048, 300, 1976),
+    ] {
+        let mut t = Transport::new(8, 128);
+        let lines: Vec<LineId> = (0..3).map(|_| t.create(len, speed).unwrap()).collect();
+        for k in 0..3 {
+            t.set_out(lines[k], Output::Next(lines[(k + 1) % 3]))
+                .unwrap();
+        }
+        let mut kind = 1u16;
+        for &l in &lines {
+            for pos in (0..len).step_by(64) {
+                t.insert_at(l, pos, Item(kind)).unwrap();
+                kind += 1;
+            }
+        }
+        t.rescale(lines[1], squeezed).unwrap();
+        assert!(positions(&t, lines[1])[1] < 64, "squashed");
+        for tick in 0..30 {
+            let before = t.cut_fallbacks();
+            t.advance();
+            assert_eq!(
+                t.cut_fallbacks(),
+                before + 1,
+                "speed {speed} tick {tick}: no fixed point, fallback"
+            );
+            assert_eq!(
+                t.front(lines[0]).unwrap(),
+                Some((Item(1), 0)),
+                "speed {speed} tick {tick}: the cut's front holds"
+            );
+            for &l in &lines {
+                t.runs_in(l, &mut |_, _, gap| {
+                    assert!(gap > -64, "speed {speed} tick {tick}: gap {gap}");
+                })
+                .unwrap();
+            }
+        }
+        let mut back = decode(&encode(&t)).expect("a fallback world restores");
+        for tick in 0..20 {
+            t.advance();
+            back.advance();
+            assert_eq!(
+                encode(&back),
+                encode(&t),
+                "speed {speed}: restored tick {tick}"
+            );
+        }
+    }
+}
+
+/// M44 cut review (finding 6): two landings across a cut onto one line in one tick with different
+/// budgets. Line 1 hands its item (bounded by line 3's unmoved tail at 940: it moves 50, budget
+/// 22) to the back of line 3, and line 2 side-loads at 700 (it moves 24, budget 48): the budgets
+/// disagree, so both landings move 0 more. Every item still moves at most its speed and stays
+/// `SPACING` clear.
+#[test]
+fn cut_caps_disagree_fall_to_zero() {
+    let l = LineId;
+    let mut t = Transport::new(8, 64);
+    t.create(512, 72).unwrap();
+    t.create(512, 24).unwrap();
+    t.create(1024, 72).unwrap();
+    t.set_out(l(1), Output::Next(l(3))).unwrap();
+    t.set_out(
+        l(2),
+        Output::Merge {
+            line: l(3),
+            at: 724,
+        },
+    )
+    .unwrap();
+    t.set_out(l(3), Output::Fork { a: l(1), b: l(2) }).unwrap();
+    assert_eq!(order(&mut t), vec![1, 2, 3]);
+    t.insert_at(l(1), 30, Item(1)).unwrap();
+    t.insert_at(l(2), 0, Item(2)).unwrap();
+    put(&mut t, l(3), 5, &[300, 940]);
+    t.advance();
+    // 300 -> 228; the side-load stays at 700; 940 -> 868; the hand-off stays at 1024 - 20.
+    assert_eq!(
+        items(&t, l(3)),
+        vec![(5, 228), (2, 700), (5, 868), (1, 1004)]
+    );
+}
+
+/// M44 cut review (finding 3), a measurement for M45/M56 and not a gate: the dry passes' node
+/// visits per tick on a stalled 4-line loop of 16,000 runs (4 x 1,000 tiles packed with
+/// alternating kinds; one line rescaled by -1 makes it overfull, so every pass walks every run and
+/// the cut falls back after four). Prints the count (`dry_visits`, a per-thread counter).
+#[test]
+fn slow_cut_dry_pass_visits() {
+    let mut t = Transport::new(8, 20_000);
+    let len = 1_000 * 256;
+    let lines: Vec<LineId> = (0..4).map(|_| t.create(len, 24).unwrap()).collect();
+    for k in 0..4 {
+        t.set_out(lines[k], Output::Next(lines[(k + 1) % 4]))
+            .unwrap();
+    }
+    for &l in &lines {
+        for k in 0..len / 64 {
+            t.insert_at(l, 64 * k, Item(1 + (k % 2) as u16)).unwrap();
+        }
+    }
+    t.rescale(lines[1], len - 1).unwrap();
+    let mut runs = 0u32;
+    for &l in &lines {
+        t.runs_in(l, &mut |_, _, _| runs += 1).unwrap();
+    }
+    let before = (engine::transport::dry_visits(), t.cut_fallbacks());
+    for _ in 0..10 {
+        t.advance();
+    }
+    let visits = (engine::transport::dry_visits() - before.0) / 10;
+    assert_eq!(
+        t.cut_fallbacks() - before.1,
+        10,
+        "stalled: falls back every tick"
+    );
+    println!("cut dry passes: {visits} node visits per tick on a stalled loop of {runs} runs");
+}

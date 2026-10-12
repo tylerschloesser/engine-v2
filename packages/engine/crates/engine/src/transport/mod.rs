@@ -42,6 +42,7 @@ mod surgery;
 use crate::game::Unknown;
 use crate::world::{ChunkCoord, ChunkDims, TilePos, WorldPos};
 
+pub use advance::dry_visits;
 pub use geometry::{Geometry, MAX_LINE_TILES, MAX_SEGMENTS, Segment, walk_evals};
 use geometry::{SegRec, TileEntry};
 use line::{Line, NIL, Node};
@@ -317,6 +318,12 @@ pub struct Transport {
     graph_dirty: bool,
     /// How many times the order was recomputed (tests and tools; not state).
     order_recomputes: u32,
+    /// How many times a cycle's cut line fell back to its target as it stands (no fixed point in
+    /// the dry passes, `advance.rs`); tests and tools, not state.
+    cut_fallbacks: u32,
+    /// What the item crossing now already moved on its feeder this tick (`advance` scratch, read
+    /// by a landing across a cut; not state).
+    cut_moved: i64,
     scratch: order::Scratch,
     /// The segment pool (`geometry.rs`): every line's segments, contiguous per line, compacted in
     /// place when the tail is reached. `seg_cap` records at most (`max_lines x
@@ -359,6 +366,8 @@ impl Transport {
             order: Vec::new(),
             graph_dirty: false,
             order_recomputes: 0,
+            cut_moved: 0,
+            cut_fallbacks: 0,
             scratch: order::Scratch::default(),
             segs: Vec::new(),
             seg_cap: 0,
@@ -463,6 +472,12 @@ impl Transport {
             cur = n.next;
         }
         Ok(())
+    }
+
+    /// How many times a cycle's cut line found no fixed point and saw its target as it stands
+    /// (`advance.rs` `cut_leader`; tests and tools, not state).
+    pub fn cut_fallbacks(&self) -> u32 {
+        self.cut_fallbacks
     }
 
     /// How many times the update order was recomputed so far (a graph change recomputes it once,

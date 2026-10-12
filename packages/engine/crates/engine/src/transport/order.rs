@@ -4,8 +4,8 @@
 //! from `max_lines`), which emits them in exactly that order; roots are tried in ascending
 //! `LineId`, so the order is a function of the graph alone. A cycle is cut at its lowest `LineId`:
 //! that line advances first (its own output is the cut link: what it hands off lands on a line
-//! that has not moved yet, and does not move again that tick, 0079), then the line feeding it, and
-//! so on back around the cycle.
+//! that has not moved yet and moves at most what is left of its tick's travel, 0079 §11 as
+//! amended in M44; `advance.rs`), then the line feeding it, and so on back around the cycle.
 //!
 //! Recomputed only when `create`/`destroy`/`set_out` set `graph_dirty` (never per tick). Links
 //! (M44): a `Next` or a `Merge` is one, a `Fork` two (`a` then `b`), so a component may be more
