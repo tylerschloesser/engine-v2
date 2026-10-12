@@ -664,14 +664,9 @@ pub fn migrate<G: Game>(
 where
     G::Global: Default,
 {
-    migrate_with_caps(
-        old,
-        terrain,
-        tick,
-        rng,
-        crate::transport::DEFAULT_MAX_LINES,
-        crate::transport::DEFAULT_MAX_ITEMS,
-    )
+    // 0079 §5: belts are opt-in; without the world's own caps nothing is reserved (the host's
+    // upgrade path calls `migrate_with_caps` with the world's values).
+    migrate_with_caps(old, terrain, tick, rng, 0, 0)
 }
 
 /// [`migrate`] with the world's own transport caps (0079 §5): the host's upgrade path reserves the

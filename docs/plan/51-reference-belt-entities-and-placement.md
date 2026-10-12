@@ -5,6 +5,8 @@ Status: not started · After: 48 · Tyler-dependent: T (the **(assumed)** lines 
 Later-phase brief: goal, exit criteria and open questions. Filled in at the start of its phase.
 
 ## Goal
+(Note 2026-10-11, 0079 §5: the reference game must set `WorldConfig.params.maxLines`/`maxItems` (recommended 32,768 / 262,144) in every place it builds a world config, since the engine default is 0; the netcode soak's 8 MiB sim arena then needs either the soak's own smaller caps or a larger arena, decided here with the memory measured.)
+
 The reference game has belt, spawner and despawner entities a player can place, rotate and pick up from construction mode, predicted as ghosts, with generated belt and item art; no lines yet (M52 maps them). Every rule line this milestone implements cites `games/reference/README.md` "Belts".
 
 ## Read first

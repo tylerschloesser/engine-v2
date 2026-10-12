@@ -23,10 +23,11 @@ export interface WorldConfig<Params = unknown> {
     maxEntities?: number
     maxModifiedTiles?: number
     maxActionGrowth?: number
-    /** 0076 §8 (M42): the transport line cap, default 32,768 (`transport::DEFAULT_MAX_LINES`).
-     * The transport arena is reserved from it and `maxItems` when the world is created. */
+    /** The transport line cap (0076 §8, 0079 §5). Default 0: no belt arena; a belt game sets
+     * both caps (the recommended values are `transport::DEFAULT_MAX_LINES`, 32,768, and
+     * `DEFAULT_MAX_ITEMS`, 262,144). The arena is reserved from them when the world is created. */
     maxLines?: number
-    /** 0076 §8 (M42): the transport item cap, default 262,144 (`transport::DEFAULT_MAX_ITEMS`). */
+    /** The transport item cap (0076 §8, 0079 §5). Default 0; see `maxLines`. */
     maxItems?: number
   }
   joinKey?: string

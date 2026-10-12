@@ -185,13 +185,16 @@ fn default_max_modified_tiles() -> u32 {
 fn default_max_action_growth() -> u32 {
     4_096
 }
-/// 0076 §8 (M42): `WorldConfig.params.maxLines`'s default.
+/// `WorldConfig.params.maxLines`'s default: 0, no transport arena (0079 §5: belts are opt-in; a
+/// game that never sets the caps pays nothing, and the netcode soak's 8 MiB sim arena could not
+/// hold the 7.5 MiB that 0076 §8's figures reserve). A belt game sets both caps; 0076 §8's
+/// figures (`transport::DEFAULT_MAX_LINES`/`DEFAULT_MAX_ITEMS`) are the recommended values.
 fn default_max_lines() -> u32 {
-    crate::transport::DEFAULT_MAX_LINES
+    0
 }
-/// 0076 §8 (M42): `WorldConfig.params.maxItems`'s default.
+/// `WorldConfig.params.maxItems`'s default: 0 (see `default_max_lines`).
 fn default_max_items() -> u32 {
-    crate::transport::DEFAULT_MAX_ITEMS
+    0
 }
 /// 0007 §8's host cache budget default (1,024 chunks = 4 MiB at the default 32x32 chunk size);
 /// mirrors `Sim::genesis`'s own private `DEFAULT_CACHE_CHUNKS` (`crate::sim`), which is what
@@ -4009,9 +4012,10 @@ mod default_tests {
         assert_eq!(cfg.max_entities, 262_144);
         assert_eq!(cfg.max_modified_tiles, 1_048_576);
         assert_eq!(cfg.max_action_growth, 4096, "4 KiB");
-        // 0076 §8 (M42): the transport caps.
-        assert_eq!(cfg.max_lines, 32_768);
-        assert_eq!(cfg.max_items, 262_144);
+        // 0079 §5 (M42): the transport caps default to 0 (belts are opt-in); 0076 §8's figures are
+        // the recommended values a belt game sets.
+        assert_eq!(cfg.max_lines, 0);
+        assert_eq!(cfg.max_items, 0);
         assert_eq!(cfg.cache_chunks, 1024);
         // 0010 (spec client R3): 256 tiles per axis, about 144 subscribed chunks per client.
         assert_eq!(cfg.view_max_tiles_per_axis, 256);

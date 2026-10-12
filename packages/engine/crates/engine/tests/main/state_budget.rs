@@ -460,10 +460,10 @@ fn init_rejects_budget_over_arena() {
     assert_eq!(err.err(), Some(Status::BudgetExceedsArena));
 }
 
-/// 0079 §5 (M42): `Host::init`'s memory-split check counts the transport arena. A ceiling that
-/// held the world's split exactly before M42 is now refused at the default caps
-/// (`BudgetExceedsArena`), and accepted again when the world sets `maxLines`/`maxItems` to 0 (a game
-/// without belts: nothing is reserved).
+/// 0079 §5 (M42): `Host::init`'s memory-split check counts the transport arena, and the caps
+/// default to 0 (belts are opt-in). A ceiling that holds the world's split exactly is accepted
+/// with the caps unset and with explicit zeros (nothing reserved), and refused
+/// (`BudgetExceedsArena`) once the world sets the recommended belt caps.
 #[test]
 fn init_counts_the_transport_arena() {
     use engine::abi::{Instance, RegionLayout, Role, Status};
@@ -476,21 +476,26 @@ fn init_counts_the_transport_arena() {
     };
     assert_eq!(
         at(pre_m42, ""),
-        Some(Status::BudgetExceedsArena),
-        "the default transport arena does not fit a pre-M42 split"
+        None,
+        "unset caps reserve nothing (default 0)"
     );
     assert_eq!(
         at(pre_m42, r#","maxLines":0,"maxItems":0"#),
         None,
         "zero caps reserve nothing"
     );
+    assert_eq!(
+        at(pre_m42, r#","maxLines":32768,"maxItems":262144"#),
+        Some(Status::BudgetExceedsArena),
+        "the recommended belt caps' arena does not fit a pre-M42 split"
+    );
 }
 
 /// spec runtime-and-packaging R16b / 0007 §8: the default memory split of a `SimConfig` that sets
 /// none of `maxEntities`, `maxModifiedTiles` or `cacheChunks`: 1,024 chunks x 4 KiB, plus
 /// 262,144 entities x `size_of::<Entity>()`, plus 1,048,576 modified tiles x 12 B, plus 8 MiB of
-/// chunk index and 8 MiB of slack; for the ADR's nominal 128 B entity that is 64 MiB. Since M42
-/// the transport arena at the default caps is added on top (0079 §5).
+/// chunk index and 8 MiB of slack; for the ADR's nominal 128 B entity that is 64 MiB. A belt
+/// game's caps add its arena on top (0079 §5; the caps default to 0).
 /// `worldBudgetBytes` is an optional ceiling (unset means unchecked), so the split is pinned by
 /// setting the ceiling to exactly the sum (accepted) and one byte less (rejected): a changed default
 /// or a changed term moves one of the two. `BEntity` is deliberately larger than 128 B, so the sum
@@ -507,9 +512,9 @@ fn default_memory_split_is_64_mib() {
     );
 
     let entity = core::mem::size_of::<BEntity>() as u64;
-    // M42 (0079 §5): plus the transport arena at 0076 §8's default caps, 7,503,888 B
-    // (`transport_reserved_bytes_at_the_defaults` derives the literal).
-    let split = 1024 * 4096 + 262_144 * entity + 1_048_576 * 12 + 8 * MIB + 8 * MIB + 7_503_888;
+    // M42 (0079 §5): the belt caps default to 0, so a config that sets none adds no transport
+    // arena (`init_counts_the_transport_arena` pins what the recommended caps add).
+    let split = 1024 * 4096 + 262_144 * entity + 1_048_576 * 12 + 8 * MIB + 8 * MIB;
     let at = |budget: u64| {
         let cfg = format!(r#"{{"seed":"0x1","params":null,"worldBudgetBytes":{budget}}}"#);
         engine::host::Host::<BGame>::init(Role::Sim, &cfg, &mut RegionLayout::new()).err()
