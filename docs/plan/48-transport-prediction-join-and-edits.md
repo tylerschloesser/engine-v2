@@ -1,6 +1,6 @@
 # M48: Prediction, late join and edits under replication
 
-Status: not started · After: 47 · Tyler-dependent: no (a changed default view would be his: asked only if the join measurement needs it)
+Status: not started · After: 47b · Tyler-dependent: no (a changed default view would be his: asked only if the join measurement needs it)
 
 Filled in to the full template on 2026-10-12 from [0078](../decisions/0078-transport-forecast-replication.md) §6-§7 and Consequences, [0076](../decisions/0076-transport-lines-engine-game-split.md) §6, [0079](../decisions/0079-transport-core-decisions.md) §4, and M45's Deviations (3,810 lines, 1.39 MB of transport state at the stated scale).
 
