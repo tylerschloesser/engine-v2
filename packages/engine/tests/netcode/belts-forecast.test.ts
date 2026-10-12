@@ -19,6 +19,12 @@ import { type BeltsRegime, beltsBenchWorld, beltsFixture } from './support.js'
 /** The arbiter's small worlds' caps (1/64: about 60 lines and 4,000 items). */
 const SMALL = { maxLines: 4_096, maxItems: 16_384 }
 
+// Per-test timeouts: vitest's default is 5 s. These scenarios run whole 1/64 or full-scale worlds
+// through real frames (2-5 s on Tyler's M3 Max) and CI's runner is 5-10x slower (run 38251055049:
+// netcode 36 s against 6.4 s locally; the arbiter and the gate timed out at 5 s). A timeout is a
+// ceiling on a hang, not a budget: the suite's 10 s budget (scripts/suites.mjs) still gates locally.
+const FAST_TIMEOUT_MS = 60_000
+
 function host(h: NetHarness): LineItemsDump {
   const inst = serverInternals(h.server).rawInstance
   if (!inst) throw new Error('no live sim instance')
@@ -306,87 +312,95 @@ const WORLDS: {
   },
 ]
 
-test('belts/forecast_client_matches_host', async () => {
-  const fixture = await beltsFixture()
-  for (const [i, w] of WORLDS.entries()) {
-    const h = await createNetHarness({
-      fixture,
-      seed: 4701 + i,
-      clients: 1,
-      world: beltsBenchWorld(w.regime, 64, SMALL),
-    })
-    try {
-      const client = h.clients[0]
-      if (!client) throw new Error('one client')
-      client.setView(w.view)
-      const full = w.view.halfW === 128
-      const seen = await arbitrate(h, 0, w.label, 300, full)
-      const fc = forecastCounters(client)
-      if (process.env.MEASURE) console.log(`MEASURE ${w.label} ${JSON.stringify({ seen, fc })}`)
-      const got: Pins = {
-        lagging: seen.lagging,
-        partial: full ? seen.partial : null,
-        caughtUp: seen.caughtUp,
-        compared: seen.compared,
-        items: seen.items,
-        maxHeld: seen.maxHeld,
-        held: seen.held,
-        lines: seen.lines,
-        arrivals: fc.arrivalsApplied,
-        states: fc.stateMessagesApplied,
-        lists: fc.forecastsApplied,
+test(
+  'belts/forecast_client_matches_host',
+  async () => {
+    const fixture = await beltsFixture()
+    for (const [i, w] of WORLDS.entries()) {
+      const h = await createNetHarness({
+        fixture,
+        seed: 4701 + i,
+        clients: 1,
+        world: beltsBenchWorld(w.regime, 64, SMALL),
+      })
+      try {
+        const client = h.clients[0]
+        if (!client) throw new Error('one client')
+        client.setView(w.view)
+        const full = w.view.halfW === 128
+        const seen = await arbitrate(h, 0, w.label, 300, full)
+        const fc = forecastCounters(client)
+        if (process.env.MEASURE) console.log(`MEASURE ${w.label} ${JSON.stringify({ seen, fc })}`)
+        const got: Pins = {
+          lagging: seen.lagging,
+          partial: full ? seen.partial : null,
+          caughtUp: seen.caughtUp,
+          compared: seen.compared,
+          items: seen.items,
+          maxHeld: seen.maxHeld,
+          held: seen.held,
+          lines: seen.lines,
+          arrivals: fc.arrivalsApplied,
+          states: fc.stateMessagesApplied,
+          lists: fc.forecastsApplied,
+        }
+        expect(got, `${w.label}: the measured counts`).toEqual(w.pins)
+        if (full) expect(seen.whole, `${w.label}: every line held`).toBe(true)
+        expect(seen.ticks, `${w.label}: every tick after the join compared`).toBe(
+          300 - w.pins.lagging,
+        )
+        expect(seen.unknown, `${w.label}: unknown lists`).toBe(0)
+        expect(fc.recordsUnheld, `${w.label}: records for unheld lines`).toBe(0)
+        h.assertConverged()
+      } finally {
+        await h.dispose()
       }
-      expect(got, `${w.label}: the measured counts`).toEqual(w.pins)
-      if (full) expect(seen.whole, `${w.label}: every line held`).toBe(true)
-      expect(seen.ticks, `${w.label}: every tick after the join compared`).toBe(
-        300 - w.pins.lagging,
-      )
-      expect(seen.unknown, `${w.label}: unknown lists`).toBe(0)
-      expect(fc.recordsUnheld, `${w.label}: records for unheld lines`).toBe(0)
-      h.assertConverged()
-    } finally {
-      await h.dispose()
     }
-  }
-})
+  },
+  FAST_TIMEOUT_MS,
+)
 
 /** `forecast_corrected_on_jam`: run lists for held lines by the end of its 10-tick join (pinned). */
 const PRE_JOIN_LISTS = 0
 
-test('belts/forecast_corrected_on_jam', async () => {
-  // Every sink of the 1/64 saturated view closes and reopens (100 %, period 40, staggered by M41's
-  // seeded phases): a closing halts a packed lane chain, a reopening releases it. Each is a `State`
-  // for the lines it moves, in the frame of the tick it happens (the arbiter compares every tick, so
-  // a correction a frame late would show as items past their stop), and never a `RunList`: once
-  // the join has put every line with its list, no list arrives again.
-  const h = await createNetHarness({
-    fixture: await beltsFixture(),
-    seed: 4711,
-    clients: 1,
-    world: beltsBenchWorld({ SaturatedView: { jam_pct: 100, period: 40 } }, 64, SMALL),
-  })
-  try {
-    const client = h.clients[0]
-    if (!client) throw new Error('one client')
-    client.setView({ x: 128, y: 1, halfW: 128, halfH: 72 })
-    await arbitrate(h, 0, 'join', 10)
-    const before = forecastCounters(client)
-    const seen = await arbitrate(h, 0, 'saturated-view (100, 40)', 120, true)
-    const after = forecastCounters(client)
-    const states = after.stateMessagesApplied - before.stateMessagesApplied
-    const lists = after.corrections - after.stateMessagesApplied
-    if (process.env.MEASURE) console.log(`MEASURE jam ${JSON.stringify({ seen, before, after })}`)
-    expect(seen.ticks, 'every tick compared').toBe(120)
-    expect(states, 'the jams forming and clearing were corrected by states').toBe(324)
-    expect(seen.partial, 'every line held from the first compared tick').toBe(0)
-    expect(
-      before.corrections - before.stateMessagesApplied,
-      'run lists for held lines during the join',
-    ).toBe(PRE_JOIN_LISTS)
-    expect(lists, 'run lists for lines held before their frame').toBe(PRE_JOIN_LISTS)
-    expect(after.forecastsApplied, 'no run list after the join').toBe(before.forecastsApplied)
-    expect(after.arrivalsApplied, 'no arrival').toBe(before.arrivalsApplied)
-  } finally {
-    await h.dispose()
-  }
-})
+test(
+  'belts/forecast_corrected_on_jam',
+  async () => {
+    // Every sink of the 1/64 saturated view closes and reopens (100 %, period 40, staggered by M41's
+    // seeded phases): a closing halts a packed lane chain, a reopening releases it. Each is a `State`
+    // for the lines it moves, in the frame of the tick it happens (the arbiter compares every tick, so
+    // a correction a frame late would show as items past their stop), and never a `RunList`: once
+    // the join has put every line with its list, no list arrives again.
+    const h = await createNetHarness({
+      fixture: await beltsFixture(),
+      seed: 4711,
+      clients: 1,
+      world: beltsBenchWorld({ SaturatedView: { jam_pct: 100, period: 40 } }, 64, SMALL),
+    })
+    try {
+      const client = h.clients[0]
+      if (!client) throw new Error('one client')
+      client.setView({ x: 128, y: 1, halfW: 128, halfH: 72 })
+      await arbitrate(h, 0, 'join', 10)
+      const before = forecastCounters(client)
+      const seen = await arbitrate(h, 0, 'saturated-view (100, 40)', 120, true)
+      const after = forecastCounters(client)
+      const states = after.stateMessagesApplied - before.stateMessagesApplied
+      const lists = after.corrections - after.stateMessagesApplied
+      if (process.env.MEASURE) console.log(`MEASURE jam ${JSON.stringify({ seen, before, after })}`)
+      expect(seen.ticks, 'every tick compared').toBe(120)
+      expect(states, 'the jams forming and clearing were corrected by states').toBe(324)
+      expect(seen.partial, 'every line held from the first compared tick').toBe(0)
+      expect(
+        before.corrections - before.stateMessagesApplied,
+        'run lists for held lines during the join',
+      ).toBe(PRE_JOIN_LISTS)
+      expect(lists, 'run lists for lines held before their frame').toBe(PRE_JOIN_LISTS)
+      expect(after.forecastsApplied, 'no run list after the join').toBe(before.forecastsApplied)
+      expect(after.arrivalsApplied, 'no arrival').toBe(before.arrivalsApplied)
+    } finally {
+      await h.dispose()
+    }
+  },
+  FAST_TIMEOUT_MS,
+)
