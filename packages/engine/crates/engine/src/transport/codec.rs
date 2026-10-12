@@ -48,6 +48,107 @@ const JAM_END: u32 = u32::MAX;
 /// The `out` tag bit announcing segments after the runs (module doc).
 const SEGMENTS: u8 = 0x80;
 
+/// The `out` field (0079 §15): `tag u8` with `flags` ORed in (bit 7 is `SEGMENTS` in the
+/// canonical record, never set in a `LineStructs` put), then the variant's fields; a `Fork`'s
+/// toggle is not written here (the canonical record appends it, a structure put has none). The one
+/// encoding of an output: the canonical record (this module) and `wire::lines` both call it.
+pub(crate) fn write_out(sink: &mut (impl ByteSink + ?Sized), out: Output, flags: u8) {
+    match out {
+        Output::DeadEnd => sink.put_u8(flags),
+        Output::Next(t) => {
+            sink.put_u8(1 | flags);
+            sink.put_u32(t.0);
+        }
+        Output::Sink => sink.put_u8(2 | flags),
+        Output::Merge { line, at } => {
+            sink.put_u8(3 | flags);
+            sink.put_u32(line.0);
+            sink.put_u32(at);
+        }
+        Output::Fork { a, b } => {
+            sink.put_u8(4 | flags);
+            sink.put_u32(a.0);
+            sink.put_u32(b.0);
+        }
+    }
+}
+
+/// Reads [`write_out`]'s bytes: the output and the tag's flag bits (`SEGMENTS`); an unknown tag
+/// is `Malformed`.
+pub(crate) fn read_out(reader: &mut ByteReader) -> Result<(Output, u8), CodecError> {
+    let tag = reader.u8()?;
+    let out = match tag & !SEGMENTS {
+        0 => Output::DeadEnd,
+        1 => Output::Next(LineId(reader.u32()?)),
+        2 => Output::Sink,
+        3 => Output::Merge {
+            line: LineId(reader.u32()?),
+            at: reader.u32()?,
+        },
+        4 => Output::Fork {
+            a: LineId(reader.u32()?),
+            b: LineId(reader.u32()?),
+        },
+        _ => return Err(CodecError::Malformed),
+    };
+    Ok((out, tag & SEGMENTS))
+}
+
+/// One segment (module doc's layout), shared with `wire::lines`.
+pub(crate) fn write_segment(sink: &mut (impl ByteSink + ?Sized), seg: &Segment) {
+    sink.put_u32(seg.len);
+    match seg.geometry {
+        Geometry::Straight { from, to } => {
+            sink.put_u8(0);
+            sink.put_i32(from.x);
+            sink.put_i32(from.y);
+            sink.put_i32(to.x);
+            sink.put_i32(to.y);
+        }
+        Geometry::Arc {
+            centre,
+            radius_q8,
+            start_turn_q8,
+            sweep_q8,
+        } => {
+            sink.put_u8(1);
+            sink.put_i32(centre.x);
+            sink.put_i32(centre.y);
+            sink.put_u32(radius_q8);
+            sink.put_u16(start_turn_q8);
+            sink.put_u16(sweep_q8 as u16);
+        }
+    }
+}
+
+/// Reads [`write_segment`]'s bytes (shape only: `check_segments` is the caller's).
+pub(crate) fn read_segment(reader: &mut ByteReader) -> Result<Segment, CodecError> {
+    let len = reader.u32()?;
+    let geometry = match reader.u8()? {
+        0 => Geometry::Straight {
+            from: WorldPos {
+                x: reader.i32()?,
+                y: reader.i32()?,
+            },
+            to: WorldPos {
+                x: reader.i32()?,
+                y: reader.i32()?,
+            },
+        },
+        1 => Geometry::Arc {
+            centre: WorldPos {
+                x: reader.i32()?,
+                y: reader.i32()?,
+            },
+            radius_q8: reader.u32()?,
+            start_turn_q8: reader.u16()?,
+            sweep_q8: reader.u16()? as i16,
+        },
+        _ => return Err(CodecError::Malformed),
+    };
+    Ok(Segment { len, geometry })
+}
+
 impl Transport {
     pub fn write_canonical(&self, sink: &mut impl ByteSink) {
         sink.put_u32(self.index.len() as u32);
@@ -57,24 +158,9 @@ impl Transport {
             sink.put_u32(line.len);
             sink.put_u16(line.speed);
             let flag = if line.seg_count > 0 { SEGMENTS } else { 0 };
-            match line.out {
-                Output::DeadEnd => sink.put_u8(flag),
-                Output::Next(t) => {
-                    sink.put_u8(1 | flag);
-                    sink.put_u32(t.0);
-                }
-                Output::Sink => sink.put_u8(2 | flag),
-                Output::Merge { line, at } => {
-                    sink.put_u8(3 | flag);
-                    sink.put_u32(line.0);
-                    sink.put_u32(at);
-                }
-                Output::Fork { a, b } => {
-                    sink.put_u8(4 | flag);
-                    sink.put_u32(a.0);
-                    sink.put_u32(b.0);
-                    sink.put_u8(u8::from(line.toggle));
-                }
+            write_out(sink, line.out, flag);
+            if let Output::Fork { .. } = line.out {
+                sink.put_u8(u8::from(line.toggle));
             }
             sink.put_u64(line.sunk);
             sink.put_u32(self.jam_index(slot));
@@ -96,29 +182,7 @@ impl Transport {
             if line.seg_count > 0 {
                 sink.put_u8(line.seg_count);
                 for r in self.seg_slice(slot) {
-                    sink.put_u32(r.seg.len);
-                    match r.seg.geometry {
-                        Geometry::Straight { from, to } => {
-                            sink.put_u8(0);
-                            sink.put_i32(from.x);
-                            sink.put_i32(from.y);
-                            sink.put_i32(to.x);
-                            sink.put_i32(to.y);
-                        }
-                        Geometry::Arc {
-                            centre,
-                            radius_q8,
-                            start_turn_q8,
-                            sweep_q8,
-                        } => {
-                            sink.put_u8(1);
-                            sink.put_i32(centre.x);
-                            sink.put_i32(centre.y);
-                            sink.put_u32(radius_q8);
-                            sink.put_u16(start_turn_q8);
-                            sink.put_u16(sweep_q8 as u16);
-                        }
-                    }
+                    write_segment(sink, &r.seg);
                 }
             }
         }
@@ -170,6 +234,7 @@ impl Transport {
         t.seg_cap = u32::MAX;
         t.tile_cap = u32::MAX;
         t.lines.reserve_exact(line_count as usize);
+        t.struct_ver.reserve_exact(line_count as usize);
         t.index.reserve_exact(line_count as usize);
         let mut prev_id = 0u32;
         for slot in 0..line_count {
@@ -183,27 +248,15 @@ impl Transport {
             if speed == 0 || u32::from(speed) >= len || len > MAX_LEN {
                 return Err(bad);
             }
-            let tag = reader.u8()?;
-            let has_segments = tag & SEGMENTS != 0;
-            let mut toggle = false;
-            let out = match tag & !SEGMENTS {
-                0 => Output::DeadEnd,
-                1 => Output::Next(LineId(reader.u32()?)),
-                2 => Output::Sink,
-                3 => Output::Merge {
-                    line: LineId(reader.u32()?),
-                    at: reader.u32()?,
+            let (out, flags) = read_out(reader)?;
+            let has_segments = flags & SEGMENTS != 0;
+            let toggle = match out {
+                Output::Fork { .. } => match reader.u8()? {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(bad),
                 },
-                4 => {
-                    let (a, b) = (LineId(reader.u32()?), LineId(reader.u32()?));
-                    toggle = match reader.u8()? {
-                        0 => false,
-                        1 => true,
-                        _ => return Err(bad),
-                    };
-                    Output::Fork { a, b }
-                }
-                _ => return Err(bad),
+                _ => false,
             };
             let sunk = reader.u64()?;
             let jam = reader.u32()?;
@@ -216,6 +269,7 @@ impl Transport {
             line.toggle = toggle;
             line.sunk = sunk;
             t.lines.push(line);
+            t.struct_ver.push(0);
             t.index.push((LineId(id), slot));
             let mut last_pos: Option<u64> = None;
             let mut jam_node = None;
@@ -290,30 +344,7 @@ impl Transport {
                     },
                 }; MAX_SEGMENTS];
                 for s in &mut segs[..n] {
-                    let len = reader.u32()?;
-                    let geometry = match reader.u8()? {
-                        0 => Geometry::Straight {
-                            from: WorldPos {
-                                x: reader.i32()?,
-                                y: reader.i32()?,
-                            },
-                            to: WorldPos {
-                                x: reader.i32()?,
-                                y: reader.i32()?,
-                            },
-                        },
-                        1 => Geometry::Arc {
-                            centre: WorldPos {
-                                x: reader.i32()?,
-                                y: reader.i32()?,
-                            },
-                            radius_q8: reader.u32()?,
-                            start_turn_q8: reader.u16()?,
-                            sweep_q8: reader.u16()? as i16,
-                        },
-                        _ => return Err(bad),
-                    };
-                    *s = Segment { len, geometry };
+                    *s = read_segment(reader)?;
                 }
                 if !check_segments(len, &segs[..n]) || count_tiles(&segs[..n]) > MAX_LINE_TILES {
                     return Err(bad);

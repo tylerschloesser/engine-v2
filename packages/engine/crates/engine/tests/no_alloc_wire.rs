@@ -8,7 +8,7 @@
 //! Covers every one of the eight `wire/*.rs` files' write and read paths in the same two measured
 //! regions (M14 fix round 1: the first version of this file measured only `mod.rs`, `coordlist.rs`,
 //! `overlay_runs.rs`, `snapshot.rs` and `results.rs` -- a leaked `Vec` planted in `write_global`
-//! went undetected). `deltas.rs`'s `EntityDeltaOp::Put`, `global.rs`'s `read_global`/
+//! went undetected). M46 adds `lines.rs` (`LineStructs`, section 12) to both regions. `deltas.rs`'s `EntityDeltaOp::Put`, `global.rs`'s `read_global`/
 //! `read_own_player` and `results.rs`'s `Rejected::Game` tag all decode an *owned* game-typed value
 //! (`codec::decode::<T>`, not a reference); 0011's "Decode path, no JS allocation" already requires
 //! `G::Entity`/`G::Player`/`G::Action` (and, by the same reasoning, `G::Global`/`G::Reject`) to be
@@ -184,6 +184,36 @@ fn encode_decode_no_alloc() {
         vel_x: 2,
         vel_y: -1,
     };
+    // lines.rs (M46): a two-segment put, an arc put and a gone.
+    let line_put = {
+        use engine::transport::{Geometry, LineId, Output, Segment};
+        use engine::world::WorldPos;
+        let mut p = engine::wire::lines::Put::empty(LineId(3));
+        p.len = 1024 + 402;
+        p.speed = 24;
+        p.out = Output::Fork {
+            a: LineId(1),
+            b: LineId(2),
+        };
+        p.seg_count = 2;
+        p.segs[0] = Segment {
+            len: 1024,
+            geometry: Geometry::Straight {
+                from: WorldPos { x: 128, y: 128 },
+                to: WorldPos { x: 1152, y: 128 },
+            },
+        };
+        p.segs[1] = Segment {
+            len: 402,
+            geometry: Geometry::Arc {
+                centre: WorldPos { x: 1152, y: 384 },
+                radius_q8: 256,
+                start_turn_q8: 192,
+                sweep_q8: 64,
+            },
+        };
+        p
+    };
     let action_bytes = [9u8, 8, 7];
     let presence_bytes = [1u8, 2, 3, 4];
 
@@ -229,6 +259,11 @@ fn encode_decode_no_alloc() {
         fw.section(SectionId::ChunkDeltas, |s| {
             write_chunk_deltas::<NoAllocGame>(s, &delta_groups, &delta_ops);
         });
+        // lines.rs
+        fw.section(SectionId::LineStructs, |s| {
+            engine::wire::lines::write_put(s, &line_put);
+            engine::wire::lines::write_gone(s, engine::transport::LineId(9));
+        });
         let n = sink.finish().unwrap();
 
         // uplink.rs (a separate top-level message, not a frame section) + its CameraReport
@@ -257,6 +292,7 @@ fn encode_decode_no_alloc() {
         let mut got_own_player = None;
         let mut got_delta_tiles = 0;
         let mut got_delta_ops = 0;
+        let mut got_lines = 0;
         while let Some((id, body)) = r.next_section().unwrap() {
             let mut br = engine::bytes::ByteReader::new(body);
             match id {
@@ -293,9 +329,19 @@ fn encode_decode_no_alloc() {
                     )
                     .unwrap();
                 }
+                SectionId::LineStructs => {
+                    engine::wire::lines::read(&mut br, |r| {
+                        if let engine::wire::lines::Record::Put(p) = r {
+                            assert_eq!(*p, line_put);
+                        }
+                        got_lines += 1;
+                    })
+                    .unwrap();
+                }
                 _ => {}
             }
         }
+        assert_eq!(got_lines, 2);
         assert_eq!(total_results, 4);
         assert_eq!(total_chunks, 2); // one entity in each of the two chunks
         assert_eq!(got_roster, 2);

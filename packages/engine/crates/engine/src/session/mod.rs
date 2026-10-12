@@ -319,6 +319,11 @@ pub struct Welcome<'a, G: Game> {
     /// The `HASH_ALL` flag: the host sends a hash for every subscribed chunk in every frame
     /// (M31b, so this client keeps dump files on a mismatch.
     pub hash_all: bool,
+    /// The world's transport caps (`WorldParams::{max_lines, max_items}`, M46): the replica
+    /// reserves its structure store for them. `(0, 0)`, a world without belts, is not written
+    /// (flag bit [`WELCOME_TRANSPORT`] clear), so such a `Welcome` keeps its pre-M46 bytes.
+    pub max_lines: u32,
+    pub max_items: u32,
 }
 
 /// No `derive(Debug, PartialEq)`: `G::Worldgen::Params`/`G::Presence` are only guaranteed
@@ -336,6 +341,8 @@ pub struct WelcomeOwned<G: Game> {
     pub last_processed_action_seq: u32,
     pub presence: Option<G::Presence>,
     pub hash_all: bool,
+    pub max_lines: u32,
+    pub max_items: u32,
 }
 
 /// `Welcome`'s last byte is the presence-present byte widened to a flags byte: bit 0 a presence
@@ -344,6 +351,9 @@ pub struct WelcomeOwned<G: Game> {
 pub const WELCOME_PRESENCE: u8 = 0b01;
 /// See [`WELCOME_PRESENCE`]: the host is in hash-all mode.
 pub const WELCOME_HASH_ALL: u8 = 0b10;
+/// See [`WELCOME_PRESENCE`]: `max_lines u32 · max_items u32` follow the flags byte (before the
+/// presence sample), the world's transport caps (M46). Clear when both are 0.
+pub const WELCOME_TRANSPORT: u8 = 0b100;
 
 pub fn write_welcome<G: Game>(sink: &mut (impl ByteSink + ?Sized), welcome: &Welcome<'_, G>) {
     sink.put_u8(MsgType::Welcome as u8);
@@ -364,13 +374,23 @@ pub fn write_welcome<G: Game>(sink: &mut (impl ByteSink + ?Sized), welcome: &Wel
     } else {
         0
     };
-    match welcome.presence {
-        None => sink.put_u8(hash_all),
-        Some(p) => {
-            sink.put_u8(WELCOME_PRESENCE | hash_all);
-            codec::encode_to(p, sink)
-                .expect("Welcome presence encode is infallible for a ?Sized sink");
-        }
+    let transport = if (welcome.max_lines, welcome.max_items) != (0, 0) {
+        WELCOME_TRANSPORT
+    } else {
+        0
+    };
+    let presence = if welcome.presence.is_some() {
+        WELCOME_PRESENCE
+    } else {
+        0
+    };
+    sink.put_u8(presence | hash_all | transport);
+    if transport != 0 {
+        sink.put_u32(welcome.max_lines);
+        sink.put_u32(welcome.max_items);
+    }
+    if let Some(p) = welcome.presence {
+        codec::encode_to(p, sink).expect("Welcome presence encode is infallible for a ?Sized sink");
     }
 }
 
@@ -397,10 +417,18 @@ pub fn read_welcome<G: Game>(buf: &[u8]) -> Result<WelcomeOwned<G>, WireError> {
     let last_processed_action_seq =
         u32::try_from(r.varint().map_err(WireError::from)?).map_err(|_| WireError::Malformed)?;
     let flags = r.u8().map_err(WireError::from)?;
-    if flags & !(WELCOME_PRESENCE | WELCOME_HASH_ALL) != 0 {
+    if flags & !(WELCOME_PRESENCE | WELCOME_HASH_ALL | WELCOME_TRANSPORT) != 0 {
         return Err(WireError::Malformed);
     }
     let hash_all = flags & WELCOME_HASH_ALL != 0;
+    let (max_lines, max_items) = if flags & WELCOME_TRANSPORT != 0 {
+        (
+            r.u32().map_err(WireError::from)?,
+            r.u32().map_err(WireError::from)?,
+        )
+    } else {
+        (0, 0)
+    };
     let presence = match flags & WELCOME_PRESENCE {
         0 => None,
         _ => Some(
@@ -421,6 +449,8 @@ pub fn read_welcome<G: Game>(buf: &[u8]) -> Result<WelcomeOwned<G>, WireError> {
         last_processed_action_seq,
         presence,
         hash_all,
+        max_lines,
+        max_items,
     })
 }
 
@@ -691,6 +721,8 @@ mod tests {
             last_processed_action_seq: 77,
             presence: Some(&presence),
             hash_all: false,
+            max_lines: 0,
+            max_items: 0,
         };
         let mut buf = vec![0u8; 256];
         let mut sink = SliceSink::new(&mut buf);
@@ -724,6 +756,8 @@ mod tests {
             last_processed_action_seq: 0,
             presence: None,
             hash_all: false,
+            max_lines: 0,
+            max_items: 0,
         };
         let mut buf = vec![0u8; 128];
         let mut sink = SliceSink::new(&mut buf);
@@ -752,6 +786,8 @@ mod tests {
                 last_processed_action_seq: 0,
                 presence: with_presence.then_some(&presence),
                 hash_all: true,
+                max_lines: 0,
+                max_items: 0,
             };
             let mut buf = vec![0u8; 128];
             let mut sink = SliceSink::new(&mut buf);
@@ -761,7 +797,7 @@ mod tests {
             assert!(got.hash_all);
             assert_eq!(got.presence.is_some(), with_presence);
             if !with_presence {
-                buf[n - 1] |= 0b100;
+                buf[n - 1] |= 0b1000;
                 assert!(read_welcome::<SGame>(&buf[..n]).is_err());
             }
         }
@@ -783,11 +819,63 @@ mod tests {
             last_processed_action_seq: 4,
             presence: Some(&presence),
             hash_all: false,
+            max_lines: 0,
+            max_items: 0,
         };
         let mut buf = vec![0u8; 256];
         let mut sink = SliceSink::new(&mut buf);
         write_welcome::<SGame>(&mut sink, &welcome);
         let n = sink.finish().unwrap();
         crate::assert_golden_bytes!("session_welcome", &buf[..n]);
+    }
+
+    /// M46: non-zero transport caps set flag bit 2 and put `max_lines u32 · max_items u32` right
+    /// after the flags byte, before the presence sample; everything else is the caps-(0, 0)
+    /// encoding byte for byte. Round-trips, and pinned as a golden.
+    #[test]
+    fn golden_welcome_transport_caps() {
+        let presence = SPresence { x: 1, y: 2 };
+        let params: u32 = 99;
+        let welcome = |max_lines, max_items| Welcome::<SGame> {
+            player_id: PlayerId(5),
+            epoch: 1,
+            tick: 123,
+            tick_rate_hz: 20,
+            seed: 7,
+            params: &params,
+            view_max_tiles_per_axis: 256,
+            view_max_chunks: 128,
+            last_processed_action_seq: 4,
+            presence: Some(&presence),
+            hash_all: true,
+            max_lines,
+            max_items,
+        };
+        let encode = |w: &Welcome<'_, SGame>| {
+            let mut buf = vec![0u8; 256];
+            let mut sink = SliceSink::new(&mut buf);
+            write_welcome::<SGame>(&mut sink, w);
+            let n = sink.finish().unwrap();
+            buf.truncate(n);
+            buf
+        };
+        let plain = encode(&welcome(0, 0));
+        let caps = encode(&welcome(0x0102_0304, 0x0A0B_0C0D));
+        // The presence sample (`SPresence`, two zigzag varints) is the last 2 bytes; the flags byte
+        // is just before it.
+        let flags_at = plain.len() - 3;
+        assert_eq!(plain[flags_at], WELCOME_PRESENCE | WELCOME_HASH_ALL);
+        let mut want = plain[..flags_at].to_vec();
+        want.push(WELCOME_PRESENCE | WELCOME_HASH_ALL | WELCOME_TRANSPORT);
+        want.extend_from_slice(&[0x04, 0x03, 0x02, 0x01, 0x0D, 0x0C, 0x0B, 0x0A]);
+        want.extend_from_slice(&plain[flags_at + 1..]);
+        assert_eq!(caps, want);
+        let got = read_welcome::<SGame>(&caps).unwrap();
+        assert_eq!((got.max_lines, got.max_items), (0x0102_0304, 0x0A0B_0C0D));
+        assert_eq!(got.presence, Some(presence));
+        assert!(got.hash_all);
+        let got = read_welcome::<SGame>(&plain).unwrap();
+        assert_eq!((got.max_lines, got.max_items), (0, 0));
+        crate::assert_golden_bytes!("session_welcome_transport_caps", &caps);
     }
 }

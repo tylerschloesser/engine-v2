@@ -31,7 +31,10 @@ allocate nothing; readers borrow and never panic.
   builder names `Ack` explicitly, never a catch-all.
 - **Scopes**: chunk (overlay tiles and entities anchored there, routed by `Game::anchor`), `Global` (game value plus the engine roster),
   `OwnPlayer`. Subscribing sends `ChunkEnterPristine` (coordinate only) or a snapshot `{coord, version, overlay runs, entity puts}`
-  consistent as of the frame's tick; later changes are `ChunkDeltas`.
+  consistent as of the frame's tick; later changes are `ChunkDeltas`. Line structures (`len`, `speed`, `Output`, segments; [0078](../decisions/0078-transport-forecast-replication.md) §1) are a
+  fourth replicated thing: section `LineStructs` puts a line while its chunk set meets a chunk the connection holds and sends `Gone` when
+  it no longer does, the structures anchored in an entering or re-snapshotted chunk ride that frame, and the chunk hash covers the
+  structures anchored in the chunk (`host/lines.rs`).
 - **Versions, not acks.** A chunk's version is the tick of its last replicated change. The host stamps every footprint chunk of every
   write; a replica takes its version only from a snapshot or a frame-tick bump, so a stale replica version can only cause an over-snapshot,
   never a wrong keep ([0064](../decisions/0064-phase-3-decisions-sync-and-netcode.md) §18). `Host::chunk_versions` is never pruned (§17).

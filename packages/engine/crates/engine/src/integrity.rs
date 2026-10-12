@@ -10,6 +10,12 @@
 //! is hashed. `Global` is the game value only (the roster is incremental and a replica's slot table
 //! is not comparable); a player hash is that player's `Codec` value.
 //!
+//! **Line structures (M46, 0078 §6).** After the snapshot bytes, the chunk's bytes go on with the
+//! `LineStructs` `Put` record (`wire::lines::write_put`) of every line *anchored* in the chunk, in
+//! tile-index order (`transport/replicate.rs`'s module doc); nothing of the items. A chunk with no
+//! anchored line hashes exactly as before M46. [`write_chunk_state`] is that one byte stream:
+//! `chunk_hash`, `encode_chunk` (the desync dumps) and both sides' `region_hash` write it.
+//!
 //! **The reserved coordinate.** A `ResyncChunk` for the `Global` and `OwnPlayer` scopes carries
 //! [`RESERVED_SCOPE_COORD`] instead of a chunk ([`crate::wire::hashes`]).
 
@@ -18,7 +24,7 @@ use crate::game::{Game, PlayerId};
 use crate::hash::Fnv64;
 use crate::store::Store;
 use crate::wire::encode_chunk_snapshot;
-use crate::world::ChunkCoord;
+use crate::world::{ChunkCoord, ChunkDims};
 
 pub use crate::wire::RESERVED_SCOPE_COORD;
 
@@ -28,8 +34,25 @@ pub const REPORT_RING: usize = 16;
 /// The hash of one chunk of `store` (module doc comment: version written as 0).
 pub fn chunk_hash<G: Game>(store: &Store<G>, chunk: ChunkCoord) -> u64 {
     let mut h = Fnv64::new();
-    encode_chunk_snapshot(store, chunk, 0, &mut h);
+    write_chunk_state(store, chunk, 0, &mut h);
     h.finish()
+}
+
+/// A chunk's replicated state as bytes (module doc): `encode_chunk_snapshot` at `version`, then
+/// the `Put` record of every line anchored in the chunk.
+pub fn write_chunk_state<G: Game>(
+    store: &Store<G>,
+    chunk: ChunkCoord,
+    version: u32,
+    sink: &mut (impl crate::bytes::ByteSink + ?Sized),
+) {
+    encode_chunk_snapshot(store, chunk, version, sink);
+    let t = store.transport();
+    t.anchored_in(chunk, ChunkDims::new(G::CHUNK_BITS), &mut |line| {
+        if let Ok(put) = t.structure(line) {
+            crate::wire::lines::write_put(sink, &put);
+        }
+    });
 }
 
 /// Appends the bytes [`chunk_hash`] hashes (the dump files of hash-all mode: what a desync report's
@@ -41,7 +64,7 @@ pub fn encode_chunk<G: Game>(store: &Store<G>, chunk: ChunkCoord, out: &mut Vec<
             self.0.extend_from_slice(b);
         }
     }
-    encode_chunk_snapshot(store, chunk, 0, &mut Sink(out));
+    write_chunk_state(store, chunk, 0, &mut Sink(out));
 }
 
 /// The hash of `store`'s `Global` game value.

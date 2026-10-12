@@ -12,6 +12,12 @@ export async function putsFixture(): Promise<{ wasm: WebAssembly.Module; buildHa
   return loadFixture('puts')
 }
 
+/** M46: the `fx-belts` fixture (`fixtures/belts`), the `belts/*` scenarios' world: lines built by
+ * `Action::Request` ops, executed on the next tick. */
+export async function beltsFixture(): Promise<{ wasm: WebAssembly.Module; buildHash: string }> {
+  return loadFixture('belts')
+}
+
 /** Every scenario prints its own seed on failure (0020 §2); this is the one this file's own
  * callers pass by default when a test does not care about a specific value. */
 export const DEFAULT_SEED = 1

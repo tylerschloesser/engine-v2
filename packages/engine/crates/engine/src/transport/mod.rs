@@ -30,6 +30,17 @@
 //! line's registered [`Segment`]s, `pos_to_world`, the derived chunk set, anchor and tile index).
 //! Positions are below [`MAX_LEN`], so a run's signed `gap` fits an `i32` (`line.rs`: a squashed
 //! pair kept by `rescale`/`join` is a negative gap).
+//!
+//! M46 (0078 §1): line structures replicate. Every structure change (`create`, `set_out`,
+//! `set_speed`, every surgery and its redirects, `set_segments`, `destroy`; never an item) stamps
+//! the line's [`Transport::structure_version`] with the tick [`Transport::set_now`] last set and
+//! queues its id once in a change list ([`Transport::structure_changes`], drained by the host at
+//! `seal`), both derived and never encoded, like `touched`. The list holds a quarter of
+//! `max_lines` ids (structures change at placement rate); past that it is marked overflowed and
+//! the host reconciles every line once instead (`host::lines`). A client replica's store is in
+//! *replica mode* ([`Transport::set_replica`]): it holds structures only, through
+//! [`Transport::apply_structure`], and answers `count`/`front`/`items_in`/`sunk`/`toggle` with
+//! `Unknown` (items replicate in M47).
 
 mod advance;
 mod codec;
@@ -37,12 +48,14 @@ mod geometry;
 mod items;
 mod line;
 mod order;
+mod replicate;
 mod surgery;
 
 use crate::game::Unknown;
 use crate::world::{ChunkCoord, ChunkDims, TilePos, WorldPos};
 
 pub use advance::dry_visits;
+pub(crate) use codec::{read_out, read_segment, write_out, write_segment};
 pub use geometry::{Geometry, MAX_LINE_TILES, MAX_SEGMENTS, Segment, walk_evals};
 use geometry::{SegRec, TileEntry};
 use line::{Line, NIL, Node};
@@ -345,6 +358,19 @@ pub struct Transport {
     /// `advance` that moved, landed, sank or merged): `Authority` marks the world dirty from it so a
     /// world where only belts move is still snapshotted. Not state.
     changed: bool,
+    /// M46: per slot, the tick of the line's last structure change (`structure_version`). Derived:
+    /// never encoded or hashed (a decoded line starts at 0).
+    struct_ver: Vec<u32>,
+    /// M46: the ids whose structure changed (or that were destroyed) since the last drain, each
+    /// once (`Line::struct_queued`), in change order; at most `struct_cap` (module doc).
+    struct_changes: Vec<LineId>,
+    struct_cap: u32,
+    /// A change found the list full: the host reconciles every line instead of the list.
+    struct_overflow: bool,
+    /// The tick structure changes are stamped with ([`Transport::set_now`]).
+    now: u32,
+    /// A client replica's store (module doc): structures only.
+    replica: bool,
 }
 
 impl Transport {
@@ -377,6 +403,12 @@ impl Transport {
             epoch: 1,
             advanced_epoch: 0,
             changed: false,
+            struct_ver: Vec::new(),
+            struct_changes: Vec::new(),
+            struct_cap: 0,
+            struct_overflow: false,
+            now: 0,
+            replica: false,
         }
     }
 
@@ -407,6 +439,9 @@ impl Transport {
         self.max_items = max_items;
         let lines = max_lines.max(self.lines.len() as u32) as usize;
         reserve_to(&mut self.lines, lines);
+        reserve_to(&mut self.struct_ver, lines);
+        self.struct_cap = struct_cap(max_lines);
+        reserve_to(&mut self.struct_changes, self.struct_cap as usize);
         reserve_to(&mut self.index, lines);
         reserve_to(&mut self.order, lines);
         self.scratch.reserve(lines);
@@ -433,8 +468,11 @@ impl Transport {
     /// memory-split check adds it (0079 §5).
     pub fn reserved_bytes(max_lines: u32, max_items: u32) -> u64 {
         use core::mem::size_of;
+        // The record, the id index, the update order, the structure version (M46) and Tarjan's
+        // scratch.
         let per_line = size_of::<Line>()
             + size_of::<(LineId, u32)>()
+            + size_of::<u32>()
             + size_of::<u32>()
             + order::Scratch::BYTES_PER_LINE;
         let nodes = if max_items == 0 {
@@ -444,6 +482,7 @@ impl Transport {
         };
         let (segs, tiles, headroom) = geometry::caps(max_lines);
         u64::from(max_lines) * per_line as u64
+            + u64::from(struct_cap(max_lines)) * size_of::<LineId>() as u64
             + nodes * size_of::<Node>() as u64
             + u64::from(segs) * size_of::<SegRec>() as u64
             + (u64::from(tiles) + u64::from(headroom)) * size_of::<TileEntry>() as u64
@@ -454,6 +493,8 @@ impl Transport {
     pub fn arena_bytes(&self) -> u64 {
         use core::mem::size_of;
         (self.lines.capacity() * size_of::<Line>()
+            + self.struct_ver.capacity() * size_of::<u32>()
+            + self.struct_changes.capacity() * size_of::<LineId>()
             + self.index.capacity() * size_of::<(LineId, u32)>()
             + self.order.capacity() * size_of::<u32>()
             + self.scratch.capacity_bytes()
@@ -575,9 +616,30 @@ impl Transport {
             .map(|k| self.index[k].1)
     }
 
+    /// A structure change of the slot's line (every caller changes `len`, `speed`, `out` or
+    /// segments; item writes mark `touched` themselves): `touched`, the world's `changed`, and the
+    /// line's structure version and change-list entry (M46).
     fn touch(&mut self, slot: u32) {
         self.lines[slot as usize].mark = self.epoch;
         self.changed = true;
+        self.struct_ver[slot as usize] = self.now;
+        if !self.replica
+            && !self.lines[slot as usize].struct_queued
+            && self.queue_change(self.lines[slot as usize].id)
+        {
+            self.lines[slot as usize].struct_queued = true;
+        }
+    }
+
+    /// Appends `id` to the change list within its reserved room, else marks it overflowed.
+    pub(super) fn queue_change(&mut self, id: LineId) -> bool {
+        if (self.struct_changes.len() as u32) < self.struct_cap {
+            self.struct_changes.push(id);
+            true
+        } else {
+            self.struct_overflow = true;
+            false
+        }
     }
 
     /// Allocates a line slot (reusing a destroyed one first).
@@ -586,10 +648,12 @@ impl Transport {
             let s = self.free_line;
             self.free_line = self.lines[s as usize].head;
             self.lines[s as usize] = rec;
+            self.struct_ver[s as usize] = self.now;
             s
         } else {
             let s = self.lines.len() as u32;
             self.lines.push(rec);
+            self.struct_ver.push(self.now);
             s
         }
     }
@@ -599,6 +663,11 @@ impl Transport {
             .map(|s| &self.lines[s as usize])
             .ok_or(Unknown)
     }
+}
+
+/// The change list's room for `max_lines` (module doc): a quarter, rounded up.
+fn struct_cap(max_lines: u32) -> u32 {
+    max_lines.div_ceil(4)
 }
 
 /// Grows `v`'s capacity to at least `n` (a setup-time reservation, never on a tick path).
@@ -626,10 +695,12 @@ impl TransportRead for Transport {
     }
 
     fn count(&self, line: LineId) -> Result<u32, Unknown> {
+        self.items_known()?;
         Ok(self.read_line(line)?.items)
     }
 
     fn front(&self, line: LineId) -> Result<Option<(Item, u32)>, Unknown> {
+        self.items_known()?;
         let rec = self.read_line(line)?;
         if rec.head == NIL {
             return Ok(None);
@@ -639,6 +710,7 @@ impl TransportRead for Transport {
     }
 
     fn items_in(&self, line: LineId, f: &mut dyn FnMut(Item, u32)) -> Result<(), Unknown> {
+        self.items_known()?;
         let rec = self.read_line(line)?;
         let mut prev_last: Option<i64> = None;
         let mut cur = rec.head;
@@ -659,10 +731,12 @@ impl TransportRead for Transport {
     }
 
     fn sunk(&self, line: LineId) -> Result<u64, Unknown> {
+        self.items_known()?;
         Ok(self.read_line(line)?.sunk)
     }
 
     fn toggle(&self, line: LineId) -> Result<bool, Unknown> {
+        self.items_known()?;
         Ok(self.read_line(line)?.toggle)
     }
 

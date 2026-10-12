@@ -237,8 +237,12 @@ impl Transport {
     }
 
     /// Drops `line` from the id index and puts its slot on the free list (runs and geometry
-    /// already released). Ids are never reused; slots are.
+    /// already released), queueing its id as a structure change. Ids are never reused; slots are.
     fn free_slot(&mut self, line: LineId, slot: u32) {
+        // A destroyed line is a structure change (M46): its id is queued once, like `touch`.
+        if !self.lines[slot as usize].struct_queued {
+            self.queue_change(line);
+        }
         let k = self
             .index
             .binary_search_by(|(i, _)| i.cmp(&line))

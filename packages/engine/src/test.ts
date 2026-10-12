@@ -77,6 +77,15 @@ export {
   injectWheel,
   type PointerPhase,
 } from './test/input.js'
+export {
+  corruptLineStructure,
+  type LineOutput,
+  type LineSegment,
+  type LineStructure,
+  type LineStructuresDump,
+  lineStructures,
+  structsDropped,
+} from './test/lines.js'
 export { createManualClock, type ManualClock } from './test/manual-clock.js'
 export {
   createNetHarness,

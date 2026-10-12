@@ -26,6 +26,8 @@ mod connection_and_subscriptions;
 mod gen_queue;
 #[path = "main/integrity.rs"]
 mod integrity;
+#[path = "main/line_replication.rs"]
+mod line_replication;
 #[path = "main/module_layering.rs"]
 mod module_layering;
 #[path = "main/state_budget.rs"]

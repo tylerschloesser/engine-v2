@@ -771,6 +771,25 @@ pub fn client_corrupt_chunk<T: Instance>(slot: &Slot<T>, cx: u32, cy: u32) -> St
     }
 }
 
+/// `client_line_structures() -> len`, or `-(status)`: `Instance::client_line_structures`, into
+/// `Tx`. `engine/test`-only.
+pub fn client_line_structures<T: Instance>(slot: &Slot<T>) -> i32 {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return -(status as i32),
+    };
+    let out = rt.layout.bytes_mut(RegionId::Tx);
+    rt.inst.client_line_structures(out) as i32
+}
+
+/// `client_corrupt_line(line) -> status`: `Instance::client_corrupt_line`. `engine/test`-only.
+pub fn client_corrupt_line<T: Instance>(slot: &Slot<T>, line: u32) -> Status {
+    match slot.client() {
+        Ok(rt) => rt.inst.client_corrupt_line(line),
+        Err(status) => status,
+    }
+}
+
 /// `drawlist_len() -> u32`: `Instance::drawlist_len`'s own "always answer, cost nothing" shape --
 /// `0` on a wrong role (M17, not an error.
 pub fn drawlist_len<T: Instance>(slot: &Slot<T>) -> u32 {

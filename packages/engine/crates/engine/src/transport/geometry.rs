@@ -78,10 +78,10 @@ pub(super) struct SegRec {
 /// A tile-index entry; the derived `Ord` is the index order `(y, x, line, offset)`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
 pub(super) struct TileEntry {
-    y: i32,
-    x: i32,
-    line: u32,
-    offset: u32,
+    pub(super) y: i32,
+    pub(super) x: i32,
+    pub(super) line: u32,
+    pub(super) offset: u32,
 }
 
 /// `(cos, sin)` of `k/16` of a quarter turn, `k = 0 ..= 16`, in Q0.16 (65,536 = 1), each the
@@ -168,6 +168,11 @@ fn point(seg: &Segment, o: u32) -> (WorldPos, i64) {
             )
         }
     }
+}
+
+/// The point at offset `o` of `seg` (`o < seg.len`): `replicate.rs`'s anchor of a put.
+pub(super) fn point_of(seg: &Segment, o: u32) -> WorldPos {
+    point(seg, o).0
 }
 
 /// `(tile, piece)` at offset `o`; `evals` counts the calls (the walk's cost, `walk_evals`).

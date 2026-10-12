@@ -17,7 +17,8 @@ ticks per item, `>= 256`) one `insert_back`, accepted `acc -= period`, refused `
 never a burst); it is written only when its state changed. `Action::Noop` stays first;
 `SCHEMA_VERSION` 2. M43b adds `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`, `Remove`,
 `TakeFront`, `Segments` and a `Thing::Tally` of accepted item requests; M44b `Merge`, `Fork`
-(`set_out`) and `Destroy` (counted in `Thing::Destroyed`). Semantics: the `src/lib.rs` module doc.
+(`set_out`) and `Destroy` (counted in `Thing::Destroyed`); M46 `Speed` (`set_speed`, appended
+last so no encoded op moved). Semantics: the `src/lib.rs` module doc.
 
 **Goldens (M42b, `tests/golden_scenarios.rs`).** `pnpm golden belts` writes them from the `.wasm`
 under Node; the native tests parse the same scenario files (`connect` is `Joined` then `Connected`)

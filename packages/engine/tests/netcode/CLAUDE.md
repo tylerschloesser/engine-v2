@@ -50,10 +50,9 @@ taken from a 0010 cell or worked number named in `source`. **Raising a number is
 
 ## Fixtures
 
-`fx-puts` (`support.ts`'s `putsFixture()`) is every scenario's fixture: `on_player(Joined)` puts the
-player slot immediately (required for acks past the pending-queue cap, 32); its own `FlatWorldgen`
-fills every tile `Tile::new(1, 0, 0)` (a `Paint` writing that back is a no-op overlay-wise). `fixture`
-may also be a `buildGame()` directory path, resolved via `engine/server/node`'s `loadGame`.
+`fx-puts` (`support.ts`'s `putsFixture()`) is every scenario's fixture but `belts/*`: `on_player(Joined)` puts the player slot immediately (required for acks past the pending-queue cap, 32); its own `FlatWorldgen` fills every tile `Tile::new(1, 0, 0)` (a `Paint` writing that back is a no-op overlay-wise). `fixture` may also be a `buildGame()` directory path, resolved via `engine/server/node`'s `loadGame`.
+
+**Line structures (M46, `belts.test.ts`).** `beltsFixture()` (`fx-belts`) with `world: { params: { maxLines, maxItems } }` (the replica reserves what the world declares); lines are built by `dispatch({ Request: op })` (`fixtures/belts` ops, run next tick; a line without `Segments` never replicates). `engine/test`: `lineStructures(client)` is the held `{ id, len, speed, out, segments }` list ascending by id, `structsDropped(client)` the puts the replica could not hold, `corruptLineStructure(client, id)` flips a held line's `speed` (an injected fault). Keep lines and cameras off the origin chunk: every request entity is anchored there and spawned and despawned in one tick, which bumps the host's chunk version and not the replica's, so `assertConverged`'s region hash would differ (open, older than M46; the chunk hashes agree).
 
 ## Desync hashes (M31b
 

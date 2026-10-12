@@ -46,16 +46,27 @@
 //! left to `Host::queue_action_for_test`'s own bypass of it (see that test's own doc comment for
 //! the number and for a real measurement bug this test's first draft found in itself).
 //!
+//! M46: the world has transport lines (`NGame::genesis`: 64 two-chunk lines along tile row 2,
+//! tiles 0..4,096) and `NGame::tick` changes one line's speed every 7 ticks, so every workload
+//! above routes line structures and the replica applies them; the client reserves the world's caps
+//! as `Welcome` would (`Replica::set_transport_caps`). In the 512-tile band the chunks come back
+//! within the 5 s hold, so only the speed changes' puts are routed there;
+//! `host_and_client_wide_band_routes_lines_no_alloc` pans a 4,096-tile band, where chunks enter
+//! and leave inside the measured windows: puts (on enter, riding snapshots, on change) and gones
+//! (on leave) are counted there and must both be above zero, at zero growth.
+//!
 //! Every test here drives `Host`/`ClientCore` directly, not `testing::testkit::Loopback` (`Loopback::step`
 //! itself allocates a fresh `Vec<u8>` per client per call, by design -- a test-only convenience,
 //! never claimed allocation-free).
 
 use engine::abi::Arena;
 use engine::abi::arena::thread_high_water_bytes as high_water_bytes;
-use engine::game::{EntityId, Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldWrite};
+use engine::game::{EntityId, Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldRead, WorldWrite};
 use engine::host::Host;
 use engine::sim::WorldParams;
+use engine::transport::{Geometry, LineId, Segment};
 use engine::wire::{CameraReport, UplinkWriter};
+use engine::world::WorldPos;
 use engine::world::{
     CacheCapacity, ChunkCoord, ChunkDims, PristineSource, PrototypeId, Registry, Tile, TilePos,
 };
@@ -141,6 +152,26 @@ impl Game for NGame {
     }
     fn genesis(w: &mut dyn WorldWrite<Self>) {
         w.put_global(NGlobal::default());
+        // M46: lines in the world (module doc).
+        let t = w.transport_mut().expect("genesis: transport_mut is Ok");
+        for k in 0..LINES {
+            let l = t.create(64 * 256, 24).expect("the caps hold the lines");
+            let x = (k as i32 * 64) * 256 + 128;
+            let seg = Segment {
+                len: 64 * 256,
+                geometry: Geometry::Straight {
+                    from: WorldPos {
+                        x,
+                        y: 2 * 256 + 128,
+                    },
+                    to: WorldPos {
+                        x: x + 64 * 256,
+                        y: 2 * 256 + 128,
+                    },
+                },
+            };
+            t.set_segments(l, &[seg]).expect("one straight segment");
+        }
     }
     fn on_player(w: &mut dyn WorldWrite<Self>, who: PlayerId, ev: PlayerEvent) {
         if let PlayerEvent::Joined = ev {
@@ -175,8 +206,21 @@ impl Game for NGame {
             }
         }
     }
-    fn tick(_cx: &mut TickCx<'_, Self>) {}
+    /// M46: every 7 ticks one line's speed alternates between 12 and 24 (a structure change).
+    fn tick(cx: &mut TickCx<'_, Self>) {
+        let n = cx.tick().0 / 7;
+        if !cx.tick().0.is_multiple_of(7) {
+            return;
+        }
+        let t = cx.transport_mut().expect("tick: transport_mut is Ok");
+        let speed = if n.is_multiple_of(2) { 12 } else { 24 };
+        let _ = t.set_speed(LineId(1 + n % LINES), speed);
+    }
 }
+
+/// Lines `NGame::genesis` creates (ids 1 ..= LINES), every 64 tiles along row 2: they cover
+/// `WIDE_BAND_TILES`.
+const LINES: u32 = 64;
 
 struct FlatSource;
 impl PristineSource for FlatSource {
@@ -185,9 +229,24 @@ impl PristineSource for FlatSource {
     }
 }
 
+/// A client replica reserved for the world's transport caps, as `Welcome` does (M46).
+fn lined_replica(chunks: u32, player: PlayerId) -> engine::client::Replica<NGame> {
+    let mut r = engine::client::Replica::<NGame>::new(
+        ChunkDims::new(NGame::CHUNK_BITS),
+        Box::new(FlatSource),
+        CacheCapacity::Chunks(chunks),
+        player,
+    );
+    r.set_transport_caps(
+        engine::transport::DEFAULT_MAX_LINES,
+        engine::transport::DEFAULT_MAX_ITEMS,
+    );
+    r
+}
+
 #[test]
 fn host_and_client_steady_state_no_alloc() {
-    use engine::client::{ClientCore, Replica};
+    use engine::client::ClientCore;
 
     let mut host = Host::<NGame>::genesis_for_test(WorldParams {
         seed: 1,
@@ -199,12 +258,7 @@ fn host_and_client_steady_state_no_alloc() {
         max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     let player = host.connect(0);
-    let mut client = ClientCore::new(Replica::<NGame>::new(
-        ChunkDims::new(NGame::CHUNK_BITS),
-        Box::new(FlatSource),
-        CacheCapacity::Chunks(256),
-        player,
-    ));
+    let mut client = ClientCore::new(lined_replica(256, player));
 
     let mut s = Scratch {
         frame_buf: [0u8; 16384],
@@ -338,10 +392,41 @@ struct PanState {
     /// +1 / -1: the direction the camera is currently moving in. Always +1 while `bounded` is
     /// false (the camera pans forever, reaching new territory every tick).
     dir: i32,
-    /// True for the bounded-camera control: the camera turns around at the edges of a 16-chunk
-    /// band instead of panning forever, so the world it touches is finite and *every* byte the
-    /// tick loop still allocates is a per-tick allocation.
+    /// True for the bounded-camera control: the camera turns around at the edges of a band
+    /// (`band` tiles) instead of panning forever, so the world it touches is finite and *every*
+    /// byte the tick loop still allocates is a per-tick allocation.
     bounded: bool,
+    band: i32,
+    /// `LineStructs` records built so far (M46 review: the measured windows must route lines).
+    puts: u64,
+    gones: u64,
+}
+
+/// Counts the `LineStructs` records of one built message (a frame or a bundle of frames), with no
+/// allocation.
+fn count_line_records(msg: &[u8], puts: &mut u64, gones: &mut u64) {
+    use engine::wire::lines::{Record, read};
+    use engine::wire::{BundleReader, FrameReader, MsgType, SectionId};
+    let mut one = |frame: &[u8]| {
+        let mut r = FrameReader::new(frame).unwrap();
+        while let Some((id, body)) = r.next_section().unwrap() {
+            if id == SectionId::LineStructs {
+                read(&mut engine::bytes::ByteReader::new(body), |rec| match rec {
+                    Record::Put(_) => *puts += 1,
+                    Record::Gone(_) => *gones += 1,
+                })
+                .unwrap();
+            }
+        }
+    };
+    if msg[0] == MsgType::FrameBundle as u8 {
+        let mut b = BundleReader::new(msg).unwrap();
+        while let Some(f) = b.next_frame().unwrap() {
+            one(f);
+        }
+    } else {
+        one(msg);
+    }
 }
 
 /// One panning tick: the camera moves one full chunk edge (32 tiles) in x, so a whole new column
@@ -362,7 +447,7 @@ fn run_panning_tick(
     i: u32,
 ) {
     if p.bounded {
-        if p.pan_x >= BAND_TILES {
+        if p.pan_x >= p.band {
             p.dir = -1;
         } else if p.pan_x <= 0 {
             p.dir = 1;
@@ -429,6 +514,7 @@ fn run_panning_tick(
     host.tick();
     let n = host.build_frame(0, &mut s.frame_buf);
     if n > 0 {
+        count_line_records(&s.frame_buf[..n], &mut p.puts, &mut p.gones);
         client.on_frame(&s.frame_buf[..n]).unwrap();
     }
     host.seal();
@@ -436,6 +522,11 @@ fn run_panning_tick(
     s.t_ms += 50;
     let _ = client.poll_uplink(s.t_ms, &mut s.uplink_buf);
 }
+
+/// The wide band (M46 review): 128 chunks, a 256-tick round trip, so a chunk at either end is
+/// away past the 5 s (100-tick) hold and leaves, and the lines in it are `Gone`; they enter again
+/// (by snapshot, their anchored puts riding it) on the way back.
+const WIDE_BAND_TILES: i32 = 4096;
 
 /// One camera band for the bounded control: 16 chunks wide at `CHUNK_BITS = 5`.
 const BAND_TILES: i32 = 512;
@@ -449,6 +540,11 @@ struct PanRun {
     new_chunks: u64,
     /// Cache events the host's own `TerrainStore` had queued at the end of the window.
     host_queued_cache_events: usize,
+    /// Line structures the client held at the end of the window (M46: the routing is live).
+    lines_held: u32,
+    /// `LineStructs` puts and gones built inside the window.
+    puts: u64,
+    gones: u64,
 }
 
 /// Warm up a host + client to the panning workload's steady state, then measure `window` ticks of
@@ -457,7 +553,11 @@ struct PanRun {
 /// `Host`/`ClientCore`, so two windows are two independent runs from the same warm-up, never a
 /// short prefix of a long one.
 fn pan_run(bounded: bool, window: u32) -> PanRun {
-    use engine::client::{ClientCore, Replica};
+    pan_run_band(bounded, BAND_TILES, window)
+}
+
+fn pan_run_band(bounded: bool, band: i32, window: u32) -> PanRun {
+    use engine::client::ClientCore;
 
     let mut host = Host::<NGame>::genesis_for_test(WorldParams {
         seed: 2,
@@ -469,12 +569,7 @@ fn pan_run(bounded: bool, window: u32) -> PanRun {
         max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
     let player = host.connect(0);
-    let mut client = ClientCore::new(Replica::<NGame>::new(
-        ChunkDims::new(NGame::CHUNK_BITS),
-        Box::new(FlatSource),
-        CacheCapacity::Chunks(1024),
-        player,
-    ));
+    let mut client = ClientCore::new(lined_replica(1024, player));
     let mut s = Scratch {
         frame_buf: [0u8; 16384],
         uplink_buf: [0u8; 256],
@@ -487,6 +582,9 @@ fn pan_run(bounded: bool, window: u32) -> PanRun {
         pending_despawn: None,
         dir: 1,
         bounded,
+        band,
+        puts: 0,
+        gones: 0,
     };
 
     // Connect + join burst, unmeasured.
@@ -503,7 +601,10 @@ fn pan_run(bounded: bool, window: u32) -> PanRun {
     // measured body, so every scratch buffer this shape touches settles at its own steady-state
     // capacity before `before` is sampled.
     let hold = NGame::TICK_RATE.secs(5).0;
-    for i in 0..(hold + 20) {
+    // A bounded camera first covers its band twice (a round trip is `2 x band / 32` ticks), so the
+    // measured windows reach no territory the warm-up has not.
+    let round_trip = if bounded { (2 * band / 32) as u32 } else { 0 };
+    for i in 0..(hold + 20).max(2 * round_trip) {
         run_panning_tick(&mut host, player, &mut client, &mut s, &mut p, i);
     }
     for i in 0..40u32 {
@@ -511,11 +612,13 @@ fn pan_run(bounded: bool, window: u32) -> PanRun {
     }
 
     let chunks_before = host.debug_chunk_version_count();
+    let (puts_before, gones_before) = (p.puts, p.gones);
     let before = live();
     for i in 0..window {
         run_panning_tick(&mut host, player, &mut client, &mut s, &mut p, 2_000 + i);
     }
     let bytes = live() as i64 - before as i64;
+    let (puts, gones) = (p.puts - puts_before, p.gones - gones_before);
     let new_chunks = (host.debug_chunk_version_count() - chunks_before) as u64;
     let host_queued_cache_events = host
         .sim()
@@ -524,10 +627,14 @@ fn pan_run(bounded: bool, window: u32) -> PanRun {
         .store()
         .terrain()
         .queued_cache_events();
+    let lines_held = client.replica().transport().lines_len();
     PanRun {
         bytes,
         new_chunks,
         host_queued_cache_events,
+        lines_held,
+        puts,
+        gones,
     }
 }
 
@@ -547,6 +654,10 @@ fn pan_run(bounded: bool, window: u32) -> PanRun {
 fn host_and_client_bounded_camera_no_alloc() {
     let short = pan_run(true, 300);
     let long = pan_run(true, 1_200);
+    assert!(
+        short.lines_held > 0 && long.lines_held > 0,
+        "the band's lines are routed to the client (M46)"
+    );
     assert_eq!(
         long.bytes,
         short.bytes,
@@ -557,6 +668,32 @@ fn host_and_client_bounded_camera_no_alloc() {
         short.bytes,
         long.bytes,
         (long.bytes - short.bytes) as f64 / 900.0,
+    );
+}
+
+/// M46 review: the bounded guarantee with line structures routed inside the measured windows. The
+/// wide band makes chunks enter and leave all the time, so lines are put (riding snapshots) and
+/// `Gone` inside both windows, and the growth is equal at one round trip (256 ticks) and at four
+/// (1,024). The windows are whole round trips: the held set's size (and so the live bytes of the
+/// client's held-chunk map) depends on where in the sweep the camera is, so windows ending at
+/// different points of the sweep differ by that, not by growth (measured: 0 B at every multiple
+/// of 256 ticks up to 2,048, 368 B at 300 against 416 B at 1,200).
+#[test]
+fn host_and_client_wide_band_routes_lines_no_alloc() {
+    let short = pan_run_band(true, WIDE_BAND_TILES, 256);
+    let long = pan_run_band(true, WIDE_BAND_TILES, 1_024);
+    for (name, r) in [("256", &short), ("1,024", &long)] {
+        assert!(
+            r.puts > 0 && r.gones > 0,
+            "the {name}-tick window routed {} puts and {} gones",
+            r.puts,
+            r.gones
+        );
+    }
+    assert_eq!(
+        long.bytes, short.bytes,
+        "wide-band host+client loop allocates per tick: {} B over 256 ticks, {} B over 1,024",
+        short.bytes, long.bytes
     );
 }
 

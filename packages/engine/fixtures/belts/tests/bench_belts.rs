@@ -236,12 +236,13 @@ fn bench_cycling_spawners_cycle_kinds() {
 /// a phone's split. The largest caps of the form `(lines, 8 x lines)`, `lines` a multiple of 1,024,
 /// whose arena fits the slack are pinned here as literals with their bytes (a record growth moves
 /// them): milestone 57's phone candidates, and an upper bound, not a usable cap: 0007 §8's 8 MiB
-/// line is "lists, timers, players, and slack", which this pair leaves 114,672 B of.
+/// line is "lists, timers, players, and slack", which this pair leaves 32,752 B of (114,672 before
+/// M46's structure version and change list, 5 B a line).
 #[test]
 fn transport_phone_caps_fit_split() {
     const SLACK: u64 = 8 * MIB;
     const LINES: u32 = 16_384;
-    const BYTES: u64 = 8_273_936;
+    const BYTES: u64 = 8_355_856;
     let mut found = None;
     let mut lines = engine::transport::DEFAULT_MAX_LINES;
     while lines > 0 {
@@ -265,8 +266,8 @@ fn transport_phone_caps_fit_split() {
             engine::transport::DEFAULT_MAX_LINES,
             engine::transport::DEFAULT_MAX_ITEMS
         ),
-        16_482_320,
-        "0079 §16's figure at the recommended caps"
+        16_646_160,
+        "0079 §16's figure at the recommended caps, plus M46's 5 B a line"
     );
 }
 

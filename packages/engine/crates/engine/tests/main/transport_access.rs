@@ -267,9 +267,10 @@ fn transport_predicting_is_unknown() {
 }
 
 /// M43 review (finding 1, the prediction rule): `lines_at` takes no line id, so a store that holds
-/// no transport state (a replica's, never reserved) must answer `Err(Unknown)`, not "no line
-/// here": under prediction the read marks the overlay and the action is `NotPredictable`. The
-/// host's reserved store answers `Ok` and the same action applies.
+/// no transport state (an unreserved one) must answer `Err(Unknown)`, not "no line here"; under
+/// prediction every transport read is `Unknown` (M46: the replica holds structures now, and
+/// `Predicting` still answers none of them), so the read marks the overlay and the action is
+/// `NotPredictable`. The host's reserved store answers `Ok` and the same action applies.
 #[test]
 fn transport_lines_at_is_unknown_on_a_replica() {
     let mut lb = Loopback::<AGame>::new(params());

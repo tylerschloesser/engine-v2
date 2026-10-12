@@ -34,7 +34,8 @@
 //! with M44's `Output::Merge`/`Output::Fork` (rules: 0079 §15); a refusal (`a == b`, a self-target,
 //! a fork target shorter than the feeder's speed, a missing line) is dropped like every other op's.
 //! `Destroy { line }` runs `destroy` and counts the deleted items in one [`Thing::Destroyed`] on
-//! the `"destroyed"` active list (the property tests' conservation needs it).
+//! the `"destroyed"` active list (the property tests' conservation needs it). `Speed { line,
+//! speed }` (M46) is `set_speed`, for the netcode scenario's structure changes.
 //!
 //! **The bench world (M45).** `BeltsParams.bench` builds M40's standard `Mixed` world at genesis
 //! ([`bench`]); its mixed-kind chains' spawners are [`Thing::Cycling`] (the item steps through
@@ -238,6 +239,8 @@ pub enum Op {
     Fork { line: u8, a: u8, b: u8 },
     /// `destroy(line)`: its items are counted in [`Thing::Destroyed`]; its slot keeps the dead id.
     Destroy { line: u8 },
+    /// `set_speed(line, speed)` (M46: a structure change the netcode scenario replicates).
+    Speed { line: u8, speed: u16 },
 }
 
 impl Op {
@@ -264,6 +267,7 @@ impl Op {
             Op::Merge { line, into, .. } => idx(line) && idx(into),
             Op::Fork { line, a, b } => idx(line) && idx(a) && idx(b),
             Op::Destroy { line } => idx(line),
+            Op::Speed { line, speed } => idx(line) && speed >= 1,
         }
     }
 
@@ -548,6 +552,9 @@ impl Belts {
                 {
                     return; // the request became the counter.
                 }
+            }
+            Op::Speed { line, speed } => {
+                let _ = t.set_speed(g.line(u32::from(line)), speed);
             }
         }
         cx.despawn(id);

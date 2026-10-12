@@ -92,6 +92,10 @@ pub(super) struct Line {
     /// `NIL` with `seg_count == 0`.
     pub seg_start: u32,
     pub seg_count: u8,
+    /// The line is in the store's structure-change list (`Transport::structure_changes`, M46),
+    /// cleared by the drain: one entry per line per drain. Not state; it fills the record's one
+    /// byte of padding (the record stays 88 B).
+    pub struct_queued: bool,
 }
 
 impl Line {
@@ -121,6 +125,7 @@ impl Line {
             squashed: false,
             seg_start: NIL,
             seg_count: 0,
+            struct_queued: false,
         }
     }
 

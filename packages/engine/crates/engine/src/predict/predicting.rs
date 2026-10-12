@@ -234,65 +234,64 @@ impl<'a, G: Game> WorldWrite<G> for Predicting<'a, G> {
     }
 }
 
-/// The transport read side under prediction (M42): the replica's own (empty until M46), with every
-/// `Unknown` marked on the overlay so a handler that reads a line it cannot see declines as
-/// `NotPredictable`, the same as every other read here.
+/// The transport read side under prediction (M42; 0079 §4): every read is `Unknown`, marked on the
+/// overlay, so an action that reads a line declines as `NotPredictable`. M46 gave the replica the
+/// structures of the lines it holds; prediction does not read them (a predicted structure read
+/// would be a hint the host never acks), so this stays as M42 left it.
 impl<G: Game> TransportRead for Predicting<'_, G> {
     fn lines_len(&self) -> u32 {
-        self.base.transport().lines_len()
+        0
     }
-    fn len(&self, line: LineId) -> Result<u32, Unknown> {
-        self.taint(self.base.transport().len(line))
+    fn len(&self, _line: LineId) -> Result<u32, Unknown> {
+        self.unknown()
     }
-    fn speed(&self, line: LineId) -> Result<u16, Unknown> {
-        self.taint(self.base.transport().speed(line))
+    fn speed(&self, _line: LineId) -> Result<u16, Unknown> {
+        self.unknown()
     }
-    fn out(&self, line: LineId) -> Result<Output, Unknown> {
-        self.taint(self.base.transport().out(line))
+    fn out(&self, _line: LineId) -> Result<Output, Unknown> {
+        self.unknown()
     }
-    fn count(&self, line: LineId) -> Result<u32, Unknown> {
-        self.taint(self.base.transport().count(line))
+    fn count(&self, _line: LineId) -> Result<u32, Unknown> {
+        self.unknown()
     }
-    fn front(&self, line: LineId) -> Result<Option<(Item, u32)>, Unknown> {
-        self.taint(self.base.transport().front(line))
+    fn front(&self, _line: LineId) -> Result<Option<(Item, u32)>, Unknown> {
+        self.unknown()
     }
-    fn items_in(&self, line: LineId, f: &mut dyn FnMut(Item, u32)) -> Result<(), Unknown> {
-        self.taint(self.base.transport().items_in(line, f))
+    fn items_in(&self, _line: LineId, _f: &mut dyn FnMut(Item, u32)) -> Result<(), Unknown> {
+        self.unknown()
     }
-    fn sunk(&self, line: LineId) -> Result<u64, Unknown> {
-        self.taint(self.base.transport().sunk(line))
+    fn sunk(&self, _line: LineId) -> Result<u64, Unknown> {
+        self.unknown()
     }
-    fn toggle(&self, line: LineId) -> Result<bool, Unknown> {
-        self.taint(self.base.transport().toggle(line))
+    fn toggle(&self, _line: LineId) -> Result<bool, Unknown> {
+        self.unknown()
     }
-    fn segments(&self, line: LineId, f: &mut dyn FnMut(Segment)) -> Result<(), Unknown> {
-        self.taint(self.base.transport().segments(line, f))
+    fn segments(&self, _line: LineId, _f: &mut dyn FnMut(Segment)) -> Result<(), Unknown> {
+        self.unknown()
     }
-    fn pos_to_world(&self, line: LineId, pos: u32) -> Result<Option<WorldPos>, Unknown> {
-        self.taint(self.base.transport().pos_to_world(line, pos))
+    fn pos_to_world(&self, _line: LineId, _pos: u32) -> Result<Option<WorldPos>, Unknown> {
+        self.unknown()
     }
     fn chunks_of(
         &self,
-        line: LineId,
-        dims: ChunkDims,
-        f: &mut dyn FnMut(ChunkCoord),
+        _line: LineId,
+        _dims: ChunkDims,
+        _f: &mut dyn FnMut(ChunkCoord),
     ) -> Result<(), Unknown> {
-        self.taint(self.base.transport().chunks_of(line, dims, f))
+        self.unknown()
     }
-    fn anchor(&self, line: LineId, dims: ChunkDims) -> Result<Option<ChunkCoord>, Unknown> {
-        self.taint(self.base.transport().anchor(line, dims))
+    fn anchor(&self, _line: LineId, _dims: ChunkDims) -> Result<Option<ChunkCoord>, Unknown> {
+        self.unknown()
     }
-    fn lines_at(&self, tile: TilePos, f: &mut dyn FnMut(LineId, u32)) -> Result<(), Unknown> {
-        self.taint(self.base.transport().lines_at(tile, f))
+    fn lines_at(&self, _tile: TilePos, _f: &mut dyn FnMut(LineId, u32)) -> Result<(), Unknown> {
+        self.unknown()
     }
 }
 
 impl<G: Game> Predicting<'_, G> {
-    fn taint<T>(&self, r: Result<T, Unknown>) -> Result<T, Unknown> {
-        if r.is_err() {
-            self.overlay.mark_unknown();
-        }
-        r
+    fn unknown<T>(&self) -> Result<T, Unknown> {
+        self.overlay.mark_unknown();
+        Err(Unknown)
     }
 }
 

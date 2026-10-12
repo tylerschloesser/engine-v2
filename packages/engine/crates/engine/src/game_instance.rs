@@ -1367,6 +1367,9 @@ where
                 c.core.set_epoch(welcome.epoch);
                 c.core.replica_mut().set_own_player(welcome.player_id);
                 c.core.set_hash_all(welcome.hash_all);
+                // M46: the world's transport caps; the new connection routes structures afresh.
+                c.core
+                    .on_welcome_transport(welcome.max_lines, welcome.max_items);
                 if let Some(sample) = &welcome.presence {
                     c.core.seed_presence(sample);
                     c.presence = *sample;
@@ -1567,6 +1570,36 @@ where
         }
     }
 
+    fn client_line_structures(&mut self, tx: &mut [u8]) -> usize {
+        let GameInstance::Client(c) = self else {
+            return 0;
+        };
+        let json = line_structures_json(c.core.replica(), c.core.structs_dropped());
+        match tx.get_mut(..json.len()) {
+            Some(out) => {
+                out.copy_from_slice(json.as_bytes());
+                json.len()
+            }
+            None => 0,
+        }
+    }
+
+    fn client_corrupt_line(&mut self, line: u32) -> Status {
+        match self {
+            GameInstance::Client(c) => {
+                if c.core
+                    .replica_mut()
+                    .debug_corrupt_line(crate::transport::LineId(line))
+                {
+                    Status::Ok
+                } else {
+                    Status::NotCached
+                }
+            }
+            _ => Status::Unsupported,
+        }
+    }
+
     fn sim_skip_delta(&mut self, conn: u32, coord: u32) -> Status {
         match self {
             GameInstance::Sim(h) => h.sim_skip_delta(conn, coord),
@@ -1725,6 +1758,61 @@ where
             _ => Status::Unsupported,
         }
     }
+}
+
+/// `client_line_structures`' JSON (`abi::registry`'s doc has the shape). Test-only, allocates.
+fn line_structures_json<G: Game>(replica: &crate::client::Replica<G>, dropped: u32) -> String {
+    use crate::transport::{Geometry, Output};
+    use std::fmt::Write as _;
+    let mut s = format!("{{\"structsDropped\":{dropped},\"lines\":[");
+    let mut first = true;
+    replica.structures(|p| {
+        if !first {
+            s.push(',');
+        }
+        first = false;
+        let out = match p.out {
+            Output::DeadEnd => "{\"kind\":\"DeadEnd\"}".to_string(),
+            Output::Sink => "{\"kind\":\"Sink\"}".to_string(),
+            Output::Next(l) => format!("{{\"kind\":\"Next\",\"line\":{}}}", l.0),
+            Output::Merge { line, at } => {
+                format!("{{\"kind\":\"Merge\",\"line\":{},\"at\":{at}}}", line.0)
+            }
+            Output::Fork { a, b } => {
+                format!("{{\"kind\":\"Fork\",\"a\":{},\"b\":{}}}", a.0, b.0)
+            }
+        };
+        let _ = write!(
+            s,
+            "{{\"id\":{},\"len\":{},\"speed\":{},\"out\":{out},\"segments\":[",
+            p.id.0, p.len, p.speed
+        );
+        for (k, seg) in p.segments().iter().enumerate() {
+            if k > 0 {
+                s.push(',');
+            }
+            let _ = match seg.geometry {
+                Geometry::Straight { from, to } => write!(
+                    s,
+                    "{{\"len\":{},\"kind\":\"Straight\",\"from\":[{},{}],\"to\":[{},{}]}}",
+                    seg.len, from.x, from.y, to.x, to.y
+                ),
+                Geometry::Arc {
+                    centre,
+                    radius_q8,
+                    start_turn_q8,
+                    sweep_q8,
+                } => write!(
+                    s,
+                    "{{\"len\":{},\"kind\":\"Arc\",\"centre\":[{},{}],\"radiusQ8\":{radius_q8},\"startTurnQ8\":{start_turn_q8},\"sweepQ8\":{sweep_q8}}}",
+                    seg.len, centre.x, centre.y
+                ),
+            };
+        }
+        s.push_str("]}");
+    });
+    s.push_str("]}");
+    s
 }
 
 #[cfg(test)]
@@ -1945,6 +2033,8 @@ mod tests {
                 last_processed_action_seq: 0,
                 presence: None,
                 hash_all: false,
+                max_lines: 0,
+                max_items: 0,
             },
         );
         let n = sink.finish().unwrap();

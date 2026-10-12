@@ -31,6 +31,7 @@ pub mod coordlist;
 pub mod deltas;
 pub mod global;
 pub mod hashes;
+pub mod lines;
 pub mod overlay_runs;
 pub mod presence;
 pub mod results;
@@ -138,6 +139,8 @@ pub enum SectionId {
     ChunkTiles = 10,
     /// Resume "keep" entries (M28); body opaque here (Non-scope).
     ChunkKeeps = 11,
+    /// Line structures (M46, `wire/lines.rs`).
+    LineStructs = 12,
 }
 
 impl SectionId {
@@ -154,6 +157,7 @@ impl SectionId {
             9 => Self::Hashes,
             10 => Self::ChunkTiles,
             11 => Self::ChunkKeeps,
+            12 => Self::LineStructs,
             _ => return None,
         })
     }
@@ -384,7 +388,7 @@ mod tests {
         assert!(r2.next_section().unwrap().is_some());
         assert_eq!(r2.next_section(), Err(WireError::Malformed));
 
-        // Id 0 and an unknown id (e.g. 12) are equally malformed.
+        // Id 0 and an unknown id (e.g. 13) are equally malformed.
         let mut bytes3 = buf[..n].to_vec();
         bytes3.extend_from_slice(&[0, 1, 9]);
         assert_eq!(
@@ -393,7 +397,7 @@ mod tests {
         );
 
         let mut bytes4 = buf[..n].to_vec();
-        bytes4.extend_from_slice(&[12, 1, 9]);
+        bytes4.extend_from_slice(&[13, 1, 9]);
         assert_eq!(
             FrameReader::new(&bytes4).unwrap().next_section(),
             Err(WireError::Malformed)
@@ -793,6 +797,16 @@ mod tests {
                     w.write(s, chunks[0]);
                 });
             }
+            let line_records = rng.below(3);
+            let line_put = test_line_put(1 + rng.below(100));
+            if line_records > 0 {
+                fw.section(SectionId::LineStructs, |s| {
+                    lines::write_put(s, &line_put);
+                    if line_records > 1 {
+                        lines::write_gone(s, crate::transport::LineId(line_put.id.0 + 1));
+                    }
+                });
+            }
 
             let n = sink
                 .finish()
@@ -888,6 +902,15 @@ mod tests {
                     SectionId::Hashes => assert_eq!(body, hash_bytes.as_slice()),
                     SectionId::ChunkKeeps => {} // opaque here; just proves it round-trips as bytes
                     SectionId::ChunkTiles => panic!("ChunkTiles is unbuilt; never generated"),
+                    SectionId::LineStructs => {
+                        let mut got = Vec::new();
+                        lines::read(&mut br, |r| {
+                            got.push((r.id(), matches!(r, lines::Record::Put(p) if *p == line_put)))
+                        })
+                        .unwrap();
+                        assert_eq!(got.len() as u32, line_records);
+                        assert_eq!(got[0], (line_put.id, true));
+                    }
                 }
             }
         }
@@ -896,7 +919,7 @@ mod tests {
         // milestone builds must have appeared, and both the empty and non-empty shape of the
         // interesting variable-length fields must have appeared. If the generator regresses to
         // "always include everything" or "always include nothing", one of these fails loudly.
-        let built_ids: [u8; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let built_ids: [u8; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12];
         for id in built_ids {
             assert!(
                 cov.section_ids_seen.contains(&id),
@@ -925,6 +948,26 @@ mod tests {
                 && cov.action_results_engine_reject_seen,
             "action-results tag coverage"
         );
+    }
+
+    /// A one-segment straight line's structure (M46's section in the generated frames).
+    fn test_line_put(id: u32) -> lines::Put {
+        let mut put = lines::Put::empty(crate::transport::LineId(id));
+        put.len = 256 * (1 + id % 4);
+        put.speed = 24;
+        put.out = crate::transport::Output::Next(crate::transport::LineId(id + 7));
+        put.seg_count = 1;
+        put.segs[0] = crate::transport::Segment {
+            len: put.len,
+            geometry: crate::transport::Geometry::Straight {
+                from: crate::world::WorldPos { x: 0, y: 128 },
+                to: crate::world::WorldPos {
+                    x: put.len as i32,
+                    y: 128,
+                },
+            },
+        };
+        put
     }
 
     /// Seeded corpus of malformed inputs: truncations, single-bit flips, an oversized varint, and
@@ -970,6 +1013,10 @@ mod tests {
                 let tiles: &[(u16, Tile)] = &[(0, Tile::new(1, 0, 0))];
                 let groups = [(ChunkCoord::new(0, 0), tiles)];
                 write_chunk_deltas::<WGame>(s, &groups, &[]);
+            });
+            fw.section(SectionId::LineStructs, |s| {
+                lines::write_put(s, &test_line_put(tick + 1));
+                lines::write_gone(s, crate::transport::LineId(tick + 2));
             });
             let n = sink.finish().unwrap();
             buf.truncate(n);
@@ -1065,6 +1112,7 @@ mod tests {
                                 SectionId::Presence | SectionId::Hashes | SectionId::ChunkTiles => {
                                     Ok(())
                                 }
+                                SectionId::LineStructs => lines::read(&mut br, |_| {}),
                             };
                             match result {
                                 Ok(()) => {}

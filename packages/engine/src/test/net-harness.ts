@@ -447,7 +447,8 @@ export interface NetHarness {
    * each tagged with the client's index (`HeadlessClient.desyncs()` is the per-client form). */
   desyncs(): (DesyncReport & { client: number })[]
   /** Throws when any client or the host recorded a desync report. `assertConverged()` calls it,
-   * unless a fault was injected (`corruptChunk`, `skipDelta`, `skipGlobalDelta`): that scenario
+   * unless a fault was injected (`corruptChunk`, `corruptLineStructure`, `skipDelta`,
+   * `skipGlobalDelta`): that scenario
    * expects reports and asserts them itself. */
   assertNoDesync(): void
   /** Hash-all dumps so far (each written as `<tick>-<cx>_<cy>.{client,host}.bin` under
@@ -800,6 +801,11 @@ export async function createNetHarness(opts: NetHarnessOptions): Promise<NetHarn
     client.corruptChunk = (cx, cy) => {
       faultInjected = true
       corruptChunk(cx, cy)
+    }
+    const corruptLineStructure = client.corruptLineStructure.bind(client)
+    client.corruptLineStructure = (id) => {
+      faultInjected = true
+      corruptLineStructure(id)
     }
     entries.push({
       client,

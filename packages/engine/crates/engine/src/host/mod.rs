@@ -9,6 +9,7 @@
 //! parameters; `sim_genesis` is what actually builds the `Sim<G>`.
 
 pub mod hashes;
+pub mod lines;
 #[cfg(feature = "measure-diff")]
 mod measure_diff;
 pub mod pacing;
@@ -174,6 +175,8 @@ struct ConnSlot<G: Game> {
     /// Feature `measure-diff` only: the last encoding sent per entity, for `measure_diff.rs`.
     #[cfg(feature = "measure-diff")]
     measure_prev: measure_diff::Prev,
+    /// M46: the line structures this connection holds and the lines owed to it (`host/lines.rs`).
+    lines: lines::LineRoute,
 }
 
 fn default_max_entities() -> u32 {
@@ -586,6 +589,9 @@ pub struct Host<G: Game> {
     /// (`.claude/rules/hot-paths.md`): cleared, refilled, then drained (never left non-empty)
     /// every `build_frame` call.
     scratch_presence: Vec<(PlayerId, PresenceRelayOp<G>)>,
+    /// M46: this frame's `LineStructs` plan (`host/lines.rs`), reserved at attach for the world's
+    /// `max_lines`.
+    scratch_lines: lines::LinePlan,
 
     // -- M22 steps 4-6: persistence identity, write-ahead sealing, snapshots -------------------
     /// The first 128 bits of the build hash (0005 "Sim identity"), parsed once from `SimConfig::
@@ -876,6 +882,7 @@ impl<G: Game> Host<G> {
             scratch_action_players: Vec::new(),
             presence: PresenceTable::empty(),
             scratch_presence: Vec::new(),
+            scratch_lines: lines::LinePlan::default(),
             build_hash: [0; 16],
             worldgen_fingerprint,
             last_logged_tick: Tick(0),
@@ -1087,6 +1094,14 @@ impl<G: Game> Host<G> {
         Ok(())
     }
 
+    /// The world's line cap (`WorldParams::max_lines`; 0 before genesis or for a world without
+    /// belts): what each connection's structure routing reserves.
+    fn line_cap(&self) -> u32 {
+        self.sim
+            .as_ref()
+            .map_or(0, |s| s.authority().store().transport().max_lines())
+    }
+
     /// A connection slot's assigned player, if it is currently connected.
     pub fn player_of(&self, conn: ConnId) -> Option<PlayerId> {
         self.conns.get(conn as usize)?.as_ref().map(|s| s.player)
@@ -1140,6 +1155,8 @@ impl<G: Game> Host<G> {
                 result: Err(Rejected::Engine(EngineReject::EngineFault)),
             })
             .collect();
+        // M46: the routing state is reserved for the world's line cap (0079 §5; 0 reserves nothing).
+        let line_cap = self.line_cap();
         self.conns[idx] = Some(ConnSlot {
             player,
             camera: None,
@@ -1159,7 +1176,9 @@ impl<G: Game> Host<G> {
             hashes: hashes::HashSchedule::new(self.last_tick.0, G::TICK_RATE.hz_value()),
             #[cfg(feature = "measure-diff")]
             measure_prev: Default::default(),
+            lines: lines::LineRoute::with_capacity(line_cap),
         });
+        self.scratch_lines.reserve(line_cap);
         player
     }
 
@@ -1199,6 +1218,8 @@ impl<G: Game> Host<G> {
                 result: Err(Rejected::Engine(EngineReject::EngineFault)),
             })
             .collect();
+        // M46: the routing state is reserved for the world's line cap (0079 §5; 0 reserves nothing).
+        let line_cap = self.line_cap();
         self.conns[idx] = Some(ConnSlot {
             player,
             camera: None,
@@ -1218,7 +1239,9 @@ impl<G: Game> Host<G> {
             hashes: hashes::HashSchedule::new(self.last_tick.0, G::TICK_RATE.hz_value()),
             #[cfg(feature = "measure-diff")]
             measure_prev: Default::default(),
+            lines: lines::LineRoute::with_capacity(line_cap),
         });
+        self.scratch_lines.reserve(line_cap);
         player
     }
 
@@ -1447,6 +1470,8 @@ impl<G: Game> Host<G> {
                 result: Err(Rejected::Engine(EngineReject::EngineFault)),
             })
             .collect();
+        // M46: the routing state is reserved for the world's line cap (0079 §5; 0 reserves nothing).
+        let line_cap = self.line_cap();
         self.conns[idx] = Some(ConnSlot {
             player,
             camera: initial_camera,
@@ -1466,7 +1491,9 @@ impl<G: Game> Host<G> {
             hashes: hashes::HashSchedule::new(self.last_tick.0, G::TICK_RATE.hz_value()),
             #[cfg(feature = "measure-diff")]
             measure_prev: Default::default(),
+            lines: lines::LineRoute::with_capacity(line_cap),
         });
+        self.scratch_lines.reserve(line_cap);
 
         self.write_welcome_for(player, epoch, welcome_sink);
         Ok(())
@@ -1482,6 +1509,11 @@ impl<G: Game> Host<G> {
             .as_ref()
             .map_or(0, |s| s.authority().store().last_seq(player).unwrap_or(0));
         let echoed_presence = self.presence.get(player).map(|e| e.sample);
+        // M46: the world's transport caps, which the client's replica reserves.
+        let (max_lines, max_items) = self.sim.as_ref().map_or((0, 0), |s| {
+            let t = s.authority().store().transport();
+            (t.max_lines(), t.max_items())
+        });
         let params = decode::<<G::Worldgen as Worldgen>::Params>(&self.worldgen_params_bytes)
             .expect("decoding this world's own worldgen params cannot fail")
             .0;
@@ -1499,6 +1531,8 @@ impl<G: Game> Host<G> {
                 last_processed_action_seq,
                 presence: echoed_presence.as_ref(),
                 hash_all: self.hash_mode == hashes::HashMode::All,
+                max_lines,
+                max_items,
             },
         );
     }
@@ -1531,6 +1565,8 @@ impl<G: Game> Host<G> {
                 // connection's own prior `attach` had not yet consumed (a resync this soon is not
                 // expected in practice, but a defensive `None` costs nothing).
                 slot.resume_pending = None;
+                // M46: the client empties its structures at this `Welcome`.
+                slot.lines.reset();
                 slot.player
             }
             _ => return Err(WireError::Malformed),
@@ -1812,6 +1848,7 @@ impl<G: Game> Host<G> {
     pub fn seal(&mut self) {
         if let Some(sim) = self.sim.as_mut() {
             sim.authority_mut().clear_changes();
+            sim.authority_mut().drain_structure_changes();
         }
     }
 
@@ -1983,9 +2020,12 @@ impl<G: Game> Host<G> {
         self.scratch_new_held.clear();
         while let Some(&q) = slot.pace.queue.first() {
             let c = q.chunk;
+            // M46: a chunk anchoring a line enters by snapshot, so its structures ride the
+            // snapshot's frame (forced `LineStructs` puts, `host/lines.rs`) at the bucket's price.
             let snapshot = q.kind == EnterKind::Resnapshot
                 || store.terrain().overlay(c).is_some_and(|o| !o.is_empty())
-                || !store.chunk_overlapping(c).is_empty();
+                || !store.chunk_overlapping(c).is_empty()
+                || store.transport().has_anchored(c, dims);
             // A snapshot is encoded once, here, to price it; the section copies these bytes.
             let snap_start = self.scratch_snap_bytes.len();
             let cost = if snapshot {
@@ -1997,6 +2037,7 @@ impl<G: Game> Host<G> {
                     &mut VecBytes(&mut self.scratch_snap_bytes),
                 );
                 (self.scratch_snap_bytes.len() - snap_start) as i64
+                    + i64::from(lines::anchored_bytes(store.transport(), c, dims))
             } else {
                 PRISTINE_ENTER_COST
             };
@@ -2082,6 +2123,23 @@ impl<G: Game> Host<G> {
             self.scratch_held.push((c, flags));
         }
         insertion_sort_by_key(&mut self.scratch_held, |(c, _)| (c.y, c.x));
+
+        // -- LineStructs (M46, `host/lines.rs`): which structures this frame carries.
+        lines::plan(
+            store.transport(),
+            dims,
+            &slot.lines,
+            &lines::FrameChunks {
+                held: &self.scratch_held,
+                entered: &self.scratch_entered,
+                keeps: &self.scratch_keep,
+                snapshots: &self.scratch_snapshot,
+                any_left: !self.scratch_left.is_empty(),
+            },
+            // The put budget halves per consecutive overflow, like the bucket's frame cap.
+            (out.len() / lines::PUT_BUDGET_DIVISOR) >> slot.pace.overflow_shift.min(8),
+            &mut self.scratch_lines,
+        );
         self.scratch_tile_flat.clear();
         self.scratch_entity_ops.clear();
         for (scopes, delta) in changes {
@@ -2233,7 +2291,9 @@ impl<G: Game> Host<G> {
                 Err(i) => {
                     let mut count = crate::bytes::CountSink::default();
                     encode_chunk_snapshot(store, chunk, version, &mut count);
-                    let len = count.0 as u32;
+                    // M46: the snapshot a collapse queues is priced with its anchored puts.
+                    let len =
+                        count.0 as u32 + lines::anchored_bytes(store.transport(), chunk, dims);
                     self.scratch_snapshot_len.insert(i, (chunk, len));
                     len
                 }
@@ -2344,6 +2404,7 @@ impl<G: Game> Host<G> {
             && self.scratch_tile_flat.is_empty()
             && self.scratch_entity_ops.is_empty()
             && self.scratch_presence.is_empty()
+            && self.scratch_lines.is_empty()
         {
             let heartbeat_ticks = G::TICK_RATE.millis(HEARTBEAT_MS).0;
             let since_last_send = self.last_tick.0.wrapping_sub(slot.last_sent_tick.0);
@@ -2355,7 +2416,8 @@ impl<G: Game> Host<G> {
         // Only chunks whose state the client is guaranteed to hold once it has applied this frame
         // are hashed: held, not collapsed (deltas withheld until its snapshot goes), not queued for
         // a snapshot, not leaving.
-        if build && chunk_due {
+        // M46: a frame that defers a put the client's chunk hash would see carries none.
+        if build && chunk_due && !self.scratch_lines.hashes_unsafe {
             self.scratch_eligible.clear();
             for &c in &slot.pace.held {
                 if !slot.pace.is_collapsed(c)
@@ -2504,6 +2566,14 @@ impl<G: Game> Host<G> {
                     }
                 });
             }
+            // M46: `LineStructs` = 12, after `ChunkKeeps` (11).
+            if !self.scratch_lines.is_empty() {
+                let ops = &self.scratch_lines.ops;
+                let transport = store.transport();
+                fw.section(SectionId::LineStructs, |s| {
+                    lines::write_section(transport, ops, s);
+                });
+            }
 
             let _ = fw;
             // `SliceSink`'s own overflow convention: a too-small `out` never panics, it just drops the
@@ -2519,6 +2589,7 @@ impl<G: Game> Host<G> {
         } else {
             0
         };
+        lines::finish(&mut slot.lines, &self.scratch_lines, !overflowed);
         if overflowed {
             // The frame did not fit `out`, so nothing was sent: give back what the drain paid and
             // marked held for it (else the client would never get those chunks while the host sent
@@ -2673,7 +2744,7 @@ impl<G: Game> Host<G> {
         let mut h = crate::hash::Fnv64::new();
         for c in chunks {
             let version = self.chunk_versions.get(&c).copied().unwrap_or(0);
-            encode_chunk_snapshot(store, c, version, &mut h);
+            crate::integrity::write_chunk_state(store, c, version, &mut h);
         }
         crate::codec::encode_to(store.global(), &mut h).expect("hashing G::Global cannot fail");
         if let Ok(player) = store.player(slot.player) {
@@ -2923,6 +2994,7 @@ where
             scratch_action_players: Vec::new(),
             presence: PresenceTable::empty(),
             scratch_presence: Vec::new(),
+            scratch_lines: lines::LinePlan::default(),
             build_hash,
             worldgen_fingerprint,
             last_logged_tick: Tick(0),

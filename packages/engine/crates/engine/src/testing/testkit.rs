@@ -443,7 +443,13 @@ where
     ) -> (usize, PlayerId) {
         let conn = self.clients.len() as ConnId;
         let player = self.host.connect(conn);
-        let replica = Replica::<G>::new(dims, source, cache, player);
+        let mut replica = Replica::<G>::new(dims, source, cache, player);
+        // What `Welcome` does (M46): the replica reserves the world's transport caps.
+        let (max_lines, max_items) = self.host.sim().map_or((0, 0), |s| {
+            let t = s.authority().store().transport();
+            (t.max_lines(), t.max_items())
+        });
+        replica.set_transport_caps(max_lines, max_items);
         self.clients.push(LoopbackClient {
             conn,
             core: ClientCore::new(replica),

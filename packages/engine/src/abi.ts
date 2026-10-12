@@ -2,7 +2,7 @@
 // the rule for adding to the ABI; `tests/wasm/abi-registry.test.ts` fails when the two differ.
 // No imports: test drivers under Node, Bun and the browser load this file as it is.
 
-export const ABI_VERSION = 40
+export const ABI_VERSION = 41
 
 /** Size of the static boot region: config JSON in at offset 0, panic text out in the tail. */
 export const BOOT_BYTES = 65536
@@ -257,6 +257,13 @@ export const ABI_EXPORTS = {
   // Fault injection, `engine/test` only: flips one replica byte of the held chunk (cx, cy);
   // `Status.NotCached` when it is not held.
   client_corrupt_chunk: { role: 'client', params: 2, result: 'status' },
+  // M46 (`ABI_VERSION` 40 -> 41), `engine/test` only: the client replica's held line structures
+  // as UTF-8 JSON into `Tx`, returning its length (`0` when `Tx` is too small); shape in
+  // `abi/registry.rs` (`engine/test`'s `lineStructures`).
+  client_line_structures: { role: 'client', params: 0, result: 'len' },
+  // M46, `engine/test` only, fault injection: flips bit 0 of a held line's `speed` in the client
+  // replica; `Status.NotCached` when the line is not held.
+  client_corrupt_line: { role: 'client', params: 1, result: 'status' },
   // M16: parses one action-ring record (`[seq u32 LE][len u32
   // LE][UTF-8 JSON]`) out of `len` bytes of `RegionId.Rx` (shared with `on_input`'s own,
   // differently-shaped records) into the game's `Action`, queues it for the next uplink batch.

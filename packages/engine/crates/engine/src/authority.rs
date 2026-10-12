@@ -410,6 +410,12 @@ impl<G: Game> Authority<G> {
         self.in_genesis = on;
     }
 
+    /// Empties the transport store's structure-change list (M46; `Host::seal`, after every
+    /// connection's frame has read it).
+    pub fn drain_structure_changes(&mut self) {
+        self.store.transport_mut().drain_structure_changes();
+    }
+
     pub fn clear_changes(&mut self) {
         self.changes.clear();
     }
@@ -435,6 +441,9 @@ impl<G: Game> Authority<G> {
     /// this tick's `G::tick`, so this tick's rule already sees the closed-up list) changes it.
     /// Also resets the per-tick visited counter.
     pub(crate) fn begin_tick(&mut self) {
+        // M46: structure changes this tick are stamped with its tick (`Transport::set_now`).
+        let now = self.tick.0;
+        self.store.transport_mut().set_now(now);
         self.store.wake_swap();
         self.store.active_compact_all();
         self.entities_visited_per_tick = 0;

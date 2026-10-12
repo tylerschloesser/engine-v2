@@ -9,7 +9,8 @@ Welcome · 0x04 ResyncChunk · 0x05 Bye · 0x06 FrameBundle`; `0x07..=0x7F` free
 `u32` (first byte `>= 0x80`, 0024 §8).
 **Section ids** (ascending, each once, empty omitted, unknown malformed): `1 ActionResults ·
 2 Global · 3 OwnPlayer · 4 ChunkEnterPristine · 5 ChunkSnapshots · 6 ChunkLeaves · 7 ChunkDeltas ·
-8 Presence · 9 Hashes · 10 ChunkTiles (reserved, unbuilt) · 11 ChunkKeeps`.
+8 Presence · 9 Hashes · 10 ChunkTiles (reserved, unbuilt) · 11 ChunkKeeps · 12 LineStructs`. A client
+applies every section of a frame before it checks the frame's `Hashes` (section 12 comes after 9).
 **Frame**: `[type u8][flags u8][tick u32][ack_seq u32]` (10 B, flags reserved-zero: nonzero is `Malformed`, since strict build equality makes forward compatibility pointless); no sections =
 heartbeat. **FrameBundle** (`bundle.rs`): `[0x06][n varint]` then `n` x `[len varint][whole frame]`. **Coord list**: sorted `(cy,cx)`, first entry absolute zigzag pair, rest zigzag deltas.
 **Overlay runs**: `n_runs varint`, per run `gap varint`, `head=len<<1|repeat`, then `repeat?1:len`
@@ -33,6 +34,18 @@ u8)` · `Codec G::Global`. **OwnPlayer**: `PlayerId varint · Codec G::Player`. 
 flags u8 (bit0 camera, bit1 presence) · last_received_tick u32 · n varint x (seq varint, len
 varint, Codec action) · CameraReport (16 B) · presence (len varint + bytes)`. `CameraReport`:
 `{center_x/y: i32, half_w/h: u16, vel_x/y: i16}`. Uplink flag bits 2-7 stay free for a typed stream record for continuous actions: not built; the trigger is the first game sending an action every tick (own ADR).
+
+**LineStructs** (section 12, `wire/lines.rs`, M46, 0078 §1): a flat record list to the section's end,
+`LineId` strictly ascending across it; record = `tag u8` then `0 Put`: `id varint · len u32 · speed u16 ·
+out · seg_count u8 · seg_count x segment`; `1 Gone`: `id varint`. `out` and `segment` are the transport
+codec's own bytes (`transport/codec.rs`: `out` = tag `0 DeadEnd`, `1 Next + id u32`, `2 Sink`, `3 Merge +
+line u32 + at u32`, `4 Fork + a u32 + b u32`, with no flag bit and no fork toggle; `segment` = `len u32 · tag
+u8 · 0 Straight from/to 4 x i32 | 1 Arc centre 2 x i32 · radius_q8 u32 · start_turn_q8 u16 · sweep_q8 i16`).
+Malformed: an unknown tag, truncation, ids not ascending, a `Put` with `len` or `speed` 0, flag bits in `out`'s
+tag, or `seg_count` 0 or past 16 (`MAX_SEGMENTS`). A line without segments is never sent. The structures
+of a chunk entering by snapshot (and of a resync snapshot) ride the same frame's section 12, not the
+snapshot entry; the per-chunk hash covers, after the snapshot bytes, the `Put` records of the lines
+anchored in the chunk (`integrity.rs`).
 
 A `FrameWriter::section` body runs twice (measure, then write): build any stateful writer (a
 coordinate cursor) *inside* the closure, never capture one by `&mut` from outside it.

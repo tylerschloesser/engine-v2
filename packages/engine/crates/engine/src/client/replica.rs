@@ -8,6 +8,14 @@
 //! it): `tile`/`traits_at` are `Unknown` outside the held set (0007 §1); `entity`/`player`/`global`
 //! are total, exactly like `View`'s own impl, since neither is gated by chunk membership there
 //! either.
+//!
+//! M46 (0078 §1): the store's transport is in replica mode (`Transport::set_replica`), reserved at
+//! `Welcome` for the world's own caps ([`Replica::set_transport_caps`]: the client pays what the
+//! world declares, 0079 §5) and emptied there; it holds the structure of every line the host
+//! routes to this connection (`LineStructs`, applied through [`Replica::apply_structure`]) and
+//! answers item reads `Unknown` until M47. A snapshot of a chunk drops the structures anchored in
+//! it first ([`Replica::drop_anchored_structures`]): the host sends them again in the same frame,
+//! so a resync replaces them like the chunk's entities.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -17,9 +25,10 @@ use crate::game::{EntityId, Game, PlayerId, Unknown};
 use crate::hash::Fnv64;
 use crate::store::Store;
 use crate::time::Tick;
-use crate::wire::encode_chunk_snapshot;
 
 use super::remote_presence::RemotePresences;
+use crate::transport::{Item, LineId, Output, Segment};
+use crate::world::WorldPos;
 use crate::world::{
     CacheCapacity, ChunkCoord, ChunkDims, PristineSource, Registry, TerrainStore, Tile, TilePos,
     TileRect, TraitSet,
@@ -75,6 +84,9 @@ pub struct Replica<G: Game> {
     /// Reused across `entities_in` calls (`.claude/rules/hot-paths.md`): a `RefCell` since
     /// `WorldRead::entities_in` takes `&self`.
     entities_in_scratch: RefCell<Vec<EntityId>>,
+    /// Reused by [`Self::drop_anchored_structures`] (capacity settles at the most lines anchored in
+    /// one chunk).
+    scratch_lines: Vec<crate::transport::LineId>,
 }
 
 impl<G: Game> Replica<G> {
@@ -122,8 +134,10 @@ impl<G: Game> Replica<G> {
             terrain.memory_bytes(),
             CLIENT_CACHE_BUDGET_BYTES
         );
+        let mut store = Store::new(terrain, G::Global::default());
+        store.transport_mut().set_replica();
         Replica {
-            store: Store::new(terrain, G::Global::default()),
+            store,
             dims,
             own_player,
             held: BTreeMap::new(),
@@ -132,7 +146,76 @@ impl<G: Game> Replica<G> {
             remote_presences: RemotePresences::new(),
             roster: BTreeMap::new(),
             entities_in_scratch: RefCell::new(Vec::new()),
+            scratch_lines: Vec::new(),
         }
+    }
+
+    /// `Welcome` (M46): reserves the replica's transport store for the world's caps (once: a
+    /// second `Welcome` with the same caps is a no-op, with other caps keeps the first reservation)
+    /// and drops every structure the previous connection routed, so this one starts empty. Public
+    /// for native tests that connect without a `Welcome` (`Host::connect`).
+    pub fn set_transport_caps(&mut self, max_lines: u32, max_items: u32) {
+        let t = self.store.transport_mut();
+        let _ = t.set_caps(max_lines, max_items);
+        t.clear_structures();
+    }
+
+    /// One `LineStructs` record (M46): `Transport::apply_structure` on the replica's store.
+    pub(crate) fn apply_structure(
+        &mut self,
+        rec: crate::wire::lines::Record<'_>,
+    ) -> Result<(), crate::transport::TransportError> {
+        self.store.transport_mut().apply_structure(rec)
+    }
+
+    /// The chunk a put's line is anchored in (its front point's), held or not.
+    pub(crate) fn anchor_of(&self, put: &crate::wire::lines::Put) -> Option<ChunkCoord> {
+        crate::transport::Transport::anchor_of(put, self.dims)
+    }
+
+    /// Before a chunk snapshot is applied: drops every held structure anchored in `chunk` (the
+    /// host sends each again in the same frame's `LineStructs`, module doc).
+    pub(crate) fn drop_anchored_structures(&mut self, chunk: ChunkCoord) {
+        self.scratch_lines.clear();
+        let lines = &mut self.scratch_lines;
+        self.store
+            .transport()
+            .anchored_in(chunk, self.dims, &mut |l| lines.push(l));
+        for i in 0..self.scratch_lines.len() {
+            let id = self.scratch_lines[i];
+            let _ = self
+                .store
+                .transport_mut()
+                .apply_structure(crate::wire::lines::Record::Gone(crate::wire::lines::Gone {
+                    id,
+                }));
+        }
+    }
+
+    /// Every held structure, ascending by id (`engine/test`'s `lineStructures`).
+    pub fn structures(&self, mut f: impl FnMut(&crate::wire::lines::Put)) {
+        let t = self.store.transport();
+        t.line_ids(&mut |id| {
+            if let Ok(put) = t.structure(id) {
+                f(&put);
+            }
+        });
+    }
+
+    /// Test fault injection (`client_corrupt_line`): flips bit 0 of a held line's `speed` (2 for
+    /// a speed of 1, so it stays a legal speed). `false` when the line is not held or the flipped
+    /// speed would not fit its `len`.
+    pub fn debug_corrupt_line(&mut self, id: crate::transport::LineId) -> bool {
+        let t = self.store.transport_mut();
+        let Ok(mut put) = t.structure(id) else {
+            return false;
+        };
+        put.speed = match put.speed ^ 1 {
+            0 => 2,
+            s => s,
+        };
+        t.apply_structure(crate::wire::lines::Record::Put(&put))
+            .is_ok()
     }
 
     pub fn own_player(&self) -> PlayerId {
@@ -508,11 +591,12 @@ impl<G: Game> Replica<G> {
         // same way here rather than trusting the map's natural iteration order (host/mod
         // Deviations; this was a real bug, caught by `replica_hash_equals_host_region_hash`: same
         // chunk set, same per-chunk bytes, different hash, because the two sides fed
-        // `encode_chunk_snapshot` calls to `Fnv64` in different orders).
+        // `encode_chunk_snapshot` calls to `Fnv64` in different orders). M46: each chunk's bytes
+        // are `integrity::write_chunk_state` (the snapshot, then its anchored structures).
         let mut chunks: Vec<(ChunkCoord, u32)> = self.held.iter().map(|(&c, &v)| (c, v)).collect();
         chunks.sort_by_key(|(c, _)| (c.y, c.x));
         for (chunk, version) in chunks {
-            encode_chunk_snapshot(&self.store, chunk, version, &mut h);
+            crate::integrity::write_chunk_state(&self.store, chunk, version, &mut h);
         }
         crate::codec::encode_to(self.store.global(), &mut h)
             .expect("hashing G::Global cannot fail");
@@ -523,14 +607,74 @@ impl<G: Game> Replica<G> {
     }
 }
 
+/// The replica's transport read side (M46): the store's (structures of held lines, item reads
+/// `Unknown`), except that `lines_at` names a tile, so it is `Unknown` outside the held chunks (a
+/// line there may exist and not be routed to this connection). Inside a held chunk it answers `Ok`
+/// with the held lines, and that answer can be incomplete for a few frames: a put the host
+/// deferred under its byte budget (`host/lines.rs`) arrives later. Accepted knowingly (M46 review):
+/// M47/M49's readers tolerate a structure arriving late, and prediction never reads it
+/// (`Predicting` answers every transport read `Unknown`).
+impl<G: Game> crate::transport::TransportRead for Replica<G> {
+    fn lines_len(&self) -> u32 {
+        self.store.transport().lines_len()
+    }
+    fn len(&self, line: LineId) -> Result<u32, Unknown> {
+        self.store.transport().len(line)
+    }
+    fn speed(&self, line: LineId) -> Result<u16, Unknown> {
+        self.store.transport().speed(line)
+    }
+    fn out(&self, line: LineId) -> Result<Output, Unknown> {
+        self.store.transport().out(line)
+    }
+    fn count(&self, line: LineId) -> Result<u32, Unknown> {
+        self.store.transport().count(line)
+    }
+    fn front(&self, line: LineId) -> Result<Option<(Item, u32)>, Unknown> {
+        self.store.transport().front(line)
+    }
+    fn items_in(&self, line: LineId, f: &mut dyn FnMut(Item, u32)) -> Result<(), Unknown> {
+        self.store.transport().items_in(line, f)
+    }
+    fn sunk(&self, line: LineId) -> Result<u64, Unknown> {
+        self.store.transport().sunk(line)
+    }
+    fn toggle(&self, line: LineId) -> Result<bool, Unknown> {
+        self.store.transport().toggle(line)
+    }
+    fn segments(&self, line: LineId, f: &mut dyn FnMut(Segment)) -> Result<(), Unknown> {
+        self.store.transport().segments(line, f)
+    }
+    fn pos_to_world(&self, line: LineId, pos: u32) -> Result<Option<WorldPos>, Unknown> {
+        self.store.transport().pos_to_world(line, pos)
+    }
+    fn chunks_of(
+        &self,
+        line: LineId,
+        dims: ChunkDims,
+        f: &mut dyn FnMut(ChunkCoord),
+    ) -> Result<(), Unknown> {
+        self.store.transport().chunks_of(line, dims, f)
+    }
+    fn anchor(&self, line: LineId, dims: ChunkDims) -> Result<Option<ChunkCoord>, Unknown> {
+        self.store.transport().anchor(line, dims)
+    }
+    fn lines_at(&self, tile: TilePos, f: &mut dyn FnMut(LineId, u32)) -> Result<(), Unknown> {
+        if !self.held.contains_key(&self.dims.chunk_of(tile)) {
+            return Err(Unknown);
+        }
+        self.store.transport().lines_at(tile, f)
+    }
+}
+
 impl<G: Game> WorldRead<G> for Replica<G> {
     fn tick(&self) -> Tick {
         self.tick
     }
 
-    /// Empty until M46 replicates line structures (0078): every line is `Unknown`.
+    /// The structures this connection holds (M46, module doc); item reads `Unknown` until M47.
     fn transport(&self) -> &dyn crate::transport::TransportRead {
-        self.store.transport()
+        self
     }
 
     fn tile(&self, p: TilePos) -> Result<Tile, Unknown> {

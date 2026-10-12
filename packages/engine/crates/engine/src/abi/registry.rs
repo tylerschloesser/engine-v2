@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 40;
+pub const ABI_VERSION: u32 = 41;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -567,6 +567,23 @@ pub trait Instance: Sized + 'static {
     /// injection: flips one replica byte of the held chunk `(cx as i32, cy as i32)`;
     /// `Status::NotCached` when the client does not hold it.
     fn client_corrupt_chunk(&mut self, _cx: u32, _cy: u32) -> Status {
+        Status::Unsupported
+    }
+
+    /// M46 (`ABI_VERSION` 40 -> 41), `engine/test` only: the client replica's held line
+    /// structures as UTF-8 JSON into `Tx`, returning the byte count (`0` when `Tx` is too small):
+    /// `{"structsDropped":n,"lines":[{"id","len","speed","out","segments"}]}`, ascending by id
+    /// (`out` is `{"kind":"DeadEnd"|"Sink"}`, `{"kind":"Next","line"}`, `{"kind":"Merge","line",
+    /// "at"}` or `{"kind":"Fork","a","b"}`; a segment is `{"len","kind":"Straight","from":[x,y],
+    /// "to":[x,y]}` or `{"len","kind":"Arc","centre":[x,y],"radiusQ8","startTurnQ8","sweepQ8"}`).
+    fn client_line_structures(&mut self, _tx: &mut [u8]) -> usize {
+        0
+    }
+
+    /// M46 (`ABI_VERSION` 40 -> 41), `engine/test` only, fault injection: flips bit 0 of a held
+    /// line's `speed` in the client replica (`Replica::debug_corrupt_line`); `Status::NotCached`
+    /// when the line is not held.
+    fn client_corrupt_line(&mut self, _line: u32) -> Status {
         Status::Unsupported
     }
 
@@ -1177,6 +1194,14 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_corrupt_chunk(cx: u32, cy: u32) -> u32 {
             $crate::abi::client_corrupt_chunk(&__ENGINE_SLOT, cx, cy) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_line_structures() -> i32 {
+            $crate::abi::client_line_structures(&__ENGINE_SLOT)
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_corrupt_line(line: u32) -> u32 {
+            $crate::abi::client_corrupt_line(&__ENGINE_SLOT, line) as u32
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn on_action(len: u32) -> u32 {

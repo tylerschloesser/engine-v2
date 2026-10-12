@@ -235,6 +235,17 @@ pub struct ClientCore<G: Game> {
     dump_pending: Vec<PendingDump>,
     /// Completed dumps, oldest first, at most [`MAX_DUMPS`].
     dumps: Vec<DesyncDump>,
+    /// This frame's `Hashes` entries, checked after every section of the frame is applied (M46:
+    /// `LineStructs`, section 12, comes after `Hashes`, 9). Capacity settles at the most chunks
+    /// one frame hashes.
+    scratch_hashes: Vec<HashEntry>,
+    /// Chunks whose resync snapshot this frame carried while a dump of theirs was pending.
+    dump_ready: Vec<ChunkCoord>,
+    /// M46: `LineStructs` puts the replica could not hold (`Full`, or a structure its store
+    /// refuses), counted; the first is reported through the desync path of its anchor chunk
+    /// (`structs_reported`), never again, so no resync loop starts from it.
+    structs_dropped: u32,
+    structs_reported: bool,
 }
 
 /// How many completed dumps a client keeps for the harness to take.
@@ -330,7 +341,23 @@ impl<G: Game> ClientCore<G> {
             hash_all: false,
             dump_pending: Vec::new(),
             dumps: Vec::new(),
+            scratch_hashes: Vec::new(),
+            dump_ready: Vec::new(),
+            structs_dropped: 0,
+            structs_reported: false,
         }
+    }
+
+    /// `LineStructs` puts this client could not hold (M46; `transport.structsDropped`).
+    pub fn structs_dropped(&self) -> u32 {
+        self.structs_dropped
+    }
+
+    /// `Welcome` (M46): the replica reserves the world's transport caps and empties its
+    /// structures (`Replica::set_transport_caps`); the new session may report a refused put again.
+    pub fn on_welcome_transport(&mut self, max_lines: u32, max_items: u32) {
+        self.replica.set_transport_caps(max_lines, max_items);
+        self.structs_reported = false;
     }
 
     /// Decodes one action-ring record (`[seq u32 LE][len u32 LE][UTF-8 JSON]`, Scope) into
@@ -1131,6 +1158,9 @@ impl<G: Game> ClientCore<G> {
                     crate::wire::read_hashes(&mut br, |_| {})?;
                 }
                 SectionId::ChunkTiles => {} // Non-scope body (opaque here)
+                SectionId::LineStructs => {
+                    crate::wire::lines::read(&mut br, |_| {})?;
+                }
             }
         }
         Ok(())
@@ -1202,22 +1232,15 @@ impl<G: Game> ClientCore<G> {
                         // name is gone on the host.
                         self.replica
                             .drop_unnamed_entities(chunk, &self.scratch_snapshot_ids);
+                        // M46: its anchored structures come again in this frame's `LineStructs`.
+                        self.replica.drop_anchored_structures(chunk);
                         self.replica
                             .apply_snapshot_overlay(chunk, version, &self.scratch_tiles);
                         self.resyncs.retain(|r| r.coord != chunk);
-                        if let Some(i) = self.dump_pending.iter().position(|d| d.coord == chunk) {
-                            let pending = self.dump_pending.remove(i);
-                            let mut host = Vec::new();
-                            self.replica.encode_chunk(chunk, &mut host);
-                            if self.dumps.len() == MAX_DUMPS {
-                                self.dumps.remove(0);
-                            }
-                            self.dumps.push(DesyncDump {
-                                tick: pending.tick,
-                                coord: chunk,
-                                client: pending.client,
-                                host,
-                            });
+                        if self.dump_pending.iter().any(|d| d.coord == chunk) {
+                            // Encoded once the whole frame is applied (`finish_dumps`): the
+                            // chunk's structures come in this frame's `LineStructs` (M46).
+                            self.dump_ready.push(chunk);
                         }
                         summary.chunk_snapshots += 1;
                     }
@@ -1295,70 +1318,39 @@ impl<G: Game> ClientCore<G> {
                     .expect("validated");
                 }
                 SectionId::Hashes => {
-                    // Right after this frame's own sections up to here, against the replica alone
-                    // (the prediction overlay is rebuilt after `apply` and never hashed).
+                    // Checked once the whole frame is applied (`check_hashes`): `LineStructs`
+                    // comes after this section.
+                    self.scratch_hashes.clear();
+                    let hashes = &mut self.scratch_hashes;
+                    crate::wire::read_hashes(&mut br, |entry| hashes.push(entry))
+                        .expect("validated");
+                }
+                SectionId::LineStructs => {
                     let ClientCore {
                         replica,
                         desyncs,
                         resyncs,
-                        hash_all,
-                        dump_pending,
+                        structs_dropped,
+                        structs_reported,
                         ..
                     } = self;
                     let tick = header.tick;
-                    crate::wire::read_hashes(&mut br, |entry| match entry {
-                        HashEntry::Chunk { coord, hash } => {
-                            if let Some(mine) = replica.chunk_hash(coord)
-                                && mine != hash
+                    crate::wire::lines::read(&mut br, |rec| {
+                        if replica.apply_structure(rec).is_err() {
+                            *structs_dropped += 1;
+                            if let crate::wire::lines::Record::Put(put) = rec
+                                && !*structs_reported
+                                && let Some(anchor) = replica.anchor_of(put)
                             {
+                                *structs_reported = true;
                                 Self::note_desync(
                                     desyncs,
                                     resyncs,
                                     tick,
                                     DesyncScope::Chunk,
-                                    coord,
-                                    hash,
-                                    mine,
-                                );
-                                if *hash_all
-                                    && dump_pending.len() < MAX_DUMPS
-                                    && !dump_pending.iter().any(|d| d.coord == coord)
-                                {
-                                    let mut client = Vec::new();
-                                    replica.encode_chunk(coord, &mut client);
-                                    dump_pending.push(PendingDump {
-                                        tick,
-                                        coord,
-                                        client,
-                                    });
-                                }
-                            }
-                        }
-                        HashEntry::Global { hash } => {
-                            let mine = replica.global_hash();
-                            if mine != hash {
-                                Self::note_desync(
-                                    desyncs,
-                                    resyncs,
-                                    tick,
-                                    DesyncScope::Global,
-                                    RESERVED_SCOPE_COORD,
-                                    hash,
-                                    mine,
-                                );
-                            }
-                        }
-                        HashEntry::OwnPlayer { hash } => {
-                            let mine = replica.own_player_hash();
-                            if mine != hash {
-                                Self::note_desync(
-                                    desyncs,
-                                    resyncs,
-                                    tick,
-                                    DesyncScope::OwnPlayer,
-                                    RESERVED_SCOPE_COORD,
-                                    hash,
-                                    mine,
+                                    anchor,
+                                    0,
+                                    0,
                                 );
                             }
                         }
@@ -1368,7 +1360,106 @@ impl<G: Game> ClientCore<G> {
                 SectionId::ChunkTiles | SectionId::ChunkKeeps => {} // Non-scope bodies
             }
         }
+        self.finish_dumps();
+        self.check_hashes(header.tick);
         summary
+    }
+
+    /// Completes the dumps whose resync snapshot this frame carried, from the replica as the whole
+    /// frame left it.
+    fn finish_dumps(&mut self) {
+        for k in 0..self.dump_ready.len() {
+            let chunk = self.dump_ready[k];
+            let Some(i) = self.dump_pending.iter().position(|d| d.coord == chunk) else {
+                continue;
+            };
+            let pending = self.dump_pending.remove(i);
+            let mut host = Vec::new();
+            self.replica.encode_chunk(chunk, &mut host);
+            if self.dumps.len() == MAX_DUMPS {
+                self.dumps.remove(0);
+            }
+            self.dumps.push(DesyncDump {
+                tick: pending.tick,
+                coord: chunk,
+                client: pending.client,
+                host,
+            });
+        }
+        self.dump_ready.clear();
+    }
+
+    /// The frame's `Hashes` entries (staged by `apply`), against the replica as the whole frame
+    /// left it (the prediction overlay is rebuilt after `apply` and never hashed).
+    fn check_hashes(&mut self, tick: u32) {
+        for i in 0..self.scratch_hashes.len() {
+            let ClientCore {
+                replica,
+                desyncs,
+                resyncs,
+                hash_all,
+                dump_pending,
+                ..
+            } = self;
+            match self.scratch_hashes[i] {
+                HashEntry::Chunk { coord, hash } => {
+                    if let Some(mine) = replica.chunk_hash(coord)
+                        && mine != hash
+                    {
+                        Self::note_desync(
+                            desyncs,
+                            resyncs,
+                            tick,
+                            DesyncScope::Chunk,
+                            coord,
+                            hash,
+                            mine,
+                        );
+                        if *hash_all
+                            && dump_pending.len() < MAX_DUMPS
+                            && !dump_pending.iter().any(|d| d.coord == coord)
+                        {
+                            let mut client = Vec::new();
+                            replica.encode_chunk(coord, &mut client);
+                            dump_pending.push(PendingDump {
+                                tick,
+                                coord,
+                                client,
+                            });
+                        }
+                    }
+                }
+                HashEntry::Global { hash } => {
+                    let mine = replica.global_hash();
+                    if mine != hash {
+                        Self::note_desync(
+                            desyncs,
+                            resyncs,
+                            tick,
+                            DesyncScope::Global,
+                            RESERVED_SCOPE_COORD,
+                            hash,
+                            mine,
+                        );
+                    }
+                }
+                HashEntry::OwnPlayer { hash } => {
+                    let mine = replica.own_player_hash();
+                    if mine != hash {
+                        Self::note_desync(
+                            desyncs,
+                            resyncs,
+                            tick,
+                            DesyncScope::OwnPlayer,
+                            RESERVED_SCOPE_COORD,
+                            hash,
+                            mine,
+                        );
+                    }
+                }
+            }
+        }
+        self.scratch_hashes.clear();
     }
 }
 
