@@ -1,9 +1,9 @@
 # M45: Transport scale benchmark
 
-Status: not started · After: 41, 44 · Tyler-dependent: no
+Status: not started · After: 41, 44b · Tyler-dependent: no · Revised 2026-10-12 from 0079 §5, §14-§16 (the caps are opt-in and 16.5 MiB at the recommended values)
 
 ## Goal
-The production transport module meets Tyler's scale: a world tick with 50,000 belt tiles and 250,000 items runs in at most 5 ms median natively in release on the baseline machine, gated by a baseline (`belts-tick.json`) that a regression trips; the same `.wasm` under Node reports its ratio (warn-only); the `max_lines`/`max_items` defaults are checked against the phone memory split. M40's spike is deleted. Phase end: tag `belts-core-complete`.
+The production transport module meets Tyler's scale: a world tick with 50,000 belt tiles and 250,000 items runs in at most 5 ms median natively in release on the baseline machine, gated by a baseline (`belts-tick.json`) that a regression trips; the same `.wasm` under Node reports its ratio (warn-only); the recommended `max_lines`/`max_items` (0076 §8) are measured against the phone memory split and the largest caps that fit the 8 MiB slack are recorded as M57's phone candidates. M40's spike is deleted. Phase end: tag `belts-core-complete`.
 
 ## Read first
 1. `docs/architecture/README.md`
@@ -14,12 +14,12 @@ Rules that apply: `.claude/rules/hot-paths.md`. Skills: `run-tests` ("The slow t
 
 ## Scope
 - `engine::testing::bench` (feature `testing`): `run_in_release`, `gate` moved from the reference game's `tests/common/bench_run.rs` so a fixture can use them; the reference game's copy becomes a re-export.
-- `fx-belts/tests/bench_belts.rs`: `slow_tick_belts_large`: M40's `bench_world` (`Mixed` regime) built through the real `Op` requests at genesis (a `Belts::genesis` that reads `BeltsParams.bench` like the reference game's `RefParams.bench`), `Host<Belts>` with 8 connections holding maximum views (M36's shape), 200 warm-up and 1,200 measured ticks; a tick = admit + seal + tick + build_frame x 8. Metrics: `medianMs`, `p99Ms`, `maxMs`, `tickMedianMs` (the sim step alone), `advanceMedianMs` (the transport advance alone, from `bench_phase` marks), `framesMedianMs`, `frameBytesPerTick`. Baseline `packages/engine/baselines/belts-tick.json` with `limits.medianMs: 5`, `gated: ["medianMs"]`, fingerprint and conditions as `tick.json`.
+- `fx-belts/tests/bench_belts.rs`: `slow_tick_belts_large`: M40's `bench_world` (`Mixed` regime) built at genesis by a `Belts::genesis` that reads `BeltsParams.bench` (a new `Worldgen::Params` type for the fixture, like the reference game's `RefParams.bench`; genesis creates the lines directly through `transport_mut()`, which is `Ok` in genesis (0079 §4), not through requests: 3,810 lines would exceed the request pattern's 32-slot table), with the world's caps set from `WorldConfig.params.maxLines`/`maxItems` (the recommended values), `Host<Belts>` with 8 connections holding maximum views (M36's shape), 200 warm-up and 1,200 measured ticks; a tick = admit + seal + tick + build_frame x 8. Metrics: `medianMs`, `p99Ms`, `maxMs`, `tickMedianMs` (the sim step alone), `advanceMedianMs` (the transport advance alone, from `bench_phase` marks), `framesMedianMs`, `frameBytesPerTick`. Baseline `packages/engine/baselines/belts-tick.json` with `limits.medianMs: 5`, `gated: ["medianMs"]`, fingerprint and conditions as `tick.json`.
 - The Node twin: `tests/netcode/tick-belts-large-node.test.ts` (`tick-belts-large node @slow`, warn-only) on the `fx-belts` `.wasm` through `createWorldServer`, reporting the ratio to native in its output and in Deviations (0077 §2's deferred WASM figure).
 - A `slow_snapshot_belts_large`: encode and decode time and bytes of the transport store at scale (reported; the snapshot proxy of M36 applies: `SNAPSHOT_PROXY_MS`).
-- The phone split check: `max_lines` and `max_items` defaults against 0007 §8's 64 MiB split (a unit test over `size_of` the real line and item records times the defaults, under the 8 MiB slack), and the `BudgetExceedsArena` path when a game raises them past the arena.
+- The phone split check, revised: `Transport::reserved_bytes` at the recommended caps (32,768 / 262,144) is about 16.5 MiB (0079 §16), over 0007 §8's 8 MiB slack, so no test asserts they fit. `transport_phone_caps_fit_split` pins instead the largest caps of the form (`lines`, `8 x lines`) whose `reserved_bytes` fits the slack (compute from the real record sizes, pin the pair as literals with the bytes, so a record growth moves it) and records them in Deviations as M57's phone candidates (the reference game's belt scale on a phone is M57's measurement); `transport_budget_exceeds_arena_is_clean` keeps the `BudgetExceedsArena` path (`init_counts_the_transport_arena` already covers the recommended caps against a pre-M42 split).
 - An optimisation step if the gate is missed: profile first (named functions), then change the code, never the workload, the limit or the baseline.
-- Delete `fixtures/belts/tests/spike_repr.rs` and `spike_forecast.rs` (their numbers live in 0077 and 0078); keep `common/world.rs`.
+- Delete the spikes: `fixtures/belts/tests/spike_repr.rs`, `spike_forecast.rs`, `common/{repr,repr_a,repr_b,forecast,bench_run}.rs` (their numbers live in 0077 and 0078; M47 reads the tracker's design from `common/forecast.rs` at the M44b commit or tag `belts-core-complete~1`, never copies it); keep `common/world.rs` (the bench world) and drop its `Observer`-dependent parts if any.
 
 ## Non-scope
 - Forecast tracker cost (M47 re-runs this benchmark with the tracker on and records the delta); replication bytes (M47); the phone measurement itself (M57).
@@ -45,17 +45,17 @@ Rules that apply: `.claude/rules/hot-paths.md`. Skills: `run-tests` ("The slow t
 6. Delete the spikes; Deviations; tag `belts-core-complete`; commit; push.
 
 ## Tests added
-Rust suite: `bench_world_at_genesis_is_deterministic`, `transport_defaults_fit_phone_split`, `transport_budget_exceeds_arena_is_clean`; slow: `slow_tick_belts_large`, `slow_snapshot_belts_large`. Netcode suite: `tick-belts-large node @slow`.
+Rust suite: `bench_world_at_genesis_is_deterministic`, `transport_phone_caps_fit_split`, `transport_budget_exceeds_arena_is_clean`; slow: `slow_tick_belts_large`, `slow_snapshot_belts_large`. Netcode suite: `tick-belts-large node @slow`.
 
 ## Exit criteria
 - [ ] `slow_tick_belts_large` median at most 5 ms on the baseline machine at a 1-minute load under 5, three runs; `belts-tick.json` recorded with conditions; the gate trips when the baseline's `medianMs` is edited to a value 30 % under the measurement (inject-fail-revert of the gate).
 - [ ] `tick-belts-large node @slow` reports the WASM ratio in Deviations; 0077's Amendment gains the figure.
-- [ ] `transport_defaults_fit_phone_split` passes with the 0076 §8 defaults.
+- [ ] `transport_phone_caps_fit_split` pins the largest caps that fit the 8 MiB slack (literals), recorded in Deviations as M57's candidates; `transport_budget_exceeds_arena_is_clean` passes.
 - [ ] The spikes are deleted; the rust fast tier is inside 10 s.
 - [ ] `pnpm test`, `pnpm lint` and `pnpm test:slow rust` are green; tag `belts-core-complete` on the pushed commit.
 
 ## Verification commands
-`pnpm test:slow rust -t slow_tick_belts_large` · `pnpm test:slow netcode -t "tick-belts-large node"` · `pnpm test rust -t transport_defaults` · `pnpm test && pnpm lint && pnpm test:slow rust`
+`pnpm test:slow rust -t slow_tick_belts_large` · `pnpm test:slow netcode -t "tick-belts-large node"` · `pnpm test rust -t transport_phone_caps` · `pnpm test && pnpm lint && pnpm test:slow rust`
 
 ## Budgets
 - `belts-tick` baseline, `limits.medianMs` 5 (Tyler, 2026-10-11), gated on the baseline machine by `slow_tick_belts_large`.

@@ -25,7 +25,7 @@ Rules that apply: `.claude/rules/determinism.md` (the tracker is host-only but r
 
 ## Seams
 **Provides:** `SectionId::Forecasts`, `wire::forecast` (`RunList`, `State`), `Transport::{apply_forecast, pos_at, forecast_counters}`, host tracker, dirty list, classifier and builder, the `counters.transport.*` rows, `engine/test` `forecastCounters(client)`, the saturated-view netcode scenario (M48, M57 reuse).
-**Consumes:** M41's tracker design and follower semantics (0078 A3; `fixtures/belts/tests/common/forecast.rs` as the reference, not the code), M46 structures and `last_sent`, M45 baseline and world, M42b's `Regime::SaturatedView` requests.
+**Consumes:** M41's tracker design and follower semantics (0078 A3; `fixtures/belts/tests/common/forecast.rs` as the reference, not the code: M45 deletes the spikes, so read it at the M44b commit or `git show belts-core-complete~1:packages/engine/fixtures/belts/tests/common/forecast.rs`), M46 structures and `last_sent`, M45 baseline and world, M42b's `Regime::SaturatedView` requests.
 
 ## Exit criteria
 - [ ] `belts/forecast_followable` (the five cases: replica positions equal host positions for 50 message-free ticks after a halt, a release, a downstream halt, a toggled sink, a spawner pause and resume) and `belts/forecast_corrected_on_jam` (a jam forming sends a `State` within one frame and no `RunList`) pass with inject-fail-reverts.

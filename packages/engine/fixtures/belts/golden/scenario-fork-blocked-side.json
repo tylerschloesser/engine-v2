@@ -1,0 +1,118 @@
+{
+  "kind": "script",
+  "role": "sim",
+  "config": {
+    "arenaBytes": 100663296,
+    "game": {
+      "seed": "0xc",
+      "params": null,
+      "maxEntities": 4096,
+      "maxModifiedTiles": 4096,
+      "maxActionGrowth": 4096,
+      "maxLines": 16,
+      "maxItems": 512,
+      "cacheChunks": 1024
+    }
+  },
+  "encoderConfig": {
+    "arenaBytes": 50331648,
+    "game": {
+      "seed": "0xc",
+      "params": null,
+      "genWorkers": 1,
+      "cacheChunks": 1024
+    }
+  },
+  "genesis": true,
+  "checkpointAt": 200,
+  "script": [
+    {
+      "tick": 1,
+      "connect": true,
+      "actions": [
+        {
+          "seq": 1,
+          "action": {
+            "Request": {
+              "Chain": {
+                "from": {
+                  "x": 0,
+                  "y": 0
+                },
+                "dir": "East",
+                "tiles": 2,
+                "speed": 24
+              }
+            }
+          }
+        },
+        {
+          "seq": 2,
+          "action": {
+            "Request": {
+              "Chain": {
+                "from": {
+                  "x": 2,
+                  "y": 0
+                },
+                "dir": "East",
+                "tiles": 1,
+                "speed": 24
+              }
+            }
+          }
+        },
+        {
+          "seq": 3,
+          "action": {
+            "Request": {
+              "Chain": {
+                "from": {
+                  "x": 2,
+                  "y": 0
+                },
+                "dir": "East",
+                "tiles": 2,
+                "speed": 24
+              }
+            }
+          }
+        },
+        {
+          "seq": 4,
+          "action": {
+            "Request": {
+              "Sink": {
+                "line": 2
+              }
+            }
+          }
+        },
+        {
+          "seq": 5,
+          "action": {
+            "Request": {
+              "Fork": {
+                "line": 0,
+                "a": 1,
+                "b": 2
+              }
+            }
+          }
+        },
+        {
+          "seq": 6,
+          "action": {
+            "Request": {
+              "Spawner": {
+                "line": 0,
+                "item": 1,
+                "period": 256
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

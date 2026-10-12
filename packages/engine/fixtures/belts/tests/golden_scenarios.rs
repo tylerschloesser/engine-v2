@@ -5,11 +5,11 @@
 //! after every tick (0069 §3: a hash alone cannot catch a self-consistent error).
 //!
 //! `transport_request_is_deferred_to_tick` pins that `apply` only spawns the request and
-//! `Belts::tick` executes it; the `belts_op_*` smoke tests run each M43b op once.
+//! `Belts::tick` executes it; the `belts_op_*` smoke tests run each M43b and M44b op once.
 //!
-//! A script scenario holds at most 32 actions: `runScriptScenario` feeds them through an encoder
-//! client whose pending queue (0012, capacity 32) is never acked, so the 33rd `on_action` fails
-//! `OutOfMemory` under Node (why `inserter-like` runs 14 ticks).
+//! Until M44b a script scenario held at most 32 actions (`runScriptScenario`'s encoder client was
+//! never acked; why `inserter-like` runs 14 ticks); the runner now acks it with the sim's own
+//! frames, and `forty-actions` (42 actions) pins that under Node and Bun.
 
 use engine::game::{PlayerEvent, PlayerId, WorldRead, WorldWrite};
 use engine::sim::{Record, Sim, WorldParams};
@@ -947,5 +947,427 @@ fn belts_op_segments() {
         tr.pos_to_world(line(&sim, 0), 100),
         Ok(None),
         "a surgery changing len clears the segments"
+    );
+}
+
+/// `Merge`: a feeder (chain 1) with one item at rest at 0 side-loads onto an empty target (chain
+/// 0) at `at = 100`; in the op's own tick the item crosses with overshoot 24 and lands at
+/// `100 - 24 = 76` (0079 §15). A merge into itself is refused (`Unsupported`) and dropped.
+#[test]
+fn belts_op_merge() {
+    let sim = smoke(&[&[
+        rest_chain(2, &[]),
+        rest_chain(2, &[0]),
+        Op::Merge {
+            line: 1,
+            into: 0,
+            at: 100,
+        },
+        Op::Merge {
+            line: 0,
+            into: 0,
+            at: 100,
+        },
+    ]]);
+    let tr = sim.authority().transport();
+    let (t, f) = (line(&sim, 0), line(&sim, 1));
+    assert_eq!(tr.out(f), Ok(Output::Merge { line: t, at: 100 }));
+    assert_eq!(tr.out(t), Ok(Output::DeadEnd), "a self-merge is dropped");
+    assert_eq!(items(&sim, t), [(1, 76)], "landed at at - overshoot");
+    assert_eq!(items(&sim, f), []);
+}
+
+/// `Fork`: a feeder (chain 0) with items at rest at 0 and 64 forks onto chains 1 and 2 (empty, 2
+/// tiles); in the op's tick the front item goes to `a` at `512 - 24 = 488` and flips the toggle,
+/// the second moves to 40. A fork with `a == b` is refused and dropped (the first fork stays).
+#[test]
+fn belts_op_fork() {
+    let sim = smoke(&[&[
+        rest_chain(2, &[0, 64]),
+        rest_chain(2, &[]),
+        rest_chain(2, &[]),
+        Op::Fork {
+            line: 0,
+            a: 1,
+            b: 2,
+        },
+        Op::Fork {
+            line: 0,
+            a: 1,
+            b: 1,
+        },
+    ]]);
+    let tr = sim.authority().transport();
+    let (i, a, b) = (line(&sim, 0), line(&sim, 1), line(&sim, 2));
+    assert_eq!(tr.out(i), Ok(Output::Fork { a, b }));
+    assert_eq!(items(&sim, a), [(1, 488)], "the first item went to a");
+    assert_eq!(items(&sim, b), []);
+    assert_eq!(items(&sim, i), [(2, 40)]);
+    assert_eq!(
+        tr.toggle(i),
+        Ok(true),
+        "a preferred delivery flips the toggle"
+    );
+}
+
+/// Items the spawner(s) on `l` have put on it.
+fn spawned_on(sim: &Sim<Belts>, l: LineId) -> u64 {
+    let mut n = 0;
+    for (_, e) in sim.authority().store().entities() {
+        if let Thing::Spawner(s) = e
+            && s.line == l.0
+        {
+            n += u64::from(s.spawned);
+        }
+    }
+    n
+}
+
+fn sunk(sim: &Sim<Belts>, l: LineId) -> u64 {
+    sim.authority().transport().sunk(l).expect("line")
+}
+
+/// `prev`'s positions after one free move of `speed` (items that left the front dropped).
+fn moved_on(prev: &[u32], speed: u32) -> Vec<u32> {
+    prev.iter()
+        .filter(|&&p| p >= speed)
+        .map(|&p| p - speed)
+        .collect()
+}
+
+/// `sideload-saturated`: two halves, each a feeder (2 tiles, speed 24) saturated by a `period`
+/// 256 spawner side-loading onto an empty sinking target (2 tiles): chain 1 onto chain 0 at the
+/// early entry `at = 64`, chain 3 onto chain 2 at the late entry `at = 192`. After every tick, per
+/// half: the feeder never waits (its items are the previous tick's moved 24, plus the spawner's
+/// new item, landed at `max(512 - 24, tail + SPACING)` and moved 24); every item that crossed landed at `at - o` (`o = 24 - front`, the
+/// feeder front's overshoot) and stays put this tick; the target carries items exactly `SPACING`
+/// apart, all ahead of the entry point. Over ticks 100-200 the target sinks what the spawner
+/// inserts, within one item.
+#[test]
+fn belts_golden_sideload_saturated() {
+    let halves = [(1u32, 0u32, 64u32), (3, 2, 192)];
+    let mut prev: Vec<(Vec<u32>, Vec<u32>)> = vec![(Vec::new(), Vec::new()); 2];
+    let mut landed = [0u32; 2];
+    let mut at_100 = [(0u64, 0u64); 2];
+    let hash = run("scenario-sideload-saturated.json", &mut |sim| {
+        let t = sim.tick().0;
+        let (live, sunk_all, spawned) = census(sim);
+        assert_eq!(spawned, live + sunk_all, "tick {t}: conservation");
+        for (h, &(f, tg, at)) in halves.iter().enumerate() {
+            let (fl, tl) = (line(sim, f), line(sim, tg));
+            let (fp, tp) = (positions(sim, f), positions(sim, tg));
+            let (pf, pt) = &prev[h];
+            let mut want_f = moved_on(pf, 24);
+            if want_f.len() + 1 == fp.len() {
+                // `insert_back` lands at `max(len - speed, tail + SPACING)`, then moves 24.
+                let tail = pf.last().map_or(0, |&p| p + SPACING);
+                want_f.push((512 - 24).max(tail) - 24);
+            }
+            assert_eq!(fp, want_f, "tick {t}: half {h}: the feeder never waits");
+            let mut want_t = moved_on(pt, 24);
+            if let Some(&front) = pf.first()
+                && front < 24
+            {
+                want_t.push(at - (24 - front));
+                landed[h] += 1;
+            }
+            assert_eq!(
+                tp, want_t,
+                "tick {t}: half {h}: target = moved + landing at at - o"
+            );
+            for k in 1..tp.len() {
+                assert_eq!(
+                    tp[k] - tp[k - 1],
+                    SPACING,
+                    "tick {t}: half {h}: spacing {tp:?}"
+                );
+            }
+            assert!(
+                tp.iter().all(|&p| p < at),
+                "tick {t}: half {h}: ahead of the entry"
+            );
+            if t == 100 {
+                at_100[h] = (spawned_on(sim, fl), sunk(sim, tl));
+            }
+            if t == 200 {
+                let ins = spawned_on(sim, fl) - at_100[h].0;
+                let out = sunk(sim, tl) - at_100[h].1;
+                assert!(
+                    ins > 30,
+                    "half {h}: the spawner fed {ins} items in 100 ticks"
+                );
+                assert!(
+                    ins.abs_diff(out) <= 1,
+                    "half {h}: sunk {out} vs spawned {ins}"
+                );
+            }
+            prev[h] = (fp, tp);
+        }
+    });
+    assert!(
+        landed.iter().all(|&n| n > 50),
+        "landings per half: {landed:?}"
+    );
+    engine::testing::assert_golden_named(
+        env!("CARGO_MANIFEST_DIR"),
+        "golden-sideload-saturated.json",
+        &[hash],
+    );
+}
+
+/// Live items of kind `kind` on line `l`, front to back.
+fn of_kind(sim: &Sim<Belts>, l: LineId, kind: u16) -> Vec<u32> {
+    items(sim, l)
+        .iter()
+        .filter(|&&(i, _)| i == kind)
+        .map(|&(_, p)| p)
+        .collect()
+}
+
+/// `sideload-contested`: a target (chain 0, 4 tiles, `Sink`) fed from behind with item 1 by a
+/// `period` 2048 spawner (one item per 8 ticks, 192 positions apart), and a feeder (chain 1, 2
+/// tiles) saturated with item 2 side-loading onto it at `at = 512`. After every tick: the target's
+/// own stream is never starved (its spawner inserts every 8th tick, never refused, and every item
+/// 1 is the previous tick's moved 24: none ever waits behind a side-loaded item), conservation
+/// holds per kind (item 1 sunk = spawned - live; item 2 sunk = the rest of the target's sunk
+/// count). At the end the feeder has filled gaps (item 2 sunk > 0) and the target's output over
+/// ticks 200-300 is saturated within one item ([`CONTESTED_MIN`]).
+#[test]
+fn belts_golden_sideload_contested() {
+    let mut prev1: Vec<u32> = Vec::new();
+    let mut sunk_200 = 0;
+    let mut last = (0, 0);
+    let hash = run("scenario-sideload-contested.json", &mut |sim| {
+        let t = sim.tick().0;
+        let (tl, fl) = (line(sim, 0), line(sim, 1));
+        let now1 = of_kind(sim, tl, 1);
+        let spawned1 = spawned_on(sim, tl);
+        assert_eq!(
+            spawned1,
+            u64::from(t / 8),
+            "tick {t}: the target's spawner is never held"
+        );
+        let mut want = moved_on(&prev1, 24);
+        if want.len() + 1 == now1.len() {
+            want.push(1024 - 48);
+        }
+        assert_eq!(now1, want, "tick {t}: item 1 never waits");
+        let live1 = now1.len() as u64;
+        let live2 = (of_kind(sim, tl, 2).len() + of_kind(sim, fl, 2).len()) as u64;
+        let sunk1 = spawned1 - live1;
+        let spawned2 = spawned_on(sim, fl);
+        let sunk_t = sunk(sim, tl);
+        assert_eq!(
+            sunk_t - sunk1,
+            spawned2 - live2,
+            "tick {t}: item 2 sunk = spawned - live"
+        );
+        if t == 200 {
+            sunk_200 = sunk_t;
+        }
+        last = (sunk1, sunk_t - sunk1);
+        prev1 = now1;
+        if t == 300 {
+            let out = sunk_t - sunk_200;
+            assert!(out >= CONTESTED_MIN, "ticks 200-300: the target sank {out}");
+        }
+    });
+    assert!(
+        last.0 >= 30 && last.1 > 0,
+        "sunk (item 1, item 2): {last:?}"
+    );
+    engine::testing::assert_golden_named(
+        env!("CARGO_MANIFEST_DIR"),
+        "golden-sideload-contested.json",
+        &[hash],
+    );
+}
+
+/// `sideload-contested`'s floor on the target's output over 100 ticks: a packed lane sinks 37.5,
+/// so 37 is saturation within one item (measured: 38, of which item 1 is 12 or 13).
+const CONTESTED_MIN: u64 = 37;
+
+/// Items delivered onto `l` so far: live on it plus sunk from it (a fork target with no feeder
+/// but the fork).
+fn delivered(sim: &Sim<Belts>, l: LineId) -> u64 {
+    let tr = sim.authority().transport();
+    u64::from(tr.count(l).expect("line")) + tr.sunk(l).expect("line")
+}
+
+/// `fork-50-50`: one input (chain 0, 2 tiles) saturated by a `period` 256 spawner forks onto two
+/// draining outputs (chains 1 and 2, 2 tiles, `Sink`) for 1,000 ticks. After every tick the
+/// deliveries alternate, starting on `a`: `delivered(a) - delivered(b)` is 0 or 1 and the toggle
+/// (`true` = prefer `b`) is exactly "a is one ahead"; conservation. At the end the two sunk
+/// counts differ by at most 1 and hundreds of items went each way.
+#[test]
+fn belts_golden_fork_50_50() {
+    let mut flips = 0;
+    let mut was = false;
+    let mut end = (0, 0);
+    let hash = run("scenario-fork-50-50.json", &mut |sim| {
+        let t = sim.tick().0;
+        let (i, a, b) = (line(sim, 0), line(sim, 1), line(sim, 2));
+        let (da, db) = (delivered(sim, a), delivered(sim, b));
+        let toggle = sim.authority().transport().toggle(i).expect("line");
+        assert!(
+            da == db || da == db + 1,
+            "tick {t}: alternation: a {da}, b {db}"
+        );
+        assert_eq!(
+            toggle,
+            da > db,
+            "tick {t}: the toggle names the side due next"
+        );
+        flips += u32::from(toggle != was);
+        was = toggle;
+        let (live, sunk_all, spawned) = census(sim);
+        assert_eq!(spawned, live + sunk_all, "tick {t}: conservation");
+        end = (sunk(sim, a), sunk(sim, b));
+    });
+    assert!(end.0.abs_diff(end.1) <= 1, "sunk counts {end:?}");
+    assert!(end.0 > 150 && end.1 > 150, "both outputs drained: {end:?}");
+    assert!(flips > 100, "the toggle flipped {flips} times");
+    engine::testing::assert_golden_named(
+        env!("CARGO_MANIFEST_DIR"),
+        "golden-fork-50-50.json",
+        &[hash],
+    );
+}
+
+/// `fork-blocked-side`: one input (chain 0, 2 tiles) saturated forks onto chain 1 (1 tile,
+/// `DeadEnd`) and chain 2 (2 tiles, `Sink`). Chain 1 fills to four items at rest at 0, 64, 128,
+/// 192; from the tick it is full every item goes to chain 2, and the toggle, read every tick, is
+/// `false` (prefer chain 1) from the first delivery after that and never moves again: a delivery
+/// to the blocked side's other target is not a preferred one. Conservation every tick.
+#[test]
+fn belts_golden_fork_blocked_side() {
+    let mut full_at = None;
+    let mut held_from = None;
+    let mut prev_b = 0;
+    let hash = run("scenario-fork-blocked-side.json", &mut |sim| {
+        let t = sim.tick().0;
+        let (i, a, b) = (line(sim, 0), line(sim, 1), line(sim, 2));
+        let toggle = sim.authority().transport().toggle(i).expect("line");
+        let db = delivered(sim, b);
+        if let Some(f) = full_at {
+            assert_eq!(
+                positions(sim, 1),
+                [0, 64, 128, 192],
+                "tick {t}: full since {f}"
+            );
+            assert_eq!(
+                delivered(sim, a),
+                4,
+                "tick {t}: nothing more went to chain 1"
+            );
+            if held_from.is_none() && db > prev_b {
+                held_from = Some(t);
+            }
+            if held_from.is_some() {
+                assert!(!toggle, "tick {t}: the toggle holds on the blocked side");
+            }
+        } else if positions(sim, 1) == [0, 64, 128, 192] {
+            full_at = Some(t);
+        }
+        prev_b = db;
+        let (live, sunk_all, spawned) = census(sim);
+        assert_eq!(spawned, live + sunk_all, "tick {t}: conservation");
+    });
+    let (f, h) = (
+        full_at.expect("chain 1 filled"),
+        held_from.expect("deliveries"),
+    );
+    assert_eq!((f, h), (39, 40), "chain 1 full at, the toggle held from");
+    assert!(prev_b > 50, "{prev_b} items went to chain 2");
+    engine::testing::assert_golden_named(
+        env!("CARGO_MANIFEST_DIR"),
+        "golden-fork-blocked-side.json",
+        &[hash],
+    );
+}
+
+/// `big-step-fork` (speed 96, 4-tile lines, 0079 §8): chain 0 holds items at rest at 0 and 64
+/// (`DeadEnd`) until tick 5 forks it onto chains 1 and 2 (`Sink`). In tick 5 both cross in one
+/// tick: item 1 (overshoot 96) goes to `a` at `1024 - 96 = 928` and flips the toggle; item 2 has
+/// no leader beyond its own feeder (0079 §15), overshoots 32 and goes to `b` at `1024 - 32 = 992`,
+/// flipping it back. From tick 10 a saturating spawner feeds chain 0 (inserts at `1024 - 96`), and
+/// after every tick deliveries alternate as in `fork-50-50`; conservation.
+#[test]
+fn belts_golden_big_step_fork() {
+    let mut end = (0, 0);
+    let hash = run("scenario-big-step-fork.json", &mut |sim| {
+        let t = sim.tick().0;
+        let (i, a, b) = (line(sim, 0), line(sim, 1), line(sim, 2));
+        let toggle = sim.authority().transport().toggle(i).expect("line");
+        match t {
+            1..=4 => assert_eq!(items(sim, i), [(1, 0), (2, 64)], "tick {t}: at rest"),
+            5 => {
+                assert_eq!(items(sim, i), [], "tick 5: both left chain 0");
+                assert_eq!(items(sim, a), [(1, 928)], "tick 5: item 1 onto a");
+                assert_eq!(items(sim, b), [(2, 992)], "tick 5: item 2 onto b");
+                assert!(!toggle, "tick 5: two preferred deliveries, two flips");
+            }
+            10 => assert_eq!(items(sim, i), [(3, 1024 - 192)], "tick 10: first spawned"),
+            _ => {}
+        }
+        let (da, db) = (delivered(sim, a), delivered(sim, b));
+        assert!(
+            da == db || da == db + 1,
+            "tick {t}: alternation: a {da}, b {db}"
+        );
+        assert_eq!(
+            toggle,
+            da > db,
+            "tick {t}: the toggle names the side due next"
+        );
+        let (live, sunk_all, spawned) = census(sim);
+        assert_eq!(spawned + 2, live + sunk_all, "tick {t}: conservation");
+        end = (da, db);
+    });
+    assert!(end.0 > 15 && end.1 > 15, "deliveries {end:?}");
+    engine::testing::assert_golden_named(
+        env!("CARGO_MANIFEST_DIR"),
+        "golden-big-step-fork.json",
+        &[hash],
+    );
+}
+
+/// `forty-actions` (M44b, the scenario runner's action cap): one 8-tile line (`Sink`) and 40
+/// `Insert { pos: 1000 }` requests, one every 3 ticks from tick 2 (42 actions in all; the runner
+/// failed the 33rd before M44b acked its encoder). Every insert lands (inserts 72 apart once
+/// moved) and ends its tick at `1000 - 24`; after every tick `inserted == live + sunk`. The Node
+/// and Bun legs replaying this file to the same hash is the proof the cap is gone.
+#[test]
+fn belts_golden_forty_actions() {
+    let mut was = 0;
+    let mut sank = 0;
+    let hash = run("scenario-forty-actions.json", &mut |sim| {
+        let t = sim.tick().0;
+        let l = line(sim, 0);
+        let c = tally(sim);
+        let live = u64::from(sim.authority().transport().count(l).expect("line"));
+        sank = sunk(sim, l);
+        assert_eq!(
+            u64::from(c.inserted),
+            live + sank,
+            "tick {t}: inserted == live + sunk"
+        );
+        if t >= 2 && (t - 2) % 3 == 0 && t <= 2 + 3 * 39 {
+            assert_eq!(c.inserted, was + 1, "tick {t}: the insert landed");
+            let k = (t - 2) / 3;
+            let want = (1 + (k % 7) as u16, 1000 - 24);
+            assert_eq!(items(sim, l).last(), Some(&want), "tick {t}: at 1000 - 24");
+        }
+        was = c.inserted;
+    });
+    assert_eq!(
+        (was, sank),
+        (40, 40),
+        "all 40 inserted, all sunk by tick 160"
+    );
+    engine::testing::assert_golden_named(
+        env!("CARGO_MANIFEST_DIR"),
+        "golden-forty-actions.json",
+        &[hash],
     );
 }

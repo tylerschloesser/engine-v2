@@ -46,5 +46,7 @@ crate that blesses it (`pnpm golden:bytes`, `../CLAUDE.md` Commands).
   `Action::Fill { cx, cy }` or the native-only bench genesis `BusyField<true>` (121 chunks). A `Fill`
   needs `maxActionGrowth >= 28,288` and room in `maxEntities`.
 - `belts` (`fx-belts`, M40 onward): the engine's belt fixture for `engine::transport` (0076): the
-  request pattern (`Action::Request(Op)`, executed by `tick`), goldens `straight-chain`,
-  `deadend-backup`, `spawn-to-sink`, `big-step` (M42b), the native spikes (0077, 0078). Own `CLAUDE.md`.
+  request pattern (`Action::Request(Op)`, executed by `tick`; every line, surgery, item, segment,
+  merge and fork op), thirteen goldens (M42b core, M43b surgery and geometry, M44b side-loads and
+  forks), the four property tests M56 reuses (`tests/props.rs`), the native spikes (0077, 0078;
+  deleted in M45). Own `CLAUDE.md`.

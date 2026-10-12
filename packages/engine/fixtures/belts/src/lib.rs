@@ -30,9 +30,16 @@
 //! success turns its own request into the tally, in place, as a `Spawner` request does.
 //! An op that changes a line's `len` clears its segments (0079 §13); a scenario re-sends `Segments`.
 //!
+//! **Merge and fork (M44b).** `Merge { line, into, at }` and `Fork { line, a, b }` are `set_out`
+//! with M44's `Output::Merge`/`Output::Fork` (rules: 0079 §15); a refusal (`a == b`, a self-target,
+//! a fork target shorter than the feeder's speed, a missing line) is dropped like every other op's.
+//! `Destroy { line }` runs `destroy` and counts the deleted items in one [`Thing::Destroyed`] on
+//! the `"destroyed"` active list (the property tests' conservation needs it).
+//!
 //! Goldens (`golden/scenario-*.json`, `tests/golden_scenarios.rs`): `straight-chain` (also the
 //! canonical `scenario.json`), `deadend-backup`, `spawn-to-sink`, `big-step`, `edit-while-running`,
-//! `inserter-like`, `geometry-arc`; the item-representation and forecast spikes are
+//! `inserter-like`, `geometry-arc`, `sideload-saturated`, `sideload-contested`, `fork-50-50`,
+//! `fork-blocked-side`, `big-step-fork`, `forty-actions`; the item-representation and forecast spikes are
 //! `tests/spike_*.rs` (native only). `CLAUDE.md` has the detail.
 
 use engine::game::{
@@ -68,6 +75,15 @@ static TALLY_SYS: std::sync::OnceLock<SystemId> = std::sync::OnceLock::new();
 
 fn tally_sys() -> SystemId {
     *TALLY_SYS
+        .get()
+        .expect("Belts::register must run before Belts::tick")
+}
+
+/// The destroyed-items counter's active list (at most one member, [`Thing::Destroyed`]).
+static DESTROYED_SYS: std::sync::OnceLock<SystemId> = std::sync::OnceLock::new();
+
+fn destroyed_sys() -> SystemId {
+    *DESTROYED_SYS
         .get()
         .expect("Belts::register must run before Belts::tick")
 }
@@ -208,6 +224,12 @@ pub enum Op {
     TakeFront { line: u8 },
     /// `set_segments(line, ..)` with the non-`None` entries, front to back (all `None` clears).
     Segments { line: u8, segments: [Seg; 4] },
+    /// `set_out(line, Merge { line: into, at })`: a side-load onto `into` at position `at` (M44b).
+    Merge { line: u8, into: u8, at: u32 },
+    /// `set_out(line, Fork { a, b })`: alternate items between `a` and `b` (M44b).
+    Fork { line: u8, a: u8, b: u8 },
+    /// `destroy(line)`: its items are counted in [`Thing::Destroyed`]; its slot keeps the dead id.
+    Destroy { line: u8 },
 }
 
 impl Op {
@@ -231,6 +253,9 @@ impl Op {
             Op::Extend { line, by, .. } | Op::Shrink { line, by, .. } => idx(line) && by >= 1,
             Op::Rescale { line, new_len } => idx(line) && new_len >= 1,
             Op::Insert { line, item, .. } => idx(line) && item != 0,
+            Op::Merge { line, into, .. } => idx(line) && idx(into),
+            Op::Fork { line, a, b } => idx(line) && idx(a) && idx(b),
+            Op::Destroy { line } => idx(line),
         }
     }
 
@@ -302,6 +327,10 @@ pub enum Thing {
     Request(Request),
     Spawner(Spawner),
     Tally(Tally),
+    /// Items deleted by accepted `Destroy` requests over the world's life (M44b), on the
+    /// `"destroyed"` active list; made from the first such request, as the tally is. Separate from
+    /// [`Tally`] so the tally's encoding, and the goldens holding one, did not change.
+    Destroyed(u32),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -342,6 +371,23 @@ impl Belts {
         let mut c = Tally::default();
         f(&mut c);
         cx.put_entity(id, Thing::Tally(c));
+        cx.activate(sys, id);
+        true
+    }
+
+    /// Adds `n` destroyed items to the counter; [`Self::count`]'s pattern (the first accepted
+    /// `Destroy` turns request `id` into the counter and returns `true`).
+    fn count_destroyed(cx: &mut TickCx<'_, Self>, id: EntityId, n: u32) -> bool {
+        let sys = destroyed_sys();
+        if let Some(did) = cx.active_at(sys, 0)
+            && let Some(Thing::Destroyed(was)) = cx.entity(did).ok().flatten().copied()
+        {
+            if n > 0 {
+                cx.put_entity(did, Thing::Destroyed(was + n));
+            }
+            return false;
+        }
+        cx.put_entity(id, Thing::Destroyed(n));
         cx.activate(sys, id);
         true
     }
@@ -475,6 +521,21 @@ impl Belts {
                 }
                 let _ = t.set_segments(g.line(u32::from(line)), &segs[..n]);
             }
+            Op::Merge { line, into, at } => {
+                let into = g.line(u32::from(into));
+                let _ = t.set_out(g.line(u32::from(line)), Output::Merge { line: into, at });
+            }
+            Op::Fork { line, a, b } => {
+                let (a, b) = (g.line(u32::from(a)), g.line(u32::from(b)));
+                let _ = t.set_out(g.line(u32::from(line)), Output::Fork { a, b });
+            }
+            Op::Destroy { line } => {
+                if let Ok(n) = t.destroy(g.line(u32::from(line)), &mut |_| {})
+                    && Self::count_destroyed(cx, id, n)
+                {
+                    return; // the request became the counter.
+                }
+            }
         }
         cx.despawn(id);
     }
@@ -497,6 +558,7 @@ impl Game for Belts {
         debug_assert_eq!(id, PrototypeId(0));
         let _ = SPAWNER_SYS.set(r.system("spawner"));
         let _ = TALLY_SYS.set(r.system("tally"));
+        let _ = DESTROYED_SYS.set(r.system("destroyed"));
     }
 
     fn prototype(_e: &Thing) -> PrototypeId {
@@ -507,7 +569,7 @@ impl Game for Belts {
         match e {
             Thing::Request(r) => r.at.tile(),
             Thing::Spawner(s) => s.at.tile(),
-            Thing::Tally(_) => TilePos::new(0, 0),
+            Thing::Tally(_) | Thing::Destroyed(_) => TilePos::new(0, 0),
         }
     }
 
@@ -545,7 +607,7 @@ impl Game for Belts {
             match cx.entity(id).ok().flatten().copied() {
                 Some(Thing::Request(req)) => Self::execute(cx, id, req),
                 // Not woken in practice (`TickCx` puts never auto-wake); already on their lists.
-                Some(Thing::Spawner(_) | Thing::Tally(_)) | None => {}
+                Some(Thing::Spawner(_) | Thing::Tally(_) | Thing::Destroyed(_)) | None => {}
             }
         }
 

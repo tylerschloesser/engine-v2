@@ -132,6 +132,8 @@ function runSimScenario(inst: EngineInstance, scenario: SimScenario): string[] {
 }
 
 const scriptEncoder = new TextEncoder()
+/** `wire::MsgType::UplinkBatch` (`crates/engine/src/wire/mod.rs`), an uplink's first byte. */
+const UPLINK_BATCH = 0x02
 
 /**
  * M16 step 5: `sim`'s own admit pipeline driven by real per-tick
@@ -145,6 +147,16 @@ const scriptEncoder = new TextEncoder()
  * second one changes `state_hash()` even for a `Game::on_player` that only handles `Joined`:
  * `Sim::step` sets the player's roster bit on `Connected` (0024 §8), so a native leg replays both
  * (`fixtures/belts/tests/golden_scenarios.rs`). One checkpoint, at `checkpointAt`.
+ *
+ * The encoder is a client the host serves (M44b): after every tick once connection 0 exists, the
+ * sim builds that connection's frame (`sim_build_frame`, whose header carries `ack_seq`) and the
+ * encoder applies it (`on_frame` pops every pending action up to it, and its replica follows every
+ * `Global`/`OwnPlayer` change, so no scope hash falls due on a stale replica) and drains its UI
+ * ring. Without the acks its pending queue (0012, `OUTBOX_CAPACITY` 32) filled and the 33rd
+ * `on_action` failed `OutOfMemory`. Building a frame reads the world and never changes
+ * `state_hash()`, so the native legs (which build none) still match. Every uplink admitted must
+ * start with an `UplinkBatch`: a `ResyncChunk` (`ClientCore::note_desync`) would go out alone,
+ * ahead of the batch, delaying the action; the runner throws instead of admitting it.
  */
 export function runScriptScenario(
   sim: EngineInstance,
@@ -156,21 +168,43 @@ export function runScriptScenario(
   if (!simRx) throw new Error('runScriptScenario: sim Rx region is missing')
   const encoderRx = encoder.region(RegionId.Rx)
   const encoderTx = encoder.region(RegionId.Tx)
-  if (!encoderRx || !encoderTx) {
-    throw new Error('runScriptScenario: encoder Rx/Tx region is missing')
+  const encoderDown = encoder.region(RegionId.Downlink)
+  const simTx = sim.region(RegionId.Tx)
+  if (!encoderRx || !encoderTx || !encoderDown || !simTx) {
+    throw new Error('runScriptScenario: encoder Rx/Tx/Downlink or sim Tx region is missing')
+  }
+  let connected = false
+  /** Delivers connection 0's frame to the encoder: its `ack_seq` retires the pending queue. */
+  const ackEncoder = (t: number): void => {
+    const len = sim.call1(sim.x.sim_build_frame, 0)
+    if (len < 0) throw new Error(`sim_build_frame at tick ${t}: ${statusName(-len)}`)
+    if (len === 0) return
+    encoderDown.u8.set(simTx.u8.subarray(0, len))
+    ok(encoder.call1(encoder.x.on_frame, len), 'on_frame', t)
+    // The UI ring holds the frame's result records; nothing reads them here, so drop them.
+    let drained = encoder.call0(encoder.x.client_poll_ui)
+    while (drained > 0) drained = encoder.call0(encoder.x.client_poll_ui)
   }
 
   let tick = 0
   const checkpoints: string[] = []
+  /** One `sim_tick`, then (once connected) the frame to the encoder. */
+  const step = (t: number): void => {
+    ok(sim.call0(sim.x.sim_tick), 'sim_tick', t)
+    if (connected) ackEncoder(t)
+  }
   const recordEntry = (t: number): void => {
     while (tick + 1 < t) {
-      ok(sim.call0(sim.x.sim_tick), 'sim_tick', tick + 1)
+      step(tick + 1)
       tick += 1
     }
   }
   for (const entry of scenario.script) {
     recordEntry(entry.tick)
-    if (entry.connect) ok(sim.call1(sim.x.sim_connect, 0), 'sim_connect', entry.tick)
+    if (entry.connect) {
+      ok(sim.call1(sim.x.sim_connect, 0), 'sim_connect', entry.tick)
+      connected = true
+    }
     for (const { seq, action } of entry.actions ?? []) {
       const json = scriptEncoder.encode(JSON.stringify(action))
       const record = new Uint8Array(8 + json.length)
@@ -184,10 +218,15 @@ export function runScriptScenario(
       if (len <= 0) {
         throw new Error(`runScriptScenario: encoder produced no uplink batch at tick ${entry.tick}`)
       }
+      if (encoderTx.u8[0] !== UPLINK_BATCH) {
+        throw new Error(
+          `runScriptScenario: encoder uplink at tick ${entry.tick} starts with message type ${encoderTx.u8[0]}, not UplinkBatch (a ResyncChunk means its replica desynced)`,
+        )
+      }
       simRx.u8.set(encoderTx.u8.subarray(0, len))
       ok(sim.call2(sim.x.sim_admit, 0, len), 'sim_admit', entry.tick)
     }
-    ok(sim.call0(sim.x.sim_tick), 'sim_tick', entry.tick)
+    step(entry.tick)
     tick = entry.tick
     if (entry.tick === scenario.checkpointAt) {
       ok(sim.call0(sim.x.sim_hash), 'sim_hash', entry.tick)
@@ -195,7 +234,7 @@ export function runScriptScenario(
     }
   }
   while (tick < scenario.checkpointAt) {
-    ok(sim.call0(sim.x.sim_tick), 'sim_tick', tick + 1)
+    step(tick + 1)
     tick += 1
   }
   if (checkpoints.length === 0) {
