@@ -470,8 +470,9 @@ fn transport_order_cuts_cycles_at_lowest_id() {
     round_trip(&t);
 }
 
-/// Every field round-trips; a later run's `dist` under `SPACING` (a spacing violation within a
-/// line), a position past `len - 1`, an empty run and `Item(0)` are rejected.
+/// Every field round-trips; a later run's `dist` of 0 (two items at one position), a position past
+/// `len - 1`, an empty run and `Item(0)` are rejected. M43: a `dist` in `[1, SPACING)` is a
+/// squashed pair (`rescale`/`join` keep them), legal state that decodes as a negative gap.
 #[test]
 fn transport_codec_round_trip_and_rejects_spacing_violation() {
     let mut t = Transport::new(16, 256);
@@ -530,10 +531,17 @@ fn transport_codec_round_trip_and_rejects_spacing_violation() {
     };
     assert!(corrupt(0, &[]).is_ok(), "the uncorrupted bytes decode");
     assert_eq!(
-        corrupt(run1 + 4, &(SPACING - 1).to_le_bytes()).err(),
+        corrupt(run1 + 4, &0u32.to_le_bytes()).err(),
         Some(engine::codec::CodecError::Malformed),
-        "two items 63 apart on one line: a spacing violation"
+        "two items at one position"
     );
+    let mut squashed = good.clone();
+    squashed[run1 + 4..run1 + 8].copy_from_slice(&(SPACING - 1).to_le_bytes());
+    let mut sq = Transport::new(4, 16);
+    sq.read_canonical(&mut ByteReader::new(&squashed))
+        .expect("a squashed pair (M43) decodes");
+    assert_eq!(runs(&sq, l), vec![(1, 1, 10), (2, 1, -1)], "a negative gap");
+    assert_eq!(encode(&sq), squashed, "and re-encodes byte for byte");
     assert!(
         corrupt(run1 + 4, &SPACING.to_le_bytes()).is_ok(),
         "exactly SPACING apart is legal"
@@ -812,6 +820,124 @@ impl Reference {
     }
 }
 
+/// M43's surgery on the reference, written from 0076 §3 and the doc comments of
+/// `TransportWrite` (not from `surgery.rs`): items are `(item, pos)` front to back, so a squashed
+/// pair is just two positions closer than `SPACING`, which the reference's own rule resolves.
+impl Reference {
+    fn feeds(&self, x: &RefLine, l: usize) -> bool {
+        let _ = self;
+        matches!(x.out, Out::Next(t) if t as usize == l)
+    }
+
+    /// `speed < len` and every feeder at most `len` per tick (0079 §8).
+    fn len_ok(&self, l: usize, len: i64) -> Result<(), TransportError> {
+        let feeders_fit = self
+            .lines
+            .iter()
+            .flatten()
+            .all(|x| !self.feeds(x, l) || x.speed <= len);
+        if len <= self.line(l).speed || !feeders_fit {
+            return Err(TransportError::BadSpeed);
+        }
+        Ok(())
+    }
+
+    fn redirect(&mut self, from: usize, to: usize) {
+        for x in self.lines.iter_mut().flatten() {
+            if matches!(x.out, Out::Next(t) if t as usize == from) {
+                x.out = Out::Next(to as u32);
+            }
+        }
+    }
+
+    fn split(&mut self, l: usize, at: i64) -> Result<usize, TransportError> {
+        let (len, speed) = (self.line(l).len, self.line(l).speed);
+        if at <= speed || at >= len {
+            return Err(TransportError::BadSpeed);
+        }
+        self.len_ok(l, len - at)?;
+        let n = self.lines.len();
+        let line = self.line_mut(l);
+        let k = line.items.partition_point(|&(_, p)| p < at);
+        let back = line.items.split_off(k);
+        line.len = at;
+        self.redirect(l, n);
+        self.lines.push(Some(RefLine {
+            len: len - at,
+            speed,
+            out: Out::Next(l as u32),
+            items: back.into_iter().map(|(i, p)| (i, p - at)).collect(),
+            fresh: 0,
+        }));
+        Ok(n)
+    }
+
+    fn join(&mut self, front: usize, back: usize) -> Result<(), TransportError> {
+        if !matches!(self.line(back).out, Out::Next(f) if f as usize == front) {
+            return Err(TransportError::NotLinked);
+        }
+        if matches!(self.line(front).out, Out::Next(b) if b as usize == back) {
+            return Err(TransportError::Unsupported);
+        }
+        let gone = self.lines[back].take().expect("a live line");
+        let f = self.line_mut(front);
+        let flen = f.len;
+        f.items
+            .extend(gone.items.into_iter().map(|(i, p)| (i, p + flen)));
+        f.len += gone.len;
+        self.redirect(back, front);
+        Ok(())
+    }
+
+    fn extend(&mut self, l: usize, by: i64, at_front: bool) {
+        let line = self.line_mut(l);
+        line.len += by;
+        if at_front {
+            for it in &mut line.items {
+                it.1 += by;
+            }
+        }
+    }
+
+    fn shrink(&mut self, l: usize, by: i64, at_front: bool) -> Result<(), TransportError> {
+        let new_len = self.line(l).len - by;
+        self.len_ok(l, new_len)?;
+        let line = self.line_mut(l);
+        let off = match (at_front, line.items.first(), line.items.last()) {
+            (true, Some(&(_, p)), _) => p < by,
+            (false, _, Some(&(_, p))) => p > new_len - 1,
+            _ => false,
+        };
+        if off {
+            return Err(TransportError::NotEmpty);
+        }
+        line.len = new_len;
+        if at_front {
+            for it in &mut line.items {
+                it.1 -= by;
+            }
+        }
+        Ok(())
+    }
+
+    /// `floor(pos x new / old)`; `NoRoom` if two items would share a position. Returns whether a
+    /// pair ended up closer than `SPACING` (a squashed pair).
+    fn rescale(&mut self, l: usize, new_len: i64) -> Result<bool, TransportError> {
+        self.len_ok(l, new_len)?;
+        let line = self.line_mut(l);
+        let old = line.len;
+        let scaled: Vec<i64> = line.items.iter().map(|&(_, p)| p * new_len / old).collect();
+        if scaled.windows(2).any(|w| w[1] <= w[0]) {
+            return Err(TransportError::NoRoom);
+        }
+        for (it, p) in line.items.iter_mut().zip(&scaled) {
+            it.1 = *p;
+        }
+        line.len = new_len;
+        Ok(scaled.windows(2).any(|w| w[1] - w[0] < i64::from(SPACING)))
+    }
+}
+
 fn to_output(out: Out) -> Output {
     match out {
         Out::DeadEnd => Output::DeadEnd,
@@ -825,6 +951,8 @@ fn to_output(out: Out) -> Output {
 /// sinks, dead ends, a three-line cycle; 40 random `insert_back`/`insert_at`/`remove_at` every tick
 /// and, on random ticks, `set_out`, `set_speed`, `create` and `destroy` (each refusal compared
 /// too); every live line compared every tick for 400 ticks, and the codec round trip at the end.
+/// M43 adds surgery outside the cycle: a `split` or a `join` every 20 ticks, an `extend_*` or a
+/// `shrink_*` every 30, a `rescale` every 50 (squashed pairs included), each refusal compared.
 #[test]
 fn transport_matches_per_item_reference() {
     let mut rng = engine::rng::SimRng::new(11);
@@ -852,6 +980,10 @@ fn transport_matches_per_item_reference() {
         want
     };
     let mut bound_refusals = 0u32;
+    // Successful splits, joins, extends, shrinks; shrinks refused `NotEmpty`; squashing rescales.
+    let mut surgery = [0u32; 6];
+    // Its own stream, so the M42 part of the script draws what it drew before M43.
+    let mut srng = engine::rng::SimRng::new(43);
     while r.lines.len() < 60 {
         let chain = 1 + rng.below(4) as usize;
         let ends = [Out::DeadEnd, Out::Sink];
@@ -936,6 +1068,83 @@ fn transport_matches_per_item_reference() {
                 _ => {}
             }
         }
+        // M43: surgery (before `advance`, as from `G::tick`), never on the cycle.
+        let alive: Vec<usize> = live(&r).into_iter().filter(|l| !c.contains(l)).collect();
+        let pick = |rng: &mut engine::rng::SimRng| alive[rng.below(alive.len() as u32) as usize];
+        if tick % 20 == 10 {
+            if srng.below(2) == 0 {
+                let l = pick(&mut srng);
+                let at = srng.below(r.line(l).len as u32);
+                let want = r.split(l, i64::from(at));
+                let got = t.split(LineId(l as u32 + 1), at);
+                assert_eq!(
+                    got,
+                    want.map(|n| LineId(n as u32 + 1)),
+                    "tick {tick}: split {l}"
+                );
+                surgery[0] += u32::from(got.is_ok());
+            } else {
+                let backs: Vec<usize> = alive
+                    .iter()
+                    .copied()
+                    .filter(
+                        |&b| matches!(r.line(b).out, Out::Next(f) if !c.contains(&(f as usize))),
+                    )
+                    .collect();
+                if !backs.is_empty() {
+                    let b = backs[srng.below(backs.len() as u32) as usize];
+                    let Out::Next(f) = r.line(b).out else {
+                        unreachable!()
+                    };
+                    let want = r.join(f as usize, b);
+                    let got = t.join(LineId(f + 1), LineId(b as u32 + 1));
+                    assert_eq!(got, want, "tick {tick}: join {f} {b}");
+                    surgery[1] += u32::from(got.is_ok());
+                }
+            }
+        }
+        if tick % 30 == 15 {
+            for _ in 0..3 {
+                let l = pick(&mut srng);
+                let id = LineId(l as u32 + 1);
+                let by = srng.below(256);
+                let at_front = srng.below(2) == 0;
+                if srng.below(2) == 0 {
+                    r.extend(l, i64::from(by), at_front);
+                    let got = if at_front {
+                        t.extend_front(id, by)
+                    } else {
+                        t.extend_back(id, by)
+                    };
+                    assert_eq!(got, Ok(()), "tick {tick}: extend {l}");
+                    surgery[2] += 1;
+                } else {
+                    let want = r.shrink(l, i64::from(by), at_front);
+                    let got = if at_front {
+                        t.shrink_front(id, by)
+                    } else {
+                        t.shrink_back(id, by)
+                    };
+                    assert_eq!(got, want, "tick {tick}: shrink {l} by {by}");
+                    surgery[3] += u32::from(got.is_ok());
+                    surgery[4] += u32::from(got == Err(TransportError::NotEmpty));
+                }
+            }
+        }
+        if tick % 50 == 25 {
+            for _ in 0..3 {
+                let l = pick(&mut srng);
+                let new_len = (r.line(l).len * i64::from(5 + srng.below(7)) / 8) as u32;
+                let want = r.rescale(l, i64::from(new_len));
+                let got = t.rescale(LineId(l as u32 + 1), new_len);
+                assert_eq!(
+                    got,
+                    want.map(|_| ()),
+                    "tick {tick}: rescale {l} to {new_len}"
+                );
+                surgery[5] += u32::from(want == Ok(true));
+            }
+        }
         let alive = live(&r);
         for _ in 0..40 {
             let l = alive[rng.below(alive.len() as u32) as usize];
@@ -997,23 +1206,29 @@ fn transport_matches_per_item_reference() {
         r.cut_landings
     );
     assert!(bound_refusals >= 3, "only {bound_refusals} speed refusals");
+    assert!(
+        surgery.iter().all(|&n| n >= 4),
+        "surgery too rare: {surgery:?} (split, join, extend, shrink, shrink refused, squashing rescale)"
+    );
     round_trip(&t);
 }
 
 /// 0079 §5: the arena `Host::init`'s memory-split check counts, at literal sizes: a line costs
-/// 72 B (record) + 8 (index) + 4 (order) + 17 (Tarjan scratch) = 101 B, a run node 16 B, plus
-/// one spare node (none at 0 items). At the defaults: 32,768 x 101 + 262,145 x 16 = 7,503,888 B.
+/// 80 B (record) + 8 (index) + 4 (order) + 17 (Tarjan scratch) + 4 x 32 (segment pool, M43) +
+/// 8 x 16 (tile index, M43) = 365 B, a run node 16 B plus one spare node (none at 0 items), and
+/// the tile index's merge room, `MAX_LINE_TILES` x 16 = 65,536 B (none at 0 lines). At the
+/// recommended caps: 32,768 x 365 + 262,145 x 16 + 65,536 = 16,220,176 B.
 #[test]
 fn transport_reserved_bytes_at_the_defaults() {
     assert_eq!(Transport::reserved_bytes(0, 0), 0);
-    assert_eq!(Transport::reserved_bytes(1, 0), 101);
+    assert_eq!(Transport::reserved_bytes(1, 0), 365 + 65_536);
     assert_eq!(Transport::reserved_bytes(0, 1), 32);
     assert_eq!(
         Transport::reserved_bytes(
             engine::transport::DEFAULT_MAX_LINES,
             engine::transport::DEFAULT_MAX_ITEMS
         ),
-        7_503_888
+        16_220_176
     );
 }
 
@@ -1150,7 +1365,7 @@ fn transport_codec_rejects_a_jam_cursor_past_a_gap() {
     }
 }
 
-fn runs(t: &Transport, l: LineId) -> Vec<(u16, u16, u32)> {
+fn runs(t: &Transport, l: LineId) -> Vec<(u16, u16, i32)> {
     let mut v = Vec::new();
     t.runs_in(l, &mut |i, c, g| v.push((i.0, c, g))).unwrap();
     v
@@ -1192,7 +1407,10 @@ fn transport_merges_stop_at_u16_max() {
     for k in 0..full - 100 {
         t.insert_at(l, (101 + k) * SPACING, Item(1)).unwrap();
     }
-    assert_eq!(runs(&t, l), vec![(1, 100, 0), (1, MAX - 100, SPACING)]);
+    assert_eq!(
+        runs(&t, l),
+        vec![(1, 100, 0), (1, MAX - 100, SPACING as i32)]
+    );
     t.insert_at(l, 100 * SPACING, Item(1)).unwrap();
     assert_eq!(runs(&t, l), vec![(1, 101, 0), (1, MAX - 100, 0)]);
 

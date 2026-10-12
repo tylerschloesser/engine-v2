@@ -36,8 +36,12 @@ mod state_budget_tick;
 mod timers_wakeups;
 #[path = "main/transport_access.rs"]
 mod transport_access;
+#[path = "main/transport_geometry.rs"]
+mod transport_geometry;
 #[path = "main/transport_rules.rs"]
 mod transport_rules;
+#[path = "main/transport_surgery.rs"]
+mod transport_surgery;
 #[path = "main/undo_journal.rs"]
 mod undo_journal;
 #[path = "main/wgsl.rs"]

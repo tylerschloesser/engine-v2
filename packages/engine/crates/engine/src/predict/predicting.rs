@@ -13,8 +13,8 @@
 use crate::game::{EntityId, Game, PlayerId, Unknown};
 use crate::rng::SimRng;
 use crate::time::Tick;
-use crate::transport::{Item, LineId, Output, TransportRead, TransportWrite};
-use crate::world::{ChunkDims, Registry, Tile, TilePos, TileRect, TraitSet};
+use crate::transport::{Item, LineId, Output, Segment, TransportRead, TransportWrite};
+use crate::world::{ChunkCoord, ChunkDims, Registry, Tile, TilePos, TileRect, TraitSet, WorldPos};
 use crate::world_access::{WorldRead, WorldWrite};
 
 use super::overlay::{Overlay, covers, footprint_of, merge_entities_in};
@@ -261,6 +261,26 @@ impl<G: Game> TransportRead for Predicting<'_, G> {
     }
     fn sunk(&self, line: LineId) -> Result<u64, Unknown> {
         self.taint(self.base.transport().sunk(line))
+    }
+    fn segments(&self, line: LineId, f: &mut dyn FnMut(Segment)) -> Result<(), Unknown> {
+        self.taint(self.base.transport().segments(line, f))
+    }
+    fn pos_to_world(&self, line: LineId, pos: u32) -> Result<Option<WorldPos>, Unknown> {
+        self.taint(self.base.transport().pos_to_world(line, pos))
+    }
+    fn chunks_of(
+        &self,
+        line: LineId,
+        dims: ChunkDims,
+        f: &mut dyn FnMut(ChunkCoord),
+    ) -> Result<(), Unknown> {
+        self.taint(self.base.transport().chunks_of(line, dims, f))
+    }
+    fn anchor(&self, line: LineId, dims: ChunkDims) -> Result<Option<ChunkCoord>, Unknown> {
+        self.taint(self.base.transport().anchor(line, dims))
+    }
+    fn lines_at(&self, tile: TilePos, f: &mut dyn FnMut(LineId, u32)) -> Result<(), Unknown> {
+        self.taint(self.base.transport().lines_at(tile, f))
     }
 }
 

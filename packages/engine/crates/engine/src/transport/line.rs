@@ -1,7 +1,10 @@
 //! A line's record and the run store (0077 Amendment A6: B1). A line's items are a doubly linked
 //! list of [`Run`]s in the transport's one node arena, front to back: a run's items sit exactly
 //! `SPACING` apart, and `gap` is the free distance from its first item to the item ahead
-//! (`pos - leader_pos - SPACING`; for the front run, its first item's position). Canonical form:
+//! (`pos - leader_pos - SPACING`; for the front run, its first item's position). A later run's
+//! `gap` is negative for a squashed pair (M43: `rescale` and `join` keep them, 12 §3e; the squash
+//! rule of `advance` resolves them), never below `1 - SPACING` (positions strictly increase), and
+//! only on a line whose `squashed` flag is set. Canonical form:
 //! two adjacent runs merge when the rear one's gap is 0 and the item is the same, unless the merged
 //! `count` would overflow `u16` (0077 A6b (ii)).
 //!
@@ -19,7 +22,8 @@ pub(super) const NIL: u32 = u32::MAX;
 pub(super) struct Run {
     pub item: u16,
     pub count: u16,
-    pub gap: u32,
+    /// Signed (module doc); `i32` because positions are below [`super::MAX_LEN`].
+    pub gap: i32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -57,6 +61,15 @@ pub(super) struct Line {
     /// Back runs made only of items that crossed a cycle cut onto this line this tick, before it
     /// advanced: they do not move again this tick (0079, M42 review). Zero outside `advance`.
     pub fresh_runs: u32,
+    /// The line may hold a negative gap (a squashed pair, M43): set by `rescale`, `join`, `split`
+    /// and decode, cleared by an `advance` walk that saw none. Conservative and unobservable (the
+    /// walk with it set reaches exactly the state the early exit reaches when no gap is negative),
+    /// so it is not encoded.
+    pub squashed: bool,
+    /// The line's segments in the transport's segment pool (`geometry.rs`): the first record, or
+    /// `NIL` with `seg_count == 0`.
+    pub seg_start: u32,
+    pub seg_count: u8,
 }
 
 impl Line {
@@ -79,6 +92,9 @@ impl Line {
             mark: 0,
             adv_mark: 0,
             fresh_runs: 0,
+            squashed: false,
+            seg_start: NIL,
+            seg_count: 0,
         }
     }
 

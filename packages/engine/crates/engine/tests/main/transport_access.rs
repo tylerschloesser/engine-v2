@@ -34,6 +34,8 @@ struct AGlobal {
 enum AAction {
     /// `apply` asks for `transport_mut()`.
     TouchTransport,
+    /// `apply` reads `transport().lines_at(0, 0)` (M43 review, finding 1).
+    ReadTile,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, ts_rs::TS)]
@@ -104,6 +106,10 @@ impl Game for AGame {
         match a {
             AAction::TouchTransport => {
                 w.transport_mut()?;
+                Ok(())
+            }
+            AAction::ReadTile => {
+                w.transport().lines_at(TilePos::new(0, 0), &mut |_, _| {})?;
                 Ok(())
             }
         }
@@ -258,6 +264,54 @@ fn transport_predicting_is_unknown() {
     lb.run(5);
     let (_seq, status) = lb.dispatch(0, AAction::TouchTransport);
     assert_eq!(status, Prediction::NotPredictable);
+}
+
+/// M43 review (finding 1, the prediction rule): `lines_at` takes no line id, so a store that holds
+/// no transport state (a replica's, never reserved) must answer `Err(Unknown)`, not "no line
+/// here": under prediction the read marks the overlay and the action is `NotPredictable`. The
+/// host's reserved store answers `Ok` and the same action applies.
+#[test]
+fn transport_lines_at_is_unknown_on_a_replica() {
+    let mut lb = Loopback::<AGame>::new(params());
+    lb.add_client(
+        0,
+        ChunkDims::new(AGame::CHUNK_BITS),
+        Box::new(VoidSource),
+        CacheCapacity::Chunks(1024),
+    );
+    lb.run(5);
+    let (_seq, status) = lb.dispatch(0, AAction::ReadTile);
+    assert_eq!(status, Prediction::NotPredictable);
+
+    let mut sim = Sim::<AGame>::genesis(params());
+    assert_eq!(
+        testkit::transport_mut(&mut sim).lines_at(TilePos::new(0, 0), &mut |_, _| {}),
+        Ok(())
+    );
+    let mut out = Vec::new();
+    let p = PlayerId(1);
+    sim.step(
+        &[Record::Player {
+            who: p,
+            ev: PlayerEvent::Joined,
+        }],
+        &mut out,
+    );
+    out.clear();
+    sim.step(
+        &[Record::Action {
+            who: p,
+            seq: 1,
+            action: AAction::ReadTile,
+        }],
+        &mut out,
+    );
+    assert!(out[0].result.is_ok(), "the host applies it");
+    assert_eq!(
+        Transport::empty().lines_at(TilePos::new(0, 0), &mut |_, _| {}),
+        Err(Unknown),
+        "an unreserved store holds no transport state"
+    );
 }
 
 /// Two stores differing only in one transport item hash differently; a store that never created

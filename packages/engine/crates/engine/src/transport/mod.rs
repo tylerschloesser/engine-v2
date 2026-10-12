@@ -16,20 +16,35 @@
 //! is the one part of `Store` not mutated through `Delta` (0076 §7): `advance` and the surgery API
 //! mutate it directly on the host.
 //!
-//! M42 scope: `create`, `destroy` (removes a line and hands back its items; feeders of the
-//! destroyed line become `DeadEnd`; the full surgery semantics are M43), `set_out` (`DeadEnd`,
-//! `Next`, `Sink`; `Merge`/`Fork` are refused with [`TransportError::Unsupported`] until M44, as is
-//! `Next` into the line itself), `set_speed`, `insert_back`, and `insert_at`/`remove_at` (0076 §3's
-//! inserter primitives, pulled forward from M43 because M40's rule table drives them).
+//! M42 scope: `create`, `set_out` (`DeadEnd`, `Next`, `Sink`; `Merge`/`Fork` are refused with
+//! [`TransportError::Unsupported`] until M44, as is `Next` into the line itself), `set_speed`,
+//! `insert_back`, and `insert_at`/`remove_at` (0076 §3's inserter primitives, `items.rs`).
+//!
+//! M43 (0076 §3-§4): line surgery (`surgery.rs`: `split`, `join`, `extend_*`, `shrink_*`,
+//! `rescale`, the full `destroy`), `take_front` (`items.rs`), and geometry (`geometry.rs`: each
+//! line's registered [`Segment`]s, `pos_to_world`, the derived chunk set, anchor and tile index).
+//! Positions are below [`MAX_LEN`], so a run's signed `gap` fits an `i32` (`line.rs`: a squashed
+//! pair kept by `rescale`/`join` is a negative gap).
 
 mod advance;
 mod codec;
+mod geometry;
+mod items;
 mod line;
 mod order;
+mod surgery;
 
 use crate::game::Unknown;
+use crate::world::{ChunkCoord, ChunkDims, TilePos, WorldPos};
 
+pub use geometry::{Geometry, MAX_LINE_TILES, MAX_SEGMENTS, Segment, walk_evals};
+use geometry::{SegRec, TileEntry};
 use line::{Line, NIL, Node};
+
+/// The longest line (M43): positions stay below `i32::MAX`, so a run's signed gap (`line.rs`) is
+/// an `i32`. `create`, `extend_*`, `join` and `rescale` refuse past it with
+/// [`TransportError::TooLong`]; decode rejects it.
+pub const MAX_LEN: u32 = i32::MAX as u32;
 
 /// 0076 §1: the minimum distance between two items on one line and across a plain hand-off (4
 /// items per tile per lane). An engine constant; the run representation relies on it.
@@ -93,9 +108,18 @@ pub enum TransportError {
     Unsupported,
     /// `set_caps` after the arena was reserved, with other caps (0079 §5: reserved once).
     CapsFixed,
+    /// `shrink_front`/`shrink_back` would drop an item off the line (M43).
+    NotEmpty,
+    /// `join(front, back)` needs `back`'s output to be `Next(front)` (M43).
+    NotLinked,
+    /// `set_segments`: lengths not summing to the line's `len`, more than [`MAX_SEGMENTS`], a
+    /// zero-length segment or an arc field out of range (`geometry.rs`).
+    BadSegments,
+    /// A length past [`MAX_LEN`] (`create`, `extend_*`, `join`, `rescale`).
+    TooLong,
 }
 
-pub use TransportError::{BadSpeed, Full, NoRoom};
+pub use TransportError::{BadSpeed, Full, NoRoom, NotEmpty};
 
 /// The read side every `WorldRead` context answers (0076 §1, M42 Seams). A line this context does
 /// not hold is `Err(Unknown)`: on the host that is a line that does not exist; on a client replica
@@ -114,6 +138,26 @@ pub trait TransportRead {
     fn items_in(&self, line: LineId, f: &mut dyn FnMut(Item, u32)) -> Result<(), Unknown>;
     /// Items this line's `Sink` has deleted so far.
     fn sunk(&self, line: LineId) -> Result<u64, Unknown>;
+    /// The line's registered segments front to back (M43; none until `set_segments`).
+    fn segments(&self, line: LineId, f: &mut dyn FnMut(Segment)) -> Result<(), Unknown>;
+    /// Where position `pos` is in the world (M43, `geometry.rs`): `None` without segments or for
+    /// `pos >= len`. Exact integer code (the client runs the same in M49).
+    fn pos_to_world(&self, line: LineId, pos: u32) -> Result<Option<WorldPos>, Unknown>;
+    /// The chunks the line's segments' tile boxes cover, sorted `(cy, cx)`, each once (derived,
+    /// never encoded; computed on call from at most [`MAX_SEGMENTS`] boxes).
+    fn chunks_of(
+        &self,
+        line: LineId,
+        dims: ChunkDims,
+        f: &mut dyn FnMut(ChunkCoord),
+    ) -> Result<(), Unknown>;
+    /// The chunk of the line's front point (position 0), `None` without segments.
+    fn anchor(&self, line: LineId, dims: ChunkDims) -> Result<Option<ChunkCoord>, Unknown>;
+    /// Every `(line, offset)` whose path enters `tile`, `offset` being the position of the line's
+    /// first point in it (a line entering the tile twice appears twice), ascending by line then
+    /// offset: the derived tile index (`geometry.rs`), never encoded. `Err(Unknown)` from a store
+    /// that holds no transport state (an unreserved one: a replica's until M46).
+    fn lines_at(&self, tile: TilePos, f: &mut dyn FnMut(LineId, u32)) -> Result<(), Unknown>;
 }
 
 /// The write side (0076 §3, M42's part), host tick only (0076 §6).
@@ -121,9 +165,44 @@ pub trait TransportWrite: TransportRead {
     /// A new line with no items and a `DeadEnd` output. `Err(Full)` at `max_lines`,
     /// `Err(BadSpeed)` unless `1 <= speed < len`.
     fn create(&mut self, len: u32, speed: u16) -> Result<LineId, TransportError>;
-    /// Removes the line, handing its items to `f` front to back; lines that fed it become
-    /// `DeadEnd`. M43 owns the full surgery semantics.
-    fn destroy(&mut self, line: LineId, f: &mut dyn FnMut(Item)) -> Result<(), TransportError>;
+    /// Removes the line, handing its items to `f` front to back and returning how many; lines
+    /// that fed it become `DeadEnd`; its runs, slot, segments and tile-index entries are freed (its
+    /// id is never reused).
+    fn destroy(&mut self, line: LineId, f: &mut dyn FnMut(Item)) -> Result<u32, TransportError>;
+    /// Cuts the line at `at` (`surgery.rs`): the line keeps `[0, at)` and its output; the new line
+    /// (returned) is `[at, len)`, items at `pos >= at` moved to `pos - at`, its output `Next(line)`;
+    /// every `Next(line)` now feeds the new line. `BadSpeed` unless `speed < at` and
+    /// `speed < len - at` and every feeder's speed is at most `len - at`; `Full` at `max_lines`.
+    fn split(&mut self, line: LineId, at: u32) -> Result<LineId, TransportError>;
+    /// Appends `back` (whose output must be `Next(front)`, else `NotLinked`) to `front`: its items
+    /// at `pos + front.len`, gaps kept, a packed same-kind boundary pair merged; `back` is
+    /// destroyed and its feeders feed `front`. `front` keeps its speed and output. `Unsupported` if
+    /// `front` feeds `back` (the joined line would feed itself). Any other line feeding `front`
+    /// (`Next(front)`) now lands at the joined line's back, `back.len` further upstream than
+    /// before: topology is the game's (0076 §3), and a second plain feeder into one back edge has
+    /// no geometric meaning in a belt game, so `join` does not refuse it.
+    fn join(&mut self, front: LineId, back: LineId) -> Result<(), TransportError>;
+    /// `len += by` at the front: every position grows by `by` (O(1)).
+    fn extend_front(&mut self, line: LineId, by: u32) -> Result<(), TransportError>;
+    /// `len += by` at the back (O(1)).
+    fn extend_back(&mut self, line: LineId, by: u32) -> Result<(), TransportError>;
+    /// `len -= by` at the front, every position shrinking by `by`: `NotEmpty` if the front item is
+    /// below `by`; `BadSpeed` if the line would not exceed its speed or a feeder's speed.
+    fn shrink_front(&mut self, line: LineId, by: u32) -> Result<(), TransportError>;
+    /// `len -= by` at the back: `NotEmpty` if the rearmost item is past `len - by - 1`; `BadSpeed`
+    /// as `shrink_front`.
+    fn shrink_back(&mut self, line: LineId, by: u32) -> Result<(), TransportError>;
+    /// Scales every position to `floor(pos x new_len / len)` (a reshape, 12 §3e), keeping squashed
+    /// pairs for the squash rule to resolve; `NoRoom` if two items would share a position;
+    /// `BadSpeed` as `shrink_front`.
+    fn rescale(&mut self, line: LineId, new_len: u32) -> Result<(), TransportError>;
+    /// Removes the front item, if any (a sink the game drives itself).
+    fn take_front(&mut self, line: LineId) -> Result<Option<Item>, TransportError>;
+    /// Registers the line's path front to back (`geometry.rs`): lengths summing to `len`, at most
+    /// [`MAX_SEGMENTS`] (`BadSegments`); `&[]` clears it. `Full` when the segment pool or the tile
+    /// index is out of room, or the path enters more than [`MAX_LINE_TILES`] tiles. Every surgery
+    /// that changes a line's `len` clears its segments; the game registers them again.
+    fn set_segments(&mut self, line: LineId, segs: &[Segment]) -> Result<(), TransportError>;
     fn set_out(&mut self, line: LineId, out: Output) -> Result<(), TransportError>;
     fn set_speed(&mut self, line: LineId, speed: u16) -> Result<(), TransportError>;
     /// A spawner's primitive: lands at `max(len - speed, tail + SPACING)`, refused (`NoRoom`) past
@@ -168,6 +247,26 @@ impl TransportRead for NoTransport {
     fn sunk(&self, _line: LineId) -> Result<u64, Unknown> {
         Err(Unknown)
     }
+    fn segments(&self, _line: LineId, _f: &mut dyn FnMut(Segment)) -> Result<(), Unknown> {
+        Err(Unknown)
+    }
+    fn pos_to_world(&self, _line: LineId, _pos: u32) -> Result<Option<WorldPos>, Unknown> {
+        Err(Unknown)
+    }
+    fn chunks_of(
+        &self,
+        _line: LineId,
+        _dims: ChunkDims,
+        _f: &mut dyn FnMut(ChunkCoord),
+    ) -> Result<(), Unknown> {
+        Err(Unknown)
+    }
+    fn anchor(&self, _line: LineId, _dims: ChunkDims) -> Result<Option<ChunkCoord>, Unknown> {
+        Err(Unknown)
+    }
+    fn lines_at(&self, _tile: TilePos, _f: &mut dyn FnMut(LineId, u32)) -> Result<(), Unknown> {
+        Err(Unknown)
+    }
 }
 
 /// The transport store (module doc). Every `Vec` is reserved once, by [`Transport::set_caps`] when
@@ -195,6 +294,17 @@ pub struct Transport {
     order: Vec<u32>,
     graph_dirty: bool,
     scratch: order::Scratch,
+    /// The segment pool (`geometry.rs`): every line's segments, contiguous per line, compacted in
+    /// place when the tail is reached. `seg_cap` records at most (`max_lines x
+    /// SEGMENTS_PER_LINE`), `seg_live` of them in use.
+    segs: Vec<SegRec>,
+    seg_cap: u32,
+    seg_live: u32,
+    /// The tile index (`geometry.rs`): sorted `(tile.y, tile.x, line, offset)`, at most `tile_cap`
+    /// entries (`max_lines x TILES_PER_LINE`) plus [`MAX_LINE_TILES`] of merge room. Derived:
+    /// never encoded or hashed; `rebuild_index` reaches what incremental maintenance reaches.
+    tiles: Vec<TileEntry>,
+    tile_cap: u32,
     /// `touched` bookkeeping (M47 reads it): a line is touched when its `mark` equals the epoch of
     /// the last `advance`; `advance` also stamps each line it visits with `epoch` (`adv_mark`), so
     /// a hand-off knows whether its target has moved this tick. Not state: never encoded or hashed.
@@ -225,6 +335,11 @@ impl Transport {
             order: Vec::new(),
             graph_dirty: false,
             scratch: order::Scratch::default(),
+            segs: Vec::new(),
+            seg_cap: 0,
+            seg_live: 0,
+            tiles: Vec::new(),
+            tile_cap: 0,
             epoch: 1,
             advanced_epoch: 0,
             changed: false,
@@ -269,13 +384,19 @@ impl Transport {
         };
         reserve_to(&mut self.nodes, nodes);
         self.node_cap = nodes as u32;
+        let (seg_cap, tile_cap, headroom) = geometry::caps(max_lines);
+        self.seg_cap = seg_cap.max(self.segs.len() as u32);
+        reserve_to(&mut self.segs, self.seg_cap as usize);
+        self.tile_cap = tile_cap.max(self.tiles.len() as u32);
+        reserve_to(&mut self.tiles, self.tile_cap as usize + headroom as usize);
         Ok(())
     }
 
     /// The bytes [`Transport::set_caps`] reserves for `max_lines` lines and `max_items` items on an
     /// empty store: line records, the id index, the update order and Tarjan's scratch per line,
-    /// `max_items + 1` run nodes (none at 0 items). `Host::init`'s memory-split check adds it (0079
-    /// §5).
+    /// `max_items + 1` run nodes (none at 0 items), and the geometry (M43): the segment pool and
+    /// the tile index per line plus the index's merge room (`geometry::caps`). `Host::init`'s
+    /// memory-split check adds it (0079 §5).
     pub fn reserved_bytes(max_lines: u32, max_items: u32) -> u64 {
         use core::mem::size_of;
         let per_line = size_of::<Line>()
@@ -287,7 +408,11 @@ impl Transport {
         } else {
             u64::from(max_items) + 1
         };
-        u64::from(max_lines) * per_line as u64 + nodes * size_of::<Node>() as u64
+        let (segs, tiles, headroom) = geometry::caps(max_lines);
+        u64::from(max_lines) * per_line as u64
+            + nodes * size_of::<Node>() as u64
+            + u64::from(segs) * size_of::<SegRec>() as u64
+            + (u64::from(tiles) + u64::from(headroom)) * size_of::<TileEntry>() as u64
     }
 
     /// The bytes this store's arenas hold now (their capacities): what `set_caps` reserved, or
@@ -298,12 +423,14 @@ impl Transport {
             + self.index.capacity() * size_of::<(LineId, u32)>()
             + self.order.capacity() * size_of::<u32>()
             + self.scratch.capacity_bytes()
-            + self.nodes.capacity() * size_of::<Node>()) as u64
+            + self.nodes.capacity() * size_of::<Node>()
+            + self.segs.capacity() * size_of::<SegRec>()
+            + self.tiles.capacity() * size_of::<TileEntry>()) as u64
     }
 
-    /// The line's runs front to back, `f(item, count, gap)` (the store's shape, 0077 A6; tests and
-    /// tools).
-    pub fn runs_in(&self, line: LineId, f: &mut dyn FnMut(Item, u16, u32)) -> Result<(), Unknown> {
+    /// The line's runs front to back, `f(item, count, gap)` (the store's shape, 0077 A6; a later
+    /// run's `gap` is negative for a squashed pair; tests and tools).
+    pub fn runs_in(&self, line: LineId, f: &mut dyn FnMut(Item, u16, i32)) -> Result<(), Unknown> {
         let mut cur = self.read_line(line)?.head;
         while cur != NIL {
             let n = self.nodes[cur as usize];
@@ -360,7 +487,7 @@ impl Transport {
             return Ok(None);
         }
         let first = self.nodes[rec.head as usize];
-        let mut last = first.run.gap + SPACING * (u32::from(first.run.count) - 1);
+        let mut last = first.run.gap as u32 + SPACING * (u32::from(first.run.count) - 1);
         let mut cur = first.next;
         while cur != NIL {
             let n = self.nodes[cur as usize];
@@ -462,23 +589,24 @@ impl TransportRead for Transport {
             return Ok(None);
         }
         let r = self.nodes[rec.head as usize].run;
-        Ok(Some((Item(r.item), r.gap)))
+        Ok(Some((Item(r.item), r.gap as u32)))
     }
 
     fn items_in(&self, line: LineId, f: &mut dyn FnMut(Item, u32)) -> Result<(), Unknown> {
         let rec = self.read_line(line)?;
-        let mut prev_last: Option<u32> = None;
+        let mut prev_last: Option<i64> = None;
         let mut cur = rec.head;
+        let sp = i64::from(SPACING);
         while cur != NIL {
             let n = self.nodes[cur as usize];
             let first = match prev_last {
-                None => n.run.gap,
-                Some(p) => p + SPACING + n.run.gap,
+                None => i64::from(n.run.gap),
+                Some(p) => p + sp + i64::from(n.run.gap),
             };
-            for k in 0..u32::from(n.run.count) {
-                f(Item(n.run.item), first + SPACING * k);
+            for k in 0..i64::from(n.run.count) {
+                f(Item(n.run.item), (first + sp * k) as u32);
             }
-            prev_last = Some(first + SPACING * (u32::from(n.run.count) - 1));
+            prev_last = Some(first + sp * (i64::from(n.run.count) - 1));
             cur = n.next;
         }
         Ok(())
@@ -487,12 +615,57 @@ impl TransportRead for Transport {
     fn sunk(&self, line: LineId) -> Result<u64, Unknown> {
         Ok(self.read_line(line)?.sunk)
     }
+
+    fn segments(&self, line: LineId, f: &mut dyn FnMut(Segment)) -> Result<(), Unknown> {
+        let l = self.slot(line).ok_or(Unknown)?;
+        for r in self.seg_slice(l) {
+            f(r.seg);
+        }
+        Ok(())
+    }
+
+    fn pos_to_world(&self, line: LineId, pos: u32) -> Result<Option<WorldPos>, Unknown> {
+        let l = self.slot(line).ok_or(Unknown)?;
+        Ok(self.pos_to_world_slot(l, pos))
+    }
+
+    fn chunks_of(
+        &self,
+        line: LineId,
+        dims: ChunkDims,
+        f: &mut dyn FnMut(ChunkCoord),
+    ) -> Result<(), Unknown> {
+        let l = self.slot(line).ok_or(Unknown)?;
+        self.chunks_of_slot(l, dims, f);
+        Ok(())
+    }
+
+    fn anchor(&self, line: LineId, dims: ChunkDims) -> Result<Option<ChunkCoord>, Unknown> {
+        let l = self.slot(line).ok_or(Unknown)?;
+        Ok(self
+            .pos_to_world_slot(l, 0)
+            .map(|p| dims.chunk_of(p.tile())))
+    }
+
+    fn lines_at(&self, tile: TilePos, f: &mut dyn FnMut(LineId, u32)) -> Result<(), Unknown> {
+        // M43 review (the prediction rule): this read names no line, so a store holding no
+        // transport state (a replica's is never reserved, until M46) answers `Unknown`, not
+        // "no line here".
+        if !self.reserved {
+            return Err(Unknown);
+        }
+        self.lines_at_tile(tile, f);
+        Ok(())
+    }
 }
 
 impl TransportWrite for Transport {
     fn create(&mut self, len: u32, speed: u16) -> Result<LineId, TransportError> {
         if self.index.len() as u32 >= self.max_lines || self.next_id == u32::MAX {
             return Err(Full);
+        }
+        if len > MAX_LEN {
+            return Err(TransportError::TooLong);
         }
         if speed == 0 || u32::from(speed) >= len {
             return Err(BadSpeed);
@@ -507,37 +680,45 @@ impl TransportWrite for Transport {
         Ok(id)
     }
 
-    fn destroy(&mut self, line: LineId, f: &mut dyn FnMut(Item)) -> Result<(), TransportError> {
+    fn destroy(&mut self, line: LineId, f: &mut dyn FnMut(Item)) -> Result<u32, TransportError> {
+        self.destroy_line(line, f)
+    }
+
+    fn split(&mut self, line: LineId, at: u32) -> Result<LineId, TransportError> {
+        self.split_line(line, at)
+    }
+
+    fn join(&mut self, front: LineId, back: LineId) -> Result<(), TransportError> {
+        self.join_lines(front, back)
+    }
+
+    fn extend_front(&mut self, line: LineId, by: u32) -> Result<(), TransportError> {
+        self.extend(line, by, true)
+    }
+
+    fn extend_back(&mut self, line: LineId, by: u32) -> Result<(), TransportError> {
+        self.extend(line, by, false)
+    }
+
+    fn shrink_front(&mut self, line: LineId, by: u32) -> Result<(), TransportError> {
+        self.shrink(line, by, true)
+    }
+
+    fn shrink_back(&mut self, line: LineId, by: u32) -> Result<(), TransportError> {
+        self.shrink(line, by, false)
+    }
+
+    fn rescale(&mut self, line: LineId, new_len: u32) -> Result<(), TransportError> {
+        self.rescale_line(line, new_len)
+    }
+
+    fn take_front(&mut self, line: LineId) -> Result<Option<Item>, TransportError> {
         let slot = self.slot(line).ok_or(TransportError::NoLine)?;
-        let mut cur = self.lines[slot as usize].head;
-        while cur != NIL {
-            let n = self.nodes[cur as usize];
-            for _ in 0..n.run.count {
-                f(Item(n.run.item));
-            }
-            self.items -= u32::from(n.run.count);
-            self.release_node(cur);
-            cur = n.next;
-        }
-        let k = self
-            .index
-            .binary_search_by(|(i, _)| i.cmp(&line))
-            .expect("slot() found it");
-        self.index.remove(k);
-        // Feeders of the destroyed line lose their target (M43 decides the full semantics).
-        for &(_, s) in &self.index {
-            let rec = &mut self.lines[s as usize];
-            if rec.out == Output::Next(line) {
-                rec.out = Output::DeadEnd;
-                rec.next_slot = NIL;
-                rec.jam_valid = false;
-            }
-        }
-        self.lines[slot as usize] = Line::free(self.free_line);
-        self.free_line = slot;
-        self.graph_dirty = true;
-        self.changed = true;
-        Ok(())
+        Ok(self.take_front_slot(slot).map(Item))
+    }
+
+    fn set_segments(&mut self, line: LineId, segs: &[Segment]) -> Result<(), TransportError> {
+        self.set_segments_line(line, segs)
     }
 
     fn set_out(&mut self, line: LineId, out: Output) -> Result<(), TransportError> {

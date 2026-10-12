@@ -41,10 +41,10 @@ You are the manager session for the belts effort: one long-running Opus or Fable
 
 ## Status
 
-- **Current milestone:** M43 (`docs/plan/43-transport-surgery-and-geometry.md`)
-- **State:** M40, M41, M42, M42b done (2026-10-11). `fx-belts` drives `engine::transport` through requests; four belt goldens hold natively, under Node and under Bun (the `wasm` suite's discovery leg replays every fixture's scenarios). M43 not started; M43 was split (M43 engine, M43b fixture goldens).
-- **Exact next step:** delegate M43 to one `general-purpose` sub-agent (`model: opus`) with the file brief at `scratchpad/m43-implementer-brief.md` (if the scratchpad is gone: rewrite it from the brief's Read-first list, 0079 §8-§11 and M42's Deviations); gate, review, commit; then M43b (fixture ops and goldens), then M44.
-- **Blockers:** none. Open with Tyler (batched in the session messages of 2026-10-11, defaults proceeding): the six **(assumed)** rule lines plus the client-side spawner replay (`games/reference/README.md` "Belts"); told: old saves refuse to load (0079 §6), 7.5 MiB per host world at the default belt caps (0079 §5). CI: read the run of the M42b commit before starting M43b.
+- **Current milestones:** M43b (`docs/plan/43b-transport-surgery-goldens.md`, fixture) and M44 (`docs/plan/44-transport-merge-and-fork.md`, engine) in parallel: different crates, one writer each.
+- **State:** M40-M43 done (2026-10-11). `engine::transport` has runs, advance, order, codec, caps, surgery, item primitives and geometry (0079 §1-§14). M44 was split (M44 engine, M44b fixture); M45 follows 44b.
+- **Exact next step:** delegate M43b and M44 to two `general-purpose` sub-agents (`model: opus`) from the file briefs `scratchpad/m43b-implementer-brief.md` and `scratchpad/m44-implementer-brief.md` (if the scratchpad is gone: rewrite them from each brief's Read-first list, 0079 §8-§14 and M43's Deviations); gate each (reruns, adversarial review, full `pnpm test` at `uptime` under 4), commit each; then M44b, then M45 (the phase end: `pnpm test:slow`, tag `belts-core-complete`).
+- **Blockers:** none. Open with Tyler (batched in the session messages of 2026-10-11, defaults proceeding): the six **(assumed)** rule lines plus the client-side spawner replay (`games/reference/README.md` "Belts"); told: old saves refuse to load (0079 §6); belts are opt-in (caps default 0, 0079 §5), 16 MiB at the recommended caps (0079 §14). CI: read the runs of `429f2798` and of the M43 commit before M44b starts; commit from the main tree only (a worktree commit on a detached HEAD does not reach `main`).
 
 ## Exit criteria of the whole effort
 

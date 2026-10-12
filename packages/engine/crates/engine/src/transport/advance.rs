@@ -105,7 +105,7 @@ impl Transport {
                 (pos0 - speed).max(bound)
             };
             if p >= 0 {
-                self.get_mut(h).gap = p as u32;
+                self.get_mut(h).gap = p as i32;
                 break pos0 - p;
             }
             // `p < 0` needs a leader below `-SP`: a `Sink` or a `Next` (a dead end bounds p at 0).
@@ -127,7 +127,7 @@ impl Transport {
             if r.count > 1 {
                 let f = self.get_mut(h);
                 f.count -= 1;
-                f.gap = (pos0 + SP) as u32;
+                f.gap = (pos0 + SP) as i32;
                 continue;
             }
             match self.next(h) {
@@ -143,7 +143,7 @@ impl Transport {
                     let next_pos = pos0 + SP + i64::from(self.get(n).gap);
                     self.pop_front(l);
                     h = self.first(l).expect("a run followed");
-                    self.get_mut(h).gap = next_pos as u32;
+                    self.get_mut(h).gap = next_pos as i32;
                     if h == fresh {
                         // Only items that crossed the cut are left: they stay where they landed.
                         let rec = &mut self.lines[l as usize];
@@ -172,19 +172,34 @@ impl Transport {
         let mut last_d = d0;
         let mut cur = start;
         let mut all_rest_at_speed = false;
+        // A squashed line (M43) has no early exit: a negative gap behind a run that moved the full
+        // `speed` still holds its item. Behind such a run every gap `>= 0` is skipped untouched
+        // (exactly what the early exit leaves), so the flag being stale changes nothing.
+        let squashed = self.lines[l as usize].squashed;
+        let mut saw_negative = false;
         while let Some(c) = cur {
             if c == fresh {
                 break;
             }
-            if last_d == speed {
-                all_rest_at_speed = true;
-                break;
-            }
             let r = self.get(c);
+            if last_d == speed {
+                if !squashed {
+                    all_rest_at_speed = true;
+                    break;
+                }
+                if r.gap >= 0 {
+                    cur = self.next(c);
+                    continue;
+                }
+            }
             let g = i64::from(r.gap) + last_d;
-            let d = g.min(speed);
+            // The squash rule: an item inside its bound (`g < 0`) does not move.
+            let d = g.min(speed).max(0);
             let ng = g - d;
             last_d = d;
+            if ng < 0 {
+                saw_negative = true;
+            }
             if ng == 0 {
                 let pc = self.prev(c).expect("never the front run");
                 let pr = self.get(pc);
@@ -204,16 +219,21 @@ impl Transport {
                 }
                 cur = nx;
             } else {
-                self.get_mut(c).gap = ng as u32;
+                self.get_mut(c).gap = ng as i32;
                 cur = self.next(c);
             }
         }
         let moved = if all_rest_at_speed { speed } else { last_d };
         if fresh != NIL {
             // The runs ahead moved `moved`; the cut's items stay, so their gap widens by it.
-            self.get_mut(fresh).gap += moved as u32;
+            self.get_mut(fresh).gap += moved as i32;
         }
         let rec = &mut self.lines[l as usize];
+        if squashed && !saw_negative {
+            // Every run but the packed ones the cursor skipped (gap 0) and the cut's landed ones
+            // (gap >= 0) was walked: none is squashed any more.
+            rec.squashed = false;
+        }
         if fresh == NIL {
             rec.tail_pos -= moved as u32;
         }
@@ -241,7 +261,7 @@ impl Transport {
                 Run {
                     item,
                     count: 1,
-                    gap: pos,
+                    gap: pos as i32,
                 },
             );
             if fresh {
@@ -249,7 +269,7 @@ impl Transport {
             }
         } else {
             debug_assert!(pos >= line.tail_pos + SPACING, "landing inside the spacing");
-            let gap = pos - line.tail_pos - SPACING;
+            let gap = (pos - line.tail_pos - SPACING) as i32;
             let b = line.tail;
             let joinable = !fresh || line.fresh_runs > 0;
             let back = self.get_mut(b);
@@ -292,192 +312,5 @@ impl Transport {
         self.land(l, item, land as u32, false);
         self.items += 1;
         Ok(())
-    }
-
-    /// Absolute position of a run's first item given the previous run's last item position.
-    #[inline]
-    fn first_pos(prev_last: Option<i64>, r: Run) -> i64 {
-        match prev_last {
-            None => i64::from(r.gap),
-            Some(p) => p + SP + i64::from(r.gap),
-        }
-    }
-
-    pub(super) fn insert_at_slot(
-        &mut self,
-        l: u32,
-        pos: u32,
-        item: u16,
-    ) -> Result<(), TransportError> {
-        let line = self.lines[l as usize];
-        let pos = i64::from(pos);
-        if pos > i64::from(line.len) - 1 {
-            return Err(TransportError::NoRoom);
-        }
-        let mut prev: Option<u32> = None;
-        let mut prev_last: Option<i64> = None;
-        let mut cur = self.first(l);
-        while let Some(c) = cur {
-            let r = self.get(c);
-            let f = Self::first_pos(prev_last, r);
-            if f > pos {
-                break;
-            }
-            let last = f + SP * (i64::from(r.count) - 1);
-            if pos <= last {
-                return Err(TransportError::NoRoom);
-            }
-            prev = Some(c);
-            prev_last = Some(last);
-            cur = self.next(c);
-        }
-        if prev_last.is_some_and(|pl| pos - pl < SP) {
-            return Err(TransportError::NoRoom);
-        }
-        let gap_new = match prev_last {
-            None => pos,
-            Some(pl) => pos - pl - SP,
-        };
-        // Every merge guards `count` against `u16` overflow (0077 A6b (ii)).
-        let merge_prev = gap_new == 0
-            && prev.is_some_and(|p| {
-                let pr = self.get(p);
-                pr.item == item && pr.count < u16::MAX
-            });
-        match cur {
-            None => {
-                match prev {
-                    Some(p) if merge_prev => self.get_mut(p).count += 1,
-                    _ => self.insert_before(
-                        l,
-                        None,
-                        Run {
-                            item,
-                            count: 1,
-                            gap: gap_new as u32,
-                        },
-                    ),
-                }
-                self.lines[l as usize].tail_pos = pos as u32;
-            }
-            Some(c) => {
-                let r = self.get(c);
-                let f = Self::first_pos(prev_last, r);
-                if f - pos < SP {
-                    return Err(TransportError::NoRoom);
-                }
-                let gap_succ = (f - pos - SP) as u32;
-                self.get_mut(c).gap = gap_succ;
-                let merge_succ = gap_succ == 0 && r.item == item && r.count < u16::MAX;
-                match prev {
-                    Some(p) if merge_prev => {
-                        self.get_mut(p).count += 1;
-                        let merged = self.get(p).count;
-                        if merge_succ && u32::from(merged) + u32::from(r.count) <= 0xFFFF {
-                            self.get_mut(p).count += r.count;
-                            self.remove_run(l, c);
-                        }
-                    }
-                    _ if merge_succ => {
-                        let s = self.get_mut(c);
-                        s.count += 1;
-                        s.gap = gap_new as u32;
-                    }
-                    _ => self.insert_before(
-                        l,
-                        Some(c),
-                        Run {
-                            item,
-                            count: 1,
-                            gap: gap_new as u32,
-                        },
-                    ),
-                }
-            }
-        }
-        self.items += 1;
-        let epoch = self.epoch;
-        let rec = &mut self.lines[l as usize];
-        rec.items += 1;
-        rec.jam_valid = false;
-        rec.mark = epoch;
-        self.changed = true;
-        Ok(())
-    }
-
-    pub(super) fn remove_at_slot(&mut self, l: u32, pos: u32) -> Option<u16> {
-        let pos = i64::from(pos);
-        let mut prev_last: Option<i64> = None;
-        let mut cur = self.first(l);
-        let (c, k, r) = loop {
-            let c = cur?;
-            let r = self.get(c);
-            let f = Self::first_pos(prev_last, r);
-            if f > pos + SP / 2 {
-                return None;
-            }
-            let last = f + SP * (i64::from(r.count) - 1);
-            if last >= pos - SP / 2 {
-                // Nearest item of this run, the front one on a tie.
-                let k = if pos <= f {
-                    0
-                } else {
-                    ((pos - f + SP / 2 - 1) / SP).min(i64::from(r.count) - 1)
-                };
-                if (f + SP * k - pos).abs() <= SP / 2 {
-                    break (c, k as u16, r);
-                }
-            }
-            prev_last = Some(last);
-            cur = self.next(c);
-        };
-        let next = self.next(c);
-        if r.count == 1 {
-            match next {
-                Some(n) => self.get_mut(n).gap += r.gap + SPACING,
-                None => {
-                    if let Some(pl) = prev_last {
-                        self.lines[l as usize].tail_pos = pl as u32;
-                    }
-                }
-            }
-            if prev_last.is_none() {
-                self.pop_front(l);
-            } else {
-                self.remove_run(l, c);
-            }
-        } else if k == 0 {
-            let m = self.get_mut(c);
-            m.count -= 1;
-            m.gap += SPACING;
-        } else if k == r.count - 1 {
-            self.get_mut(c).count -= 1;
-            match next {
-                Some(n) => self.get_mut(n).gap += SPACING,
-                None => self.lines[l as usize].tail_pos -= SPACING,
-            }
-        } else {
-            self.get_mut(c).count = k;
-            self.insert_before(
-                l,
-                next,
-                Run {
-                    item: r.item,
-                    count: r.count - k - 1,
-                    gap: SPACING,
-                },
-            );
-        }
-        self.items -= 1;
-        let epoch = self.epoch;
-        let rec = &mut self.lines[l as usize];
-        rec.items -= 1;
-        rec.jam_valid = false;
-        rec.mark = epoch;
-        if rec.head == NIL {
-            rec.held = false;
-        }
-        self.changed = true;
-        Some(r.item)
     }
 }

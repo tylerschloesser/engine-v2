@@ -18,11 +18,21 @@
 //! high-water mark sees it once live bytes sit exactly at the mark, which the padding arranges
 //! (M40's `alloc_deltas`). Both deltas must be 0. `transport_tick_no_alloc_control` injects one
 //! growing `Vec` push per tick and must see the live delta rise.
+//!
+//! `transport_surgery_no_alloc` (M43) runs the same world with surgery inside the window: every
+//! 100 ticks a line is cut in half and joined back (the run relink, a new line slot and id, the
+//! feeder redirects, the slot freed again), one line is extended at the front and shrunk back,
+//! another rescaled to 7/8 and back (squashed pairs and their resolution included), and a line
+//! gets a straight segment (the segment pool and the tile index's in-place merge); the per-tick
+//! `insert_at`/`remove_at` calls stay. Surgery allocates only from the arenas `set_caps` reserved.
 
 use engine::abi::Arena;
 use engine::abi::arena::{thread_high_water_bytes, thread_live_bytes};
 use engine::rng::SimRng;
-use engine::transport::{Item, LineId, Output, SPACING, Transport, TransportRead, TransportWrite};
+use engine::transport::{
+    Geometry, Item, LineId, Output, SPACING, Segment, Transport, TransportRead, TransportWrite,
+};
+use engine::world::WorldPos;
 
 #[global_allocator]
 static ALLOCATOR: Arena = Arena;
@@ -52,6 +62,9 @@ struct World {
     spawners: Vec<Spawner>,
     rng: SimRng,
     sunk_lines: Vec<LineId>,
+    /// M43: run surgery every 100 ticks; how many cuts, joins, rescales and segment sets ran.
+    surgery: bool,
+    done: [u32; 4],
 }
 
 fn build() -> World {
@@ -141,7 +154,44 @@ fn build() -> World {
         spawners,
         rng: SimRng::seed_seq(7, 0x1A5E),
         sunk_lines,
+        surgery: false,
+        done: [0; 4],
     }
+}
+
+/// M43's surgery step (module doc): a cut and a join, an extend and a shrink, a rescale there and
+/// back, and one line's segments, on lines picked by the world's own stream.
+fn surgery(w: &mut World) {
+    let n = w.lines.len() as u32;
+    let l = w.lines[w.rng.below(n) as usize];
+    let len = w.t.len(l).unwrap();
+    if let Ok(back) = w.t.split(l, len / 2) {
+        w.t.join(l, back).expect("a split line joins back");
+        w.done[0] += 1;
+    }
+    let l = w.lines[w.rng.below(n) as usize];
+    w.t.extend_front(l, 256).unwrap();
+    w.t.shrink_front(l, 256).expect("nothing moved in between");
+    let l = w.lines[w.rng.below(n) as usize];
+    let len = w.t.len(l).unwrap();
+    if w.t.rescale(l, len / 8 * 7).is_ok() {
+        w.t.rescale(l, len).unwrap();
+        w.done[1] += 1;
+    }
+    let l = w.lines[w.rng.below(n) as usize];
+    let len = w.t.len(l).unwrap();
+    let y = (w.ticks * 256) as i32;
+    let seg = Segment {
+        len,
+        geometry: Geometry::Straight {
+            from: WorldPos { x: 0, y },
+            to: WorldPos { x: len as i32, y },
+        },
+    };
+    if w.t.set_segments(l, &[seg]).is_ok() {
+        w.done[2] += 1;
+    }
+    w.done[3] += 1;
 }
 
 /// One tick: spawners (fractional rate, a refusal holds the accumulator), inserter-like calls,
@@ -175,6 +225,9 @@ fn tick(w: &mut World, leak: Option<&mut Vec<u64>>) {
     // Every 50 ticks: a new line fed one item and handing off into the graph, and the previous
     // one destroyed (graph changes inside the window).
     w.ticks += 1;
+    if w.surgery && w.ticks.is_multiple_of(100) {
+        surgery(w);
+    }
     if w.ticks.is_multiple_of(50) {
         let into = w.lines[w.rng.below(n) as usize];
         let l = w.t.create(8 * TILE, SPEED).expect("room for churn");
@@ -193,7 +246,13 @@ fn tick(w: &mut World, leak: Option<&mut Vec<u64>>) {
 
 /// `(live delta, high-water delta, sunk, items at the end)` over [`TICKS`].
 fn run(leak: bool) -> (isize, isize, u64, u32) {
+    run_with(leak, false).0
+}
+
+/// [`run`], optionally with M43's surgery; also returns the surgery counts.
+fn run_with(leak: bool, with_surgery: bool) -> ((isize, isize, u64, u32), [u32; 4]) {
     let mut w = build();
+    w.surgery = with_surgery;
     let mut leaked: Vec<u64> = Vec::new();
     let pad = (thread_high_water_bytes() - thread_live_bytes()).max(0) as usize + 1;
     let _pad = vec![0u8; pad];
@@ -207,7 +266,7 @@ fn run(leak: bool) -> (isize, isize, u64, u32) {
         thread_high_water_bytes() - high0,
     );
     let sunk = w.sunk_lines.iter().map(|&l| w.t.sunk(l).unwrap()).sum();
-    (deltas.0, deltas.1, sunk, w.t.items_len())
+    ((deltas.0, deltas.1, sunk, w.t.items_len()), w.done)
 }
 
 #[test]
@@ -232,4 +291,110 @@ fn transport_tick_no_alloc_control() {
         live > 0 && high > 0,
         "the injected per-tick growth was not seen: live {live}, high-water {high}"
     );
+}
+
+/// M43: surgery inside the measured window allocates nothing (module doc). The counts prove each
+/// kind ran: six surgery steps, every cut joined back, the rescales applied, the segments set.
+#[test]
+fn transport_surgery_no_alloc() {
+    let ((live, high, sunk, items), done) = run_with(false, true);
+    assert_eq!(done, [6, 6, 6, 6], "cuts, rescales, segment sets, steps");
+    assert!(sunk > 1_000 && items > 1_000, "sunk {sunk}, items {items}");
+    assert_eq!(
+        (live, high),
+        (0, 0),
+        "surgery allocated (live, high-water bytes over {TICKS} ticks)"
+    );
+}
+
+/// Line `l`'s path along row `row`: 16 tiles in `k` straight segments (`k - 1` of one tile, the
+/// last covering the rest), written into `out` (no allocation).
+fn row_path(row: i32, k: usize, out: &mut [Segment; 16]) -> usize {
+    for (j, s) in out.iter_mut().enumerate().take(k) {
+        let x0 = 256 * j as i32;
+        let x1 = if j + 1 == k { 16 * 256 } else { x0 + 256 };
+        *s = Segment {
+            len: (x1 - x0) as u32,
+            geometry: Geometry::Straight {
+                from: WorldPos {
+                    x: x0,
+                    y: row * 256,
+                },
+                to: WorldPos {
+                    x: x1,
+                    y: row * 256,
+                },
+            },
+        };
+    }
+    k
+}
+
+/// M43 review (finding 6): the segment pool's in-place compaction. Caps `(4, 0)` give a pool of
+/// 16 records and a tile index of 32 entries; two lines of 16 tiles share them, re-registered 300
+/// times with 1..=15 and the complementary count of segments (`b` cleared first, so `a`'s new
+/// records meet a pool tail full of dead ones and compaction runs nearly every time). After
+/// each round `segments()` reads back exactly what was registered and `lines_at` finds each
+/// line at every tile at offset `256 x tile`; all inside the measured window (live and
+/// high-water 0: the pool never grows past its reservation). Afterwards the index equals a
+/// rebuild from scratch.
+#[test]
+fn transport_segment_pool_compacts_no_alloc() {
+    let mut t = Transport::new(4, 0);
+    let a = t.create(16 * 256, 8).unwrap();
+    let b = t.create(16 * 256, 8).unwrap();
+    let mut buf = [Segment {
+        len: 1,
+        geometry: Geometry::Straight {
+            from: WorldPos::default(),
+            to: WorldPos::default(),
+        },
+    }; 16];
+    let pad = (thread_high_water_bytes() - thread_live_bytes()).max(0) as usize + 1;
+    let _pad = vec![0u8; pad];
+    let (live0, high0) = (thread_live_bytes(), thread_high_water_bytes());
+    let mut checked = 0u32;
+    for i in 0..300usize {
+        let k = 1 + i % 15;
+        t.set_segments(b, &[]).unwrap();
+        for (line, row, n) in [(a, 0, k), (b, 1, 16 - k)] {
+            let n = row_path(row, n, &mut buf);
+            t.set_segments(line, &buf[..n]).unwrap();
+            let mut j = 0;
+            t.segments(line, &mut |s| {
+                assert_eq!(s, buf[j], "round {i}: segment {j}");
+                j += 1;
+            })
+            .unwrap();
+            assert_eq!(j, n, "round {i}: segment count");
+        }
+        for x in 0..16 {
+            for (line, row) in [(a, 0), (b, 1)] {
+                let mut hits = 0;
+                t.lines_at(engine::world::TilePos::new(x, row), &mut |l, o| {
+                    assert_eq!(
+                        (l, o),
+                        (line, 256 * x as u32),
+                        "round {i}: tile ({x}, {row})"
+                    );
+                    hits += 1;
+                })
+                .unwrap();
+                assert_eq!(hits, 1, "round {i}: tile ({x}, {row})");
+                checked += 1;
+            }
+        }
+    }
+    let (live, high) = (
+        thread_live_bytes() - live0,
+        thread_high_water_bytes() - high0,
+    );
+    assert_eq!(checked, 300 * 32);
+    assert_eq!((live, high), (0, 0), "segment pool compaction allocated");
+    let mut incremental = Vec::new();
+    t.tile_index_into(&mut incremental);
+    t.rebuild_index();
+    let mut rebuilt = Vec::new();
+    t.tile_index_into(&mut rebuilt);
+    assert_eq!(incremental, rebuilt);
 }
