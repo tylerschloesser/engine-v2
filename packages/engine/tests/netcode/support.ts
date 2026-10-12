@@ -145,6 +145,7 @@ export type BeltsRegime =
   | 'Mixed'
   | 'InserterLike'
   | 'MixedEmpty'
+  | 'MixedFeeders'
   | { SaturatedView: { jam_pct: number; period: number; speed?: number } }
 
 /** M47b: `createNetHarness`'s `world` for the `fx-belts` bench world built at genesis (seed 7, as

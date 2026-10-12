@@ -33,8 +33,11 @@ allocate nothing; readers borrow and never panic.
   `OwnPlayer`. Subscribing sends `ChunkEnterPristine` (coordinate only) or a snapshot `{coord, version, overlay runs, entity puts}`
   consistent as of the frame's tick; later changes are `ChunkDeltas`. Line structures (`len`, `speed`, `Output`, segments; [0078](../decisions/0078-transport-forecast-replication.md) §1) are a
   fourth replicated thing: section `LineStructs` puts a line while its chunk set meets a chunk the connection holds and sends `Gone` when
-  it no longer does, the structures anchored in an entering or re-snapshotted chunk ride that frame, and the chunk hash covers the
-  structures anchored in the chunk (`host/lines.rs`).
+  it no longer does, the structures anchored in an entering or re-snapshotted chunk that the client lacks (not held, held at an older
+  `structure_version`, or with an `unknown` list) ride that frame with their lists within its put budget (past it a held one goes
+  `Gone`, any other stays pending, and both come later) while the replica keeps the ones it holds (every one is put again when the snapshot answers the client's
+  `ResyncChunk`; the enter drain prices exactly those puts, the delta-collapse estimate every anchored line; M48c), and the chunk hash
+  covers the structures anchored in the chunk (`host/lines.rs`).
 - **Transport forecasts** ([0078](../decisions/0078-transport-forecast-replication.md) A3, M47). A held line's items travel as forecasts
   in section `Forecasts` (13), only when the host's model of the line is wrong, never per tick. The host's tracker
   (`transport/forecast.rs`, derived, never hashed) keeps what every holder was told, checks each line's front item inside `advance` plus a

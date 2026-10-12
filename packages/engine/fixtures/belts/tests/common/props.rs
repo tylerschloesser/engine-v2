@@ -205,7 +205,8 @@ impl World {
                     g.taken += u64::from(t.taken);
                 }
                 Thing::Destroyed(n) => g.destroyed += u64::from(*n),
-                Thing::Request(_) | Thing::Jam(_) | Thing::Inserter(_) => {}
+                // A feeder (M48c) counts nothing: only the bench genesis makes one.
+                Thing::Request(_) | Thing::Jam(_) | Thing::Inserter(_) | Thing::Feeder(_) => {}
             }
         }
         g

@@ -13,9 +13,11 @@
 //! `Welcome` for the world's own caps ([`Replica::set_transport_caps`]: the client pays what the
 //! world declares, 0079 §5) and emptied there; it holds the structure of every line the host
 //! routes to this connection (`LineStructs`, applied through [`Replica::apply_structure`]) and
-//! answers item reads from its forecasts (M47, [`Replica::apply_forecast`]). A snapshot of a chunk drops the structures anchored in
-//! it first ([`Replica::drop_anchored_structures`]): the host sends them again in the same frame,
-//! so a resync replaces them like the chunk's entities.
+//! answers item reads from its forecasts (M47, [`Replica::apply_forecast`]). A snapshot of a chunk
+//! keeps the structures anchored in it and their items (M48c; M46 dropped them and the host put
+//! every one again with its list, so a line held before its anchor chunk entered went twice): the
+//! same frame puts the ones the host's routing says this replica lacks, and every one when the
+//! snapshot answers this replica's own `ResyncChunk` (a put replaces a held structure).
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -84,9 +86,6 @@ pub struct Replica<G: Game> {
     /// Reused across `entities_in` calls (`.claude/rules/hot-paths.md`): a `RefCell` since
     /// `WorldRead::entities_in` takes `&self`.
     entities_in_scratch: RefCell<Vec<EntityId>>,
-    /// Reused by [`Self::drop_anchored_structures`] (capacity settles at the most lines anchored in
-    /// one chunk).
-    scratch_lines: Vec<crate::transport::LineId>,
 }
 
 impl<G: Game> Replica<G> {
@@ -146,7 +145,6 @@ impl<G: Game> Replica<G> {
             remote_presences: RemotePresences::new(),
             roster: BTreeMap::new(),
             entities_in_scratch: RefCell::new(Vec::new()),
-            scratch_lines: Vec::new(),
         }
     }
 
@@ -205,25 +203,6 @@ impl<G: Game> Replica<G> {
     /// The chunk a put's line is anchored in (its front point's), held or not.
     pub(crate) fn anchor_of(&self, put: &crate::wire::lines::Put) -> Option<ChunkCoord> {
         crate::transport::Transport::anchor_of(put, self.dims)
-    }
-
-    /// Before a chunk snapshot is applied: drops every held structure anchored in `chunk` (the
-    /// host sends each again in the same frame's `LineStructs`, module doc).
-    pub(crate) fn drop_anchored_structures(&mut self, chunk: ChunkCoord) {
-        self.scratch_lines.clear();
-        let lines = &mut self.scratch_lines;
-        self.store
-            .transport()
-            .anchored_in(chunk, self.dims, &mut |l| lines.push(l));
-        for i in 0..self.scratch_lines.len() {
-            let id = self.scratch_lines[i];
-            let _ = self
-                .store
-                .transport_mut()
-                .apply_structure(crate::wire::lines::Record::Gone(crate::wire::lines::Gone {
-                    id,
-                }));
-        }
     }
 
     /// Every held structure, ascending by id (`engine/test`'s `lineStructures`).

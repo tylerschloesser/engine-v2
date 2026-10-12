@@ -887,3 +887,96 @@ fn slow_snapshot_belts_large() {
         println!("BENCH_SAMPLE {}", measure_snapshot());
     }
 }
+
+/// M48c (0079 §19 (e)): the `MixedFeeders` regime's feeders keep no state. Over 600 ticks at 1/64
+/// the change log carries no entity delta at all (every entity of the world is a feeder, never
+/// written after genesis), where `Mixed` writes its spawners' accumulators; every feeder declares
+/// `period 256, acc 0, kinds 0` and the tracker replays it exactly (`spawner_mismatches` 0, none
+/// dropped, no insert routed as an arrival after tick 1). Same lines and items at rest as `Mixed`,
+/// one feeder per spawner; the items on the lines at the end are pinned.
+#[test]
+fn belts_feeders_write_no_delta() {
+    use engine::delta::Delta;
+    use engine::transport::ROUTE_INSERT;
+    // `(regime, entities, entity deltas, items at the end)`: pinned exactly (seed 7).
+    let pins: [(BenchRegime, usize, u64, u64); 2] = [
+        (BenchRegime::Mixed, 22, 9_075, 4_522),
+        (BenchRegime::MixedFeeders, 22, 0, 5_843),
+    ];
+    let mixed = world_of(BenchSpec {
+        seed: SEED,
+        scale: 64,
+        regime: BenchRegime::Mixed,
+    });
+    for (regime, want_entities, want_deltas, want_items) in pins {
+        let spec = BenchSpec {
+            seed: SEED,
+            scale: 64,
+            regime,
+        };
+        let w = world_of(spec);
+        assert_eq!(
+            w.lines, mixed.lines,
+            "{regime:?}: the Mixed lines and items"
+        );
+        let mut bench = BenchHost::new(spec);
+        let (mut deltas, mut feeder_deltas, mut undeclared) = (0u64, 0u64, 0u64);
+        for _ in 0..600 {
+            bench.step(false);
+            let a = bench.host.sim().unwrap().authority();
+            for (_, d) in a.changes() {
+                match d {
+                    Delta::EntityPut { entity, .. } => {
+                        deltas += 1;
+                        feeder_deltas += u64::from(matches!(entity, Thing::Feeder(_)));
+                    }
+                    Delta::EntityGone { .. } => deltas += 1,
+                    _ => {}
+                }
+            }
+            if bench.tick > 1 {
+                undeclared += a
+                    .store()
+                    .transport()
+                    .forecast_crossings()
+                    .iter()
+                    .filter(|c| c.route() == ROUTE_INSERT)
+                    .count() as u64;
+            }
+        }
+        let sim = bench.host.sim().unwrap();
+        let store = sim.authority().store();
+        let t = store.transport();
+        let c = t.forecast_host_counters();
+        let entities = store.entities().count();
+        let feeders = store
+            .entities()
+            .filter(|(_, e)| matches!(e, Thing::Feeder(_)))
+            .count();
+        let mut items = 0u64;
+        t.line_ids(&mut |l| {
+            let _ = t.items_in(l, &mut |_, _| items += 1);
+        });
+        if std::env::var_os("MEASURE").is_some() {
+            println!(
+                "{regime:?}: {entities} entities ({feeders} feeders), {deltas} entity deltas, \
+                 {items} items, {c:?}"
+            );
+        }
+        if regime == BenchRegime::MixedFeeders {
+            assert_eq!(feeders, w.spawners.len(), "one feeder per spawner");
+            assert_eq!(feeder_deltas, 0, "a feeder wrote");
+        }
+        assert_eq!(
+            (entities, deltas, items),
+            (want_entities, want_deltas, want_items),
+            "{regime:?}: (entities, entity deltas, items at the end)"
+        );
+        assert_eq!(c.spawner_mismatches, 0, "{regime:?}: spawner_mismatches");
+        assert_eq!(
+            c.spawner_declarations_dropped, 0,
+            "{regime:?}: spawner_declarations_dropped"
+        );
+        assert_eq!(undeclared, 0, "{regime:?}: undeclared inserts after tick 1");
+    }
+}

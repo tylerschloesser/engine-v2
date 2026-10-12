@@ -31,7 +31,6 @@ function expectSteady(m: Awaited<ReturnType<typeof measure>>, cell: string): voi
   expect(m.forecastSeenLate, `${cell}: forecastSeenLate`).toBe(0)
   expect(m.unknown, `${cell}: unknown lists`).toBe(0)
   expect(m.degradeLevel, `${cell}: degrade level (1 = every tick)`).toBe(1)
-  expect(m.frames, `${cell}: a frame every tick`).toBe(WINDOW_TICKS)
 }
 
 test(
@@ -40,13 +39,21 @@ test(
     const m = await measure({ SaturatedView: { jam_pct: 20, period: 100 } }, 4721)
     if (process.env.MEASURE) console.log(`MEASURE saturated (20, 100) ${JSON.stringify(m)}`)
     expectSteady(m, '(20 %, 100)')
-    expect(m.items, 'items on the held lines at the end').toBe(294_878)
-    expect(m.states, 'States in the window').toBe(4_576)
-    expect(m.correctionsPerSec, 'corrections a second').toBe(228.8)
-    expect(m.joinTicks, 'ticks to the settled join').toBe(156)
+    // M48c: a snapshot no longer re-puts a held line, so the join settles 12 ticks sooner
+    // (156 lifted under M47b-M48b) and the 400-tick window starts earlier. Every figure is counted
+    // on the delivery clock (RTT 80 ms, jitter 20 ms), and at this phase the last of the window's
+    // 400 frames lands past its edge: 399 delivered, so bytes, States and corrections read one
+    // frame (245 B, 12 States) under the 400-frame figures 3,958 B/s (51,072 + 28,084), 4,576 and
+    // 228.8 that the same code reads with every anchored line forced again (294,878 items then:
+    // a different 20 s of world time). The rate per 400 frames is unchanged.
+    expect(m.items, 'items on the held lines at the end').toBe(294_881)
+    expect(m.states, 'States in the window').toBe(4_564)
+    expect(m.correctionsPerSec, 'corrections a second').toBe(228.2)
+    expect(m.joinTicks, 'ticks to the settled join').toBe(144)
     expect(m.runs, 'visible runs at the end').toBe(150_958)
-    expect(m.structsBytes, 'LineStructs bytes in the window').toBe(51_072)
-    expect(m.forecastsBytes, 'Forecasts bytes in the window').toBe(28_084)
+    expect(m.structsBytes, 'LineStructs bytes in the window').toBe(50_909)
+    expect(m.forecastsBytes, 'Forecasts bytes in the window').toBe(28_002)
+    expect(m.frames, 'frames delivered in the window').toBe(399)
     assertBudget(m, 'transport.downBytesPerSec')
   },
   FAST_TIMEOUT_MS,
@@ -61,11 +68,14 @@ test(
     const m = await measure({ SaturatedView: { jam_pct: 20, period: 20 } }, 4722)
     if (process.env.MEASURE) console.log(`MEASURE saturated (20, 20) ${JSON.stringify(m)}`)
     expectSteady(m, '(20 %, 20)')
-    expect(m.items, 'items on the held lines at the end').toBe(294_867)
+    // M48c: the join settles at 146 ticks (159 before the snapshot dedupe); the bytes are the
+    // same, items and runs are a later 20 s of world time (294,867 and 150,951 before).
+    expect(m.items, 'items on the held lines at the end').toBe(294_872)
     expect(m.states, 'States in the window').toBe(22_880)
     expect(m.correctionsPerSec, 'corrections a second').toBe(1_144)
-    expect(m.joinTicks, 'ticks to the settled join').toBe(159)
-    expect(m.runs, 'visible runs at the end').toBe(150_951)
+    expect(m.joinTicks, 'ticks to the settled join').toBe(146)
+    expect(m.runs, 'visible runs at the end').toBe(150_955)
+    expect(m.frames, 'a frame every tick').toBe(WINDOW_TICKS)
     expect(m.structsBytes, 'LineStructs bytes in the window').toBe(251_760)
     expect(m.forecastsBytes, 'Forecasts bytes in the window').toBe(137_600)
     expect(m.transportDownBytesPerSec, 'recorded in the row source').toBe(19_468)

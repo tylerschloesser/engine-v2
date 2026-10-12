@@ -2299,3 +2299,394 @@ fn wire_forecast_rejects_malformed() {
         "spawner flags 0x2"
     );
 }
+
+/// A straight west-going path along tile row `row` from tile `x0` for `tiles` tiles: its front
+/// point (position 0, the anchor) is at `x0`.
+fn west(x0: i32, row: i32, tiles: u32) -> Segment {
+    Segment {
+        len: tiles * 256,
+        geometry: Geometry::Straight {
+            from: WorldPos {
+                x: x0 * TILE + 128,
+                y: row * TILE + 128,
+            },
+            to: WorldPos {
+                x: (x0 - tiles as i32) * TILE + 128,
+                y: row * TILE + 128,
+            },
+        },
+    }
+}
+
+/// `(line, puts, run lists)` of the frame `build_frame` last made for client 0, added into `acc`.
+fn count_by_line(lb: &Loopback<FcGame>, acc: &mut Vec<(LineId, u32, u32)>) {
+    let bytes = lb.last_built_frame(0);
+    if bytes.is_empty() {
+        return;
+    }
+    let mut bump = |l: LineId, put: u32, list: u32| match acc.iter_mut().find(|e| e.0 == l) {
+        Some(e) => {
+            e.1 += put;
+            e.2 += list;
+        }
+        None => acc.push((l, put, list)),
+    };
+    let mut r = FrameReader::new(bytes).unwrap();
+    while let Some((sid, body)) = r.next_section().unwrap() {
+        match sid {
+            SectionId::LineStructs => {
+                engine::wire::lines::read(&mut ByteReader::new(body), |rec| {
+                    if let engine::wire::lines::Record::Put(p) = rec {
+                        bump(p.id, 1, 0);
+                    }
+                })
+                .unwrap();
+            }
+            SectionId::Forecasts => wf::read(&mut ByteReader::new(body), |rec| {
+                if let Record::RunList(rl) = rec {
+                    bump(rl.line, 0, 1);
+                }
+            })
+            .unwrap(),
+            _ => {}
+        }
+    }
+}
+
+/// M48c (0078 A10): a snapshot re-puts only what the client lacks. Six lines run west from tiles
+/// 200-205 (anchored in chunk (6, 0), which the first view does not hold) to tile 8, so the client
+/// holds each through the chunks it does hold, items flowing (a declared spawner each, into a
+/// sink); a seventh lies wholly inside chunk (6, 0). The camera then pans over the anchors: the
+/// chunk enters by snapshot (its anchored lines force it), and the six held lines are not put again
+/// and their lists not resent, the seventh is put once with its list. Hash-all all along (the
+/// chunk hash covers the anchored structures, which the replica kept across the snapshot), no
+/// desync; the replica's items equal the host's on every held line every tick.
+#[test]
+fn host_snapshot_does_not_reput_held_lines() {
+    const N: usize = 6;
+    reset();
+    once(1, |t| {
+        for k in 0..N as i32 {
+            let l = t.create(192 * 256, 24).unwrap();
+            t.set_segments(l, &[west(200 + k, 4 + k, 192)]).unwrap();
+            t.set_out(l, Output::Sink).unwrap();
+            IDS.with(|i| i.borrow_mut().push(l));
+        }
+        let inside = t.create(8 * 256, 24).unwrap();
+        t.set_segments(inside, &[west(212, 20, 8)]).unwrap();
+        t.set_out(inside, Output::Sink).unwrap();
+        IDS.with(|i| i.borrow_mut().push(inside));
+    });
+    for k in 0..=N {
+        spawner(k, 384 + 64 * k as u32, (k % 3) as u16, 1);
+    }
+    let anchor = ChunkCoord::new(6, 0);
+    let mut lb = loopback();
+    let mut seen = Seen::default();
+    let mut counts = Vec::new();
+    for _ in 0..60 {
+        step_and_check(&mut lb, "before the pan", &mut seen);
+        count_by_line(&lb, &mut counts);
+    }
+    assert!(
+        !lb.host.debug_held(lb.conn(0)).contains(&anchor),
+        "the anchor chunk is not held before the pan"
+    );
+    let held: Vec<LineId> = (0..N).map(id).collect();
+    assert_eq!(
+        held_lines(&lb),
+        held,
+        "the six crossing lines are held through the view, the seventh is not"
+    );
+    lb.set_camera(
+        0,
+        CameraReport {
+            center_x: 208,
+            ..camera()
+        },
+    );
+    let mut snapshots = 0u32;
+    for _ in 0..60 {
+        step_and_check(&mut lb, "after the pan", &mut seen);
+        count_by_line(&lb, &mut counts);
+        let bytes = lb.last_built_frame(0);
+        if !bytes.is_empty() {
+            let mut r = FrameReader::new(bytes).unwrap();
+            while let Some((sid, _)) = r.next_section().unwrap() {
+                snapshots += u32::from(sid == SectionId::ChunkSnapshots);
+            }
+        }
+    }
+    assert_eq!(lb.client(0).desyncs().count(), 0, "hash-all saw no desync");
+    assert_eq!(lb.host.desyncs().count(), 0);
+    assert!(
+        lb.host.debug_held(lb.conn(0)).contains(&anchor),
+        "the anchor chunk entered"
+    );
+    assert_eq!(
+        snapshots, 1,
+        "frames with a snapshot: the anchor chunk entered by one"
+    );
+    let mut all = held.clone();
+    all.push(id(N));
+    assert_eq!(held_lines(&lb), all, "every line held at the end");
+    counts.sort_unstable();
+    let expected: Vec<(LineId, u32, u32)> = all.iter().map(|&l| (l, 1, 1)).collect();
+    assert_eq!(
+        counts, expected,
+        "(line, puts, run lists): each line put once with its list"
+    );
+    assert_eq!(
+        lb.client(0).replica().region_hash(),
+        lb.host.region_hash(lb.conn(0)),
+        "the region hashes cover the kept structures"
+    );
+    assert_eq!(seen.unknown, 0);
+    if std::env::var_os("MEASURE").is_some() {
+        println!("{seen:?}, {snapshots} frames with snapshots");
+    }
+    assert_eq!(
+        (seen.compared, seen.items, seen.late_run_lists),
+        (774, 17_024, 0),
+        "(line-ticks, items) compared, lists to lines held before their frame"
+    );
+}
+
+/// `(puts, run lists)` of line `k` (none before the rules create it) in the frame `build_frame`
+/// last made for client 0.
+fn counts_of(lb: &Loopback<FcGame>, k: usize) -> (u32, u32) {
+    let Some(l) = IDS.with(|i| i.borrow().get(k).copied()) else {
+        return (0, 0);
+    };
+    let mut acc = Vec::new();
+    count_by_line(lb, &mut acc);
+    acc.iter().find(|e| e.0 == l).map_or((0, 0), |e| (e.1, e.2))
+}
+
+/// The camera over the anchor chunk (6, 0) of the `west(200 + k, ..)` lines.
+fn over_anchor() -> CameraReport {
+    CameraReport {
+        center_x: 208,
+        ..camera()
+    }
+}
+
+/// M48c fix round 1: a held line whose list the client holds `unknown` is put again, with its
+/// (`unknown`) list, when its anchor chunk snapshots (`LineRoute::holds_current`'s list half). A
+/// 4 KiB frame buffer (a 1 KiB put budget); 200 items of alternating kinds at rest at the dead end
+/// (200 runs, about 2.4 KB) on a line running west from tile 200 (anchored in chunk (6, 0)) into
+/// the view: held from the first frames, its list `unknown`; the camera then pans over the anchor.
+#[test]
+fn host_snapshot_reputs_an_unknown_held_line() {
+    reset();
+    once(1, |t| {
+        let l = t.create(192 * 256, 24).unwrap();
+        t.set_segments(l, &[west(200, 4, 192)]).unwrap();
+        for k in 0..200u32 {
+            t.insert_at(l, SP * k, Item(1 + (k % 2) as u16)).unwrap();
+        }
+        IDS.with(|i| i.borrow_mut().push(l));
+    });
+    let mut lb = loopback();
+    lb.set_frame_buf_len(4096);
+    let mut total = (0u32, 0u32);
+    let add = |lb: &Loopback<FcGame>, total: &mut (u32, u32)| {
+        let (p, r) = counts_of(lb, 0);
+        total.0 += p;
+        total.1 += r;
+    };
+    for _ in 0..40 {
+        lb.step();
+        add(&lb, &mut total);
+    }
+    let l = id(0);
+    assert_eq!(held_lines(&lb), vec![l], "held through the view");
+    assert!(
+        lb.client(0).replica().forecast_unknown(l),
+        "its list is unknown"
+    );
+    assert_eq!(total, (1, 1), "put once, with an unknown list");
+    lb.set_camera(0, over_anchor());
+    for _ in 0..40 {
+        lb.step();
+        add(&lb, &mut total);
+    }
+    assert!(
+        lb.host
+            .debug_held(lb.conn(0))
+            .contains(&ChunkCoord::new(6, 0)),
+        "the anchor chunk entered"
+    );
+    assert_eq!(
+        total,
+        (2, 2),
+        "(puts, lists) of the unknown line: put again by its anchor's snapshot"
+    );
+    assert!(lb.client(0).replica().forecast_unknown(l));
+    assert_eq!(lb.host.debug_overflows(lb.conn(0)), 0);
+    assert_eq!(lb.client(0).desyncs().count(), 0, "hash-all saw no desync");
+}
+
+/// M48c fix round 1: a held line whose structure changes on the tick its anchor chunk snapshots
+/// is held at an older `structure_version` than the host's, so the snapshot forces it (fresh, its
+/// list riding) rather than sending a plain update (a speed change of a line at rest is no list).
+/// The line runs west from tile 200 (anchor chunk (6, 0)) into the view, 40 items at rest at its
+/// dead end; the speed changes on the tick the camera's move over the anchor arrives.
+#[test]
+fn host_snapshot_reputs_a_line_changed_that_tick() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    reset();
+    once(1, |t| {
+        let l = t.create(192 * 256, 24).unwrap();
+        t.set_segments(l, &[west(200, 4, 192)]).unwrap();
+        for k in 0..40u32 {
+            t.insert_at(l, SP * k, Item(1)).unwrap();
+        }
+        IDS.with(|i| i.borrow_mut().push(l));
+    });
+    let edit = Rc::new(Cell::new(false));
+    let flag = edit.clone();
+    rule(move |_, t| {
+        if flag.replace(false) {
+            t.set_speed(id(0), 32).unwrap();
+        }
+    });
+    let mut lb = loopback();
+    let mut seen = Seen::default();
+    let mut total = (0u32, 0u32);
+    for _ in 0..40 {
+        step_and_check(&mut lb, "before", &mut seen);
+        let (p, r) = counts_of(&lb, 0);
+        total = (total.0 + p, total.1 + r);
+    }
+    assert_eq!(total, (1, 1), "held from the first frames, with its list");
+    lb.set_camera(0, over_anchor());
+    edit.set(true);
+    step_and_check(&mut lb, "the pan", &mut seen);
+    let (p, r) = counts_of(&lb, 0);
+    assert!(
+        lb.host
+            .debug_held(lb.conn(0))
+            .contains(&ChunkCoord::new(6, 0)),
+        "the anchor chunk entered on the edit's tick"
+    );
+    assert_eq!(
+        (p, r),
+        (1, 1),
+        "(puts, lists) in the snapshot frame: forced, fresh, its list riding"
+    );
+    for _ in 0..40 {
+        step_and_check(&mut lb, "after", &mut seen);
+        let (p, r) = counts_of(&lb, 0);
+        total = (total.0 + p, total.1 + r);
+    }
+    assert_eq!(total, (1, 1), "nothing more after the snapshot");
+    assert_eq!(lb.client(0).replica().transport().speed(id(0)), Ok(32));
+    assert_eq!(lb.client(0).desyncs().count(), 0, "hash-all saw no desync");
+}
+
+/// M48c (0079 §17 (a), the resync departure): a snapshot answering the client's `ResyncChunk`
+/// re-puts every line anchored in the chunk, so a structure corrupted at its current version is
+/// repaired in one round. Three lines anchored in chunk (0, 0), fed by declared spawners; the
+/// replica's copy of the first is corrupted (its speed flipped); hash-all reports the chunk once,
+/// the answer re-puts all three with their lists, and the replica equals the host again, items
+/// exact on every held line every tick afterwards, no second report.
+#[test]
+fn host_resync_answer_reputs_every_anchored_line() {
+    reset();
+    once(1, |t| {
+        for k in 0..3 {
+            let l = line(t, 2, 4 + 2 * k, 8, 24);
+            t.set_out(l, Output::Sink).unwrap();
+        }
+    });
+    for k in 0..3 {
+        spawner(k, 384, 0, 1 + k as u16);
+    }
+    let mut lb = loopback();
+    let mut seen = Seen::default();
+    for _ in 0..30 {
+        step_and_check(&mut lb, "before", &mut seen);
+    }
+    assert!(
+        lb.client_mut(0).debug_corrupt_line(id(0)),
+        "line 0 corrupted"
+    );
+    let mut counts = Vec::new();
+    for _ in 0..20 {
+        lb.step();
+        count_by_line(&lb, &mut counts);
+    }
+    counts.sort_unstable();
+    assert_eq!(lb.host.desyncs().count(), 1, "one report, answered once");
+    assert_eq!(
+        counts,
+        (0..3).map(|k| (id(k), 1, 1)).collect::<Vec<_>>(),
+        "(line, puts, lists): the answer re-put every anchored line"
+    );
+    assert_eq!(lb.host.debug_resync_notes(lb.conn(0)), 0, "the note went");
+    let reports = lb.client(0).desyncs().count();
+    for _ in 0..30 {
+        step_and_check(&mut lb, "after", &mut seen);
+    }
+    assert_eq!(lb.client(0).desyncs().count(), reports, "no further report");
+    assert_eq!(
+        lb.client(0).replica().region_hash(),
+        lb.host.region_hash(lb.conn(0)),
+        "repaired"
+    );
+}
+
+/// M48c fix round 1 (review): a resync note whose chunk leaves before the answering snapshot goes
+/// out leaves with it, so stale notes cannot fill `LineRoute::resync`'s 256 slots and silence later
+/// reports. The client's copy of a line anchored in chunk (0, 0) is corrupted; once it has
+/// reported, every frame overflows (a 64 B buffer: the answer never goes) and the camera moves far
+/// away; the report arrives (one note), and when the chunk leaves the note is gone.
+#[test]
+fn host_resync_note_leaves_with_its_chunk() {
+    reset();
+    once(1, |t| {
+        let l = line(t, 2, 4, 8, 24);
+        t.set_out(l, Output::Sink).unwrap();
+    });
+    spawner(0, 384, 0, 1);
+    let mut lb = loopback();
+    for _ in 0..30 {
+        lb.step();
+    }
+    assert!(lb.client_mut(0).debug_corrupt_line(id(0)));
+    let mut ticks = 0;
+    while lb.client(0).desyncs().count() == 0 {
+        lb.step();
+        ticks += 1;
+        assert!(ticks < 20, "the client never reported");
+    }
+    lb.set_frame_buf_len(64);
+    lb.set_camera(
+        0,
+        CameraReport {
+            center_x: FAR * 4,
+            ..camera()
+        },
+    );
+    lb.step();
+    assert_eq!(lb.host.desyncs().count(), 1, "the report arrived");
+    assert_eq!(
+        lb.host.debug_resync_notes(lb.conn(0)),
+        1,
+        "noted, unanswered"
+    );
+    let anchor = ChunkCoord::new(0, 0);
+    let mut ticks = 0;
+    while lb.host.debug_held(lb.conn(0)).contains(&anchor) {
+        lb.step();
+        ticks += 1;
+        assert!(ticks < 400, "the anchor chunk never left");
+    }
+    assert_eq!(
+        lb.host.debug_resync_notes(lb.conn(0)),
+        0,
+        "the note left with its chunk"
+    );
+}

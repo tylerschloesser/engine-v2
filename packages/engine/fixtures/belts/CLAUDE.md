@@ -46,7 +46,7 @@ line, and 1,090 genesis-spawned spawners (activated on tick 1; `Thing::Cycling` 
 mixed-kind chains). The worldgen carries the spec in the `aux` of four plain tiles at `y = -1`,
 `x = -1..=-4`; M47b's `BenchSpec.regime` (`BenchRegime`, `bench.rs` doc) three more at `x =
 -5..=-7`, plain for `Mixed` (`golden-bench-64.json` holds): `SaturatedView` is built at genesis with
-`Thing::Jam` sink toggles, `InserterLike` with a `Thing::Inserter`. The benchmark's item cap is 393,216 (`BENCH_MAX_ITEMS`), so it never binds. The dev-dependency on `engine` turns on
+`Thing::Jam` sink toggles, `InserterLike` with a `Thing::Inserter`; `MixedFeeders` (M48c) is `Mixed` with a stateless `Thing::Feeder` per spawner (one `insert_back` a tick, never written, declared `period 256, acc 0, kinds 0`: no chunk delta, `-t belts_feeders_write_no_delta`). The benchmark's item cap is 393,216 (`BENCH_MAX_ITEMS`), so it never binds. The dev-dependency on `engine` turns on
 `bench-phases`, so a test reads the transport advance from `engine::bench_phase::take()`.
 `tests/bench_belts.rs`: `pnpm test rust -t bench_`, `-t transport_phone_caps`, `-t
 transport_budget_exceeds`; `belts_golden_bench_64` (`golden/scenario-bench-64.json`) replays the

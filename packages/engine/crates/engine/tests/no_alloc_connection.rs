@@ -1033,10 +1033,14 @@ fn host_and_client_lost_frames_do_not_grow() {
 fn lost_frame_never_desyncs_a_held_chunk() {
     LOSSY.with(|l| l.set(true));
     // `(no_lines, lost frames, held chunks re-snapshotted, ChunkSnapshots B, LineStructs B)`,
-    // pinned: with the rule off the bytes read 8,528 / 28,824 (lined) and 5,344 / 0 (no lines),
-    // so the rule's cost (+673 + 1,018 B, +548 B) cannot drift unseen.
+    // pinned: with the rule off the bytes read 8,528 / 22,645 (lined, 9 desyncs) and 5,344 / 0
+    // (no lines), so the rule's cost (+673 + 124 B, +548 B) cannot drift unseen. M48c: a snapshot
+    // no longer re-puts the lines the client holds at their current version, so the lined
+    // `LineStructs` fell from 29,842 to 22,769 (7,073 B of such re-puts; forcing every anchored
+    // line again, the replica keeping them, reads 29,842 exactly) and the rule's line part from
+    // +1,018 to +124 B (before M48c the rule off read 28,824).
     for (no_lines, lost, resnaps, snaps, lines) in
-        [(false, 30, 60, 9_201, 29_842), (true, 24, 48, 5_892, 0)]
+        [(false, 30, 60, 9_201, 22_769), (true, 24, 48, 5_892, 0)]
     {
         NO_LINES.with(|n| n.set(no_lines));
         let r = pan_run_band(true, WIDE_BAND_TILES, 1_024);

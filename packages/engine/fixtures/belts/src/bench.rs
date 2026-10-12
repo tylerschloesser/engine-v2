@@ -18,7 +18,11 @@
 //! [`crate::Thing::Inserter`] making M40's `2,000 / scale` edits a tick; `MixedEmpty` is `Mixed`
 //! with no item at rest (M41's "empty at the start"); `SaturatedView { jam_pct, period, speed }` is
 //! M44b's [`world::saturated_view_world`] (`144 / scale` rows of 256 tiles), every line at `speed`
-//! (0: 24), with one [`crate::Thing::Jam`] per toggled sink (M41's jam schedule).
+//! (0: 24), with one [`crate::Thing::Jam`] per toggled sink (M41's jam schedule). `MixedFeeders`
+//! (M48c) is `Mixed` with a stateless [`crate::Thing::Feeder`] in place of every spawner (same
+//! lines, same items at rest; the item the world gives the chain, a cycling chain's first kind):
+//! one `insert_back` attempt a tick, never written, the shape the reference game's spawners must
+//! take (0079 §19 (e)).
 //!
 //! **What is built.** Per line, in the world's order: `create(len, 24)`; then every `set_out`
 //! (`Next`, `Sink`, `DeadEnd`); every item at rest by `insert_at`, front to back; one straight
@@ -40,7 +44,7 @@ use engine::game::WorldWrite;
 use engine::transport::{Geometry, Item, LineId, Output, Segment};
 use engine::world::{Tile, TilePos, WorldPos};
 
-use crate::{Belts, Inserter, Jam, Pos, Spawner, Thing};
+use crate::{Belts, Feeder, Inserter, Jam, Pos, Spawner, Thing};
 use world::{Out, Regime, TILE};
 
 /// The bench world to build: `bench_world_scaled(seed, regime, scale)` (M40's `Mixed` by default).
@@ -58,7 +62,7 @@ pub struct BenchSpec {
 }
 
 /// The bench world's regime (M47b, module doc). JSON: `"Mixed"`, `"InserterLike"`,
-/// `"MixedEmpty"` or `{"SaturatedView": {"jam_pct": 20, "period": 100, "speed": 0}}` (`speed`
+/// `"MixedEmpty"`, `"MixedFeeders"` (M48c) or `{"SaturatedView": {"jam_pct": 20, "period": 100, "speed": 0}}` (`speed`
 /// optional, 0 = 24).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum BenchRegime {
@@ -72,6 +76,7 @@ pub enum BenchRegime {
         #[serde(default)]
         speed: u16,
     },
+    MixedFeeders,
 }
 
 impl BenchRegime {
@@ -82,7 +87,9 @@ impl BenchRegime {
     /// The plain-data world's regime.
     pub fn world(self) -> Regime {
         match self {
-            BenchRegime::Mixed | BenchRegime::MixedEmpty => Regime::Mixed,
+            BenchRegime::Mixed | BenchRegime::MixedEmpty | BenchRegime::MixedFeeders => {
+                Regime::Mixed
+            }
             BenchRegime::InserterLike => Regime::InserterLike,
             BenchRegime::SaturatedView {
                 jam_pct, period, ..
@@ -101,6 +108,7 @@ impl BenchRegime {
                 period,
                 speed,
             } => [3 | (u16::from(jam_pct) << 8), period, speed],
+            BenchRegime::MixedFeeders => [4, 0, 0],
         }
     }
 
@@ -114,6 +122,7 @@ impl BenchRegime {
                 period: aux[1],
                 speed: aux[2],
             },
+            4 => BenchRegime::MixedFeeders,
             _ => BenchRegime::Mixed,
         }
     }
@@ -276,12 +285,21 @@ pub fn build(w: &mut dyn WorldWrite<Belts>, spec: BenchSpec) {
     }
     for sp in &bw.spawners {
         let s = bw.spans[sp.line as usize];
+        let at = Pos {
+            x: (s.x0 + s.w - 1) as i32,
+            y: s.y as i32,
+        };
+        if spec.regime == BenchRegime::MixedFeeders {
+            w.spawn(Thing::Feeder(Feeder {
+                at,
+                line: ids[sp.line as usize].0,
+                item: sp.first,
+            }));
+            continue;
+        }
         let period = (65_536 + u32::from(sp.rate256) / 2) / u32::from(sp.rate256);
         let spawner = Spawner {
-            at: Pos {
-                x: (s.x0 + s.w - 1) as i32,
-                y: s.y as i32,
-            },
+            at,
             line: ids[sp.line as usize].0,
             item: sp.first,
             period: period.max(256),

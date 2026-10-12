@@ -10,9 +10,14 @@
 //! - the lines whose structure changed this tick (`Transport::structure_changes`);
 //! - the lines entering a tile of a chunk that became held this frame (an enter, pristine or by
 //!   snapshot, or a resume keep: `Transport::lines_entering`);
-//! - the lines anchored in a chunk snapshotted this frame (`Transport::anchored_in`): *forced*,
-//!   since the client drops a snapshotted chunk's anchored structures and takes them again from
-//!   this frame (the snapshot's bucket cost includes their bytes, [`anchored_bytes`]);
+//! - the lines anchored in a chunk snapshotted this frame (`Transport::anchored_in`) that the
+//!   client lacks: *forced* (M48c). The chunk hash covers its anchored structures (0079 §17 (a)),
+//!   and the replica keeps a chunk's structures and trajectories across its snapshot, so a line
+//!   the connection holds at its current `structure_version` with a known list is not put again
+//!   (its list would go twice on a join); one not held, held at an older version or `unknown` is
+//!   put with its list. A snapshot answering the client's own `ResyncChunk`
+//!   ([`LineRoute::resync`]) forces every anchored line: the client's copy may be what differs.
+//!   The bucket prices the snapshot with exactly these puts ([`StructPrices::snapshot_puts_bytes`]);
 //! - every line held, on a frame where a chunk leaves (the `Gone` check);
 //! - the lines a previous frame deferred or could not send ([`LineRoute::pending`]).
 //!
@@ -40,8 +45,8 @@
 //! and hand-offs (`Transport::forecast_crossings`). A client holds a line's motion exactly while it
 //! holds its structure, and only *continuously* held lines (held before this frame and kept, not
 //! put afresh) are followed: a `State` goes to every connection that holds the line continuously;
-//! a `RunList` rides every put of a line the client did not hold (and every forced put: the
-//! snapshot dropped it), budgeted with the put, and goes as a correction to the continuous holders
+//! a `RunList` rides every put of a line the client did not hold (and every forced put, M48c),
+//! budgeted with the put, and goes as a correction to the continuous holders
 //! within what the put budget leaves; a hand-off onto a held line that the client does not follow
 //! itself (from a line it does not hold continuously, across a `Fork`, from a line resent this tick)
 //! is an `Arrival`, unless the target's list is resent in the frame. `State`s and `Arrival`s are not
@@ -50,7 +55,7 @@
 //! again (with its list) on a later frame, so a client never steps items under a model the host no
 //! longer holds, nor feeds them on into lines it does hold. A frame that overflowed (sent nothing)
 //! loses that tick's records and ops: the next frame sends `Gone` for every held line the lost
-//! frame had an op (a put, a budget `Gone`, a `Drop`, a deferred update), a message or a record
+//! frame had an op (a put, a budget `Gone`, a deferred update), a message or a record
 //! for, plus one level of targets (the client stepped the lost tick without them): those lines'
 //! held hand-off targets that tick, their current `Next` targets, and the old targets of `Next`
 //! outputs that changed that tick (`Transport`'s per-tick log of `max_lines / 4` entries; when it
@@ -96,7 +101,15 @@ pub struct LineRoute {
     /// Lost frames whose plan sent a held line `Gone` for the budget (a test reads it: the two
     /// fell together).
     pub lost_with_budget_gones: u64,
+    /// M48c: held chunks whose `ResyncChunk` the host answers with a snapshot: that snapshot
+    /// re-puts every line anchored in the chunk (module doc). Reserved at attach, never grown (a
+    /// full list drops the report: the client reports again); a note leaves with its answer, its
+    /// chunk's leave ([`LineRoute::forget_resync`]) or a `Welcome`.
+    pub(crate) resync: Vec<ChunkCoord>,
 }
+
+/// How many pending resync answers a connection keeps ([`LineRoute::resync`]).
+pub const RESYNC_CAP: usize = 256;
 
 impl LineRoute {
     /// Reserved at attach for the world's `max_lines` (0079 §5), so routing never allocates.
@@ -107,6 +120,7 @@ impl LineRoute {
             lost: Vec::with_capacity(max_lines as usize),
             unknown: Vec::with_capacity(max_lines as usize),
             lost_with_budget_gones: 0,
+            resync: Vec::with_capacity(RESYNC_CAP),
         }
     }
 
@@ -123,7 +137,7 @@ impl LineRoute {
     /// (M47 review, finding 2: a `Gone` per held line removed one by one was quadratic): the
     /// removals compacted out, the updates written in place, the new lines merged from the back.
     fn commit(&mut self, ops: &[(LineId, LineOp)]) {
-        let removal = |op: LineOp| matches!(op, LineOp::Gone | LineOp::Drop);
+        let removal = |op: LineOp| matches!(op, LineOp::Gone);
         let mut k = 0;
         self.last_sent.retain(|&(l, _)| {
             while k < ops.len() && ops[k].0 < l {
@@ -170,28 +184,59 @@ impl LineRoute {
         self.unknown.binary_search(&line).is_ok()
     }
 
+    /// M48c: whether the client holds `line` at its current `structure_version` with a known
+    /// list: a snapshot of its anchor chunk need not put it again (module doc).
+    fn holds_current(&self, t: &Transport, line: LineId) -> bool {
+        let version = t.structure_version(line).unwrap_or(0);
+        let sent = self.sent(line);
+        // A version only grows on a live route: a store replaced under it (restore, migrate)
+        // comes with a `Welcome`, which resets the route.
+        debug_assert!(
+            sent.is_none_or(|v| v <= version),
+            "line {line:?} sent at {sent:?}, ahead of its version {version}"
+        );
+        sent.is_some_and(|v| v >= version) && !self.is_unknown(line)
+    }
+
+    /// M48c: the client reported `chunk` desynced; the snapshot answering it re-puts every line
+    /// anchored there (module doc). Ignored when already noted or the list is full.
+    pub fn note_resync(&mut self, chunk: ChunkCoord) {
+        if !self.resync.contains(&chunk) && self.resync.len() < self.resync.capacity() {
+            self.resync.push(chunk);
+        }
+    }
+
+    /// M48c fix round 1: `chunk` left the connection before its resync was answered: the note
+    /// goes with it (a stale note would hold one of the [`RESYNC_CAP`] slots for the session).
+    pub fn forget_resync(&mut self, chunk: ChunkCoord) {
+        self.resync.retain(|&c| c != chunk);
+    }
+
+    /// Resync notes still waiting for their snapshot (tests read it).
+    pub fn resync_notes(&self) -> usize {
+        self.resync.len()
+    }
+
     /// Forgets everything (a new `Welcome` on this connection: the client emptied its replica).
     pub fn reset(&mut self) {
         self.last_sent.clear();
         self.pending.clear();
         self.lost.clear();
         self.unknown.clear();
+        self.resync.clear();
     }
 }
 
 /// One record a frame carries.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LineOp {
-    /// `fresh`: the client does not hold the line before this frame (a first put, or a forced one
-    /// whose snapshot dropped it): its run list rides with it (M47).
+    /// `fresh`: the client does not follow the line's items before this frame (a first put, or a
+    /// forced one: its anchor chunk's snapshot re-puts it, M48c): its run list rides with it (M47).
     Put {
         version: u32,
         fresh: bool,
     },
     Gone,
-    /// No record: the client already dropped the line (a snapshot of its anchor chunk) and its
-    /// forced put did not fit; the host forgets it was sent (M47).
-    Drop,
 }
 
 /// The host's reused per-frame scratch (one per host, every connection's frame in turn).
@@ -199,6 +244,8 @@ pub enum LineOp {
 pub struct LinePlan {
     pub cands: Vec<LineId>,
     pub forced: Vec<LineId>,
+    /// M48c: the chunks of [`LineRoute::resync`] this frame snapshots (forgotten once it is sent).
+    pub resynced: Vec<ChunkCoord>,
     pub ops: Vec<(LineId, LineOp)>,
     pub deferred: Vec<LineId>,
     /// A deferred put leaves a structure the client holds, or one anchored in a chunk it holds,
@@ -255,6 +302,7 @@ impl LinePlan {
         let n = 2 * max_lines as usize;
         reserve_to(&mut self.cands, n);
         reserve_to(&mut self.forced, max_lines as usize);
+        reserve_to(&mut self.resynced, RESYNC_CAP);
         reserve_to(&mut self.ops, n);
         reserve_to(&mut self.deferred, n);
         reserve_to(&mut self.states, max_lines as usize);
@@ -270,9 +318,9 @@ impl LinePlan {
         }
     }
 
-    /// No record in section 12 (a `Drop` writes none).
+    /// No record in section 12.
     pub fn is_empty(&self) -> bool {
-        self.ops.iter().all(|(_, op)| *op == LineOp::Drop)
+        self.ops.is_empty()
     }
 
     /// No record in section 13.
@@ -370,6 +418,7 @@ pub fn plan(
 ) {
     scratch.cands.clear();
     scratch.forced.clear();
+    scratch.resynced.clear();
     scratch.ops.clear();
     scratch.deferred.clear();
     scratch.hashes_unsafe = false;
@@ -398,9 +447,18 @@ pub fn plan(
         }
     }
     for &c in frame.snapshots {
+        // M48c: only what the client lacks, unless the snapshot answers its resync (module doc).
         // Each line is anchored in one chunk: no duplicates.
+        let all = route.resync.contains(&c);
+        if all {
+            scratch.resynced.push(c);
+        }
         let forced = &mut scratch.forced;
-        t.anchored_in(c, dims, &mut |l| forced.push(l));
+        t.anchored_in(c, dims, &mut |l| {
+            if all || !route.holds_current(t, l) {
+                forced.push(l);
+            }
+        });
     }
     scratch.forced.sort_unstable();
     for i in 0..scratch.forced.len() {
@@ -499,18 +557,11 @@ pub fn plan(
                 *hashes_unsafe = true;
             }
             // M47: a held line is never left with a structure or motion the host no longer
-            // holds (module doc): an update that does not fit goes `Gone`; a forced put that does
-            // not fit was already dropped by the client's snapshot.
+            // holds (module doc): an update or a forced put that does not fit goes `Gone` (M48c:
+            // the client keeps a snapshotted chunk's structures, so a forced one too).
             if sent.is_some() {
-                *budget_gones += u32::from(!is_forced);
-                ops.push((
-                    line,
-                    if is_forced {
-                        LineOp::Drop
-                    } else {
-                        LineOp::Gone
-                    },
-                ));
+                *budget_gones += 1;
+                ops.push((line, LineOp::Gone));
             }
             continue;
         }
@@ -613,7 +664,7 @@ pub fn plan_forecasts(t: &Transport, route: &LineRoute, budget: usize, scratch: 
     scratch.run_lists.sort_unstable();
     let holds_after = |s: &LinePlan, line: LineId| match s.op(line) {
         Some(LineOp::Put { .. }) => true,
-        Some(LineOp::Gone | LineOp::Drop) => false,
+        Some(LineOp::Gone) => false,
         None => route.sent(line).is_some(),
     };
     // The log is ascending by `(to, pos)`: the arrivals come out in wire order. O(the world's
@@ -694,7 +745,6 @@ pub fn write_section(
                 }
             }
             LineOp::Gone => write_gone(sink, line),
-            LineOp::Drop => {}
         }
     }
 }
@@ -708,12 +758,15 @@ pub fn finish(route: &mut LineRoute, scratch: &mut LinePlan, t: &Transport, sent
         route.commit(&scratch.ops);
         route.pending.extend_from_slice(&scratch.deferred);
         route.lost.clear();
+        // M48c: the resyncs this frame answered.
+        let resynced = &scratch.resynced;
+        route.resync.retain(|c| !resynced.contains(c));
         // The client's unknown lines: gone ones forgotten, this frame's lists recorded.
         let ops = &scratch.ops;
         route.unknown.retain(|l| {
             !matches!(
                 ops.binary_search_by(|(x, _)| x.cmp(l)).map(|k| ops[k].1),
-                Ok(LineOp::Gone | LineOp::Drop)
+                Ok(LineOp::Gone)
             )
         });
         for &(line, unknown) in &scratch.run_lists {
@@ -731,7 +784,7 @@ pub fn finish(route: &mut LineRoute, scratch: &mut LinePlan, t: &Transport, sent
     route.lost_with_budget_gones += u64::from(scratch.budget_gones > 0);
     // M47 (review 2, findings 2-3): tick `T`'s frame never reached the client, which will step `T`
     // under what it held before applying `T + 1`. Every held line `T` changed for it goes and
-    // comes again: each line with an op in the lost plan (a put, a budget `Gone`, a `Drop`), a
+    // comes again: each line with an op in the lost plan (a put, a budget `Gone`), a
     // message or a record this tick; then, one level on (enough: a line's own items move before
     // its landers, which do not move again in the tick), the held targets of their hand-offs at
     // `T`, their `Next` targets now and the old targets of `Next` outputs `T` changed (the client,
@@ -802,9 +855,11 @@ pub fn finish(route: &mut LineRoute, scratch: &mut LinePlan, t: &Transport, sent
     }
 }
 
-/// The bytes of the puts of every line anchored in `chunk` (a snapshot's bucket cost adds them:
-/// they ride the snapshot's frame), the structures counted afresh. The host prices through
-/// [`StructPrices::anchored_bytes`], which caches the structure part; tests compare the two.
+/// The bytes of the puts of every line anchored in `chunk`, the structures counted afresh: the
+/// most a snapshot of it can re-put (a resync answer). The delta-collapse estimate prices a
+/// collapse's snapshot so, for every connection at once: since M48c an upper bound. The host
+/// prices through [`StructPrices::anchored_bytes`], which caches the structure part; tests compare
+/// the two.
 pub fn anchored_bytes(t: &Transport, chunk: ChunkCoord, dims: ChunkDims) -> u32 {
     let mut count = CountSink::default();
     t.anchored_in(chunk, dims, &mut |l| {
@@ -903,5 +958,34 @@ impl StructPrices {
             Err(_) => {}
         }
         e.bytes + lists as u32
+    }
+
+    /// M48c: what a snapshot of `chunk` sent to this connection adds in puts and lists: the lines
+    /// [`plan`] forces (module doc), each put with its list. A snapshot answering the client's
+    /// resync is priced with every anchored line ([`Self::anchored_bytes`], the cached
+    /// structures); otherwise the lines the client lacks are counted afresh. It runs on every
+    /// drain attempt, a head chunk the bucket cannot yet pay for included (once a tick while it
+    /// waits), beside that chunk's snapshot encode, which is the same order of work.
+    pub fn snapshot_puts_bytes(
+        &mut self,
+        t: &Transport,
+        chunk: ChunkCoord,
+        dims: ChunkDims,
+        route: &LineRoute,
+    ) -> u32 {
+        if route.resync.contains(&chunk) {
+            return self.anchored_bytes(t, chunk, dims);
+        }
+        let mut count = CountSink::default();
+        t.anchored_in(chunk, dims, &mut |l| {
+            if route.holds_current(t, l) {
+                return;
+            }
+            if let Ok(put) = t.structure(l) {
+                write_put(&mut count, &put);
+            }
+            count.0 += t.run_list_bytes(l);
+        });
+        count.0 as u32
     }
 }

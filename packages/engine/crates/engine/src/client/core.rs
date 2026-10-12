@@ -819,6 +819,12 @@ impl<G: Game> ClientCore<G> {
         }
     }
 
+    /// Test fault injection (`client_corrupt_line`, M48c's native resync tests): flips a held
+    /// line's `speed` ([`Replica::debug_corrupt_line`]).
+    pub fn debug_corrupt_line(&mut self, line: crate::transport::LineId) -> bool {
+        self.replica.debug_corrupt_line(line)
+    }
+
     /// Test fault injection (`client_corrupt_chunk`): flips one replica byte of a held chunk.
     pub fn debug_corrupt_chunk(&mut self, chunk: ChunkCoord) -> bool {
         self.replica.debug_corrupt_chunk(chunk)
@@ -1248,14 +1254,16 @@ impl<G: Game> ClientCore<G> {
                         // name is gone on the host.
                         self.replica
                             .drop_unnamed_entities(chunk, &self.scratch_snapshot_ids);
-                        // M46: its anchored structures come again in this frame's `LineStructs`.
-                        self.replica.drop_anchored_structures(chunk);
+                        // M48c: its anchored structures and their items stay (the chunk hash
+                        // covers them): this frame's `LineStructs` puts only what the host's
+                        // routing says this replica lacks, or all of them for a resync it asked.
                         self.replica
                             .apply_snapshot_overlay(chunk, version, &self.scratch_tiles);
                         self.resyncs.retain(|r| r.coord != chunk);
                         if self.dump_pending.iter().any(|d| d.coord == chunk) {
                             // Encoded once the whole frame is applied (`finish_dumps`): the
-                            // chunk's structures come in this frame's `LineStructs` (M46).
+                            // chunk's structures are the held ones plus this frame's
+                            // `LineStructs` (M48c; all of them re-put for a resync answer).
                             self.dump_ready.push(chunk);
                         }
                         summary.chunk_snapshots += 1;

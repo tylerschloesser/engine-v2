@@ -1007,6 +1007,14 @@ impl<G: Game> Host<G> {
         }
     }
 
+    /// M48c: `conn`'s resync notes still waiting for their snapshot (`host/lines.rs`).
+    pub fn debug_resync_notes(&self, conn: ConnId) -> usize {
+        match self.conns.get(conn as usize) {
+            Some(Some(slot)) => slot.lines.resync_notes(),
+            _ => 0,
+        }
+    }
+
     /// Held chunks `conn` queued for a snapshot because a lost frame carried their deltas (M48).
     pub fn debug_lost_resnapshots(&self, conn: ConnId) -> u64 {
         match self.conns.get(conn as usize) {
@@ -1129,6 +1137,9 @@ impl<G: Game> Host<G> {
         };
         self.desyncs.record("host", report);
         if coord != RESERVED_SCOPE_COORD {
+            // M48c: the client's copy of the chunk's structures may be what differs, so the
+            // snapshot answering it re-puts every anchored line (`host/lines.rs`).
+            slot.lines.note_resync(coord);
             self.enqueue_chunk_snapshot(
                 conn,
                 coord,
@@ -2027,6 +2038,8 @@ impl<G: Game> Host<G> {
             // A never-sent enter is simply dropped; a held chunk (even one with a queued
             // `Resnapshot`, which the drop also removes) still has to be left on the client.
             slot.pace.drop_queued(c, tick_now);
+            // M48c fix round 1: an unanswered resync note leaves with its chunk.
+            slot.lines.forget_resync(c);
             if slot.pace.is_held(c) {
                 slot.pace.note_left(c, tick_now);
                 slot.hashes.forget(c);
@@ -2120,7 +2133,8 @@ impl<G: Game> Host<G> {
         while let Some(&q) = slot.pace.queue.first() {
             let c = q.chunk;
             // M46: a chunk anchoring a line enters by snapshot, so its structures ride the
-            // snapshot's frame (forced `LineStructs` puts, `host/lines.rs`) at the bucket's price.
+            // snapshot's frame (forced `LineStructs` puts, `host/lines.rs`) at the bucket's price;
+            // M48c: only the lines this connection lacks are forced and priced.
             let snapshot = q.kind == EnterKind::Resnapshot
                 || store.terrain().overlay(c).is_some_and(|o| !o.is_empty())
                 || !store.chunk_overlapping(c).is_empty()
@@ -2136,10 +2150,12 @@ impl<G: Game> Host<G> {
                     &mut VecBytes(&mut self.scratch_snap_bytes),
                 );
                 (self.scratch_snap_bytes.len() - snap_start) as i64
-                    + i64::from(
-                        self.struct_prices
-                            .anchored_bytes(store.transport(), c, dims),
-                    )
+                    + i64::from(self.struct_prices.snapshot_puts_bytes(
+                        store.transport(),
+                        c,
+                        dims,
+                        &slot.lines,
+                    ))
             } else {
                 PRISTINE_ENTER_COST
             };

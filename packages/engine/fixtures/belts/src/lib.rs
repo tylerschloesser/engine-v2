@@ -54,8 +54,15 @@
 //! ([`bench`]); its mixed-kind chains' spawners are [`Thing::Cycling`] (the item steps through
 //! `1..=CYCLE_KINDS`), a variant only the bench genesis makes. Its regime (M47b,
 //! [`bench::BenchRegime`]) may instead build M44b's `SaturatedView` (with [`Thing::Jam`]s, the
-//! scheduled sink toggles), `InserterLike` (with one [`Thing::Inserter`]) or `Mixed` empty at the
-//! start; these schedule entities ride the `"spawner"` list and are made only by the bench genesis.
+//! scheduled sink toggles), `InserterLike` (with one [`Thing::Inserter`]), `Mixed` empty at the
+//! start, or (M48c) `MixedFeeders`, `Mixed` with a [`Thing::Feeder`] in place of every spawner;
+//! these schedule entities ride the `"spawner"` list and are made only by the bench genesis.
+//!
+//! **Feeders (M48c).** A [`Thing::Feeder`] keeps no state and is never written: every tick it makes
+//! one `insert_back` attempt of its item, a refusal dropped, and on the tick it joins the list it
+//! declares `Schedule { period: 256, acc: 0, kinds: 0, next: item }` (again after a restore), the
+//! rule that attempt is. So it costs no chunk delta, unlike a [`Thing::Spawner`], whose accumulator
+//! is written on every insert (0079 §19 (e): the shape the reference game's spawners must take).
 //!
 //! Goldens (`golden/scenario-*.json`, `tests/golden_scenarios.rs`): `straight-chain` (also the
 //! canonical `scenario.json`), `deadend-backup`, `spawn-to-sink`, `big-step`, `edit-while-running`,
@@ -422,6 +429,27 @@ pub struct Inserter {
     pub seed: u32,
 }
 
+/// A stateless feeder of the `MixedFeeders` bench world (M48c, module doc): one `insert_back`
+/// attempt of `item` on `line` a tick. Never written after genesis.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Feeder {
+    pub at: Pos,
+    pub line: u32,
+    pub item: u16,
+}
+
+impl Feeder {
+    /// The rule a feeder is, as `set_spawner` declares it: an attempt every tick.
+    fn schedule(&self) -> Schedule {
+        Schedule {
+            period: 256,
+            acc: 0,
+            kinds: 0,
+            next: Item(self.item),
+        }
+    }
+}
+
 /// SplitMix64's finaliser: the inserter's per-call draw.
 fn mix(mut z: u64) -> u64 {
     z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -459,6 +487,8 @@ pub enum Thing {
     Jam(Jam),
     /// The `InserterLike` bench world's edits (M47b), on the `"spawner"` list.
     Inserter(Inserter),
+    /// A stateless feeder (M48c, the `MixedFeeders` bench world only), on the `"spawner"` list.
+    Feeder(Feeder),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -780,6 +810,7 @@ impl Game for Belts {
             Thing::Spawner(s) | Thing::Cycling(s) => s.at.tile(),
             Thing::Jam(j) => j.at.tile(),
             Thing::Inserter(i) => i.at.tile(),
+            Thing::Feeder(f) => f.at.tile(),
             Thing::Tally(_) | Thing::Destroyed(_) => TilePos::new(0, 0),
         }
     }
@@ -851,7 +882,11 @@ impl Game for Belts {
                 // Woken only when spawned at genesis (the bench world, M45; `TickCx` puts never
                 // auto-wake): it joins its list here, and runs below this same tick.
                 Some(
-                    Thing::Spawner(_) | Thing::Cycling(_) | Thing::Jam(_) | Thing::Inserter(_),
+                    Thing::Spawner(_)
+                    | Thing::Cycling(_)
+                    | Thing::Jam(_)
+                    | Thing::Inserter(_)
+                    | Thing::Feeder(_),
                 ) => cx.activate(sys, id),
                 // Not woken in practice; already on their lists.
                 Some(Thing::Tally(_) | Thing::Destroyed(_)) | None => {}
@@ -872,6 +907,16 @@ impl Game for Belts {
                 }
                 Some(Thing::Inserter(ins)) => {
                     Self::insert(cx, ins, now);
+                    continue;
+                }
+                Some(Thing::Feeder(f)) => {
+                    if let Ok(t) = cx.transport_mut() {
+                        // A refusal is dropped: no state, no write (module doc).
+                        let _ = t.insert_back(LineId(f.line), Item(f.item));
+                        if i >= joined_from {
+                            t.set_spawner(LineId(f.line), Some(f.schedule()));
+                        }
+                    }
                     continue;
                 }
                 _ => continue,
@@ -938,6 +983,7 @@ impl Game for Belts {
             match cx.world().entity(id).ok().flatten() {
                 Some(Thing::Spawner(s)) => declare(LineId(s.line), s.schedule(false)),
                 Some(Thing::Cycling(s)) => declare(LineId(s.line), s.schedule(true)),
+                Some(Thing::Feeder(f)) => declare(LineId(f.line), f.schedule()),
                 _ => {}
             }
         }

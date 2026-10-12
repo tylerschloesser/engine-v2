@@ -6,7 +6,7 @@
 import { expect, test } from 'vitest'
 import { forecastCounters, lineItems } from '../../src/test/lines.js'
 import { createNetHarness } from '../../src/test/net-harness.js'
-import { BENCH_CAPS, beltsBenchWorld, beltsFixture, measure } from './support.js'
+import { BENCH_CAPS, type BeltsRegime, beltsBenchWorld, beltsFixture, measure } from './support.js'
 
 // Per-test timeouts (M47b's reason, `belts-forecast.test.ts`): CI's runner is 5-10x slower.
 const SLOW_TIMEOUT_MS = 180_000
@@ -16,14 +16,20 @@ const TICK_HZ = 20
 const MAX_ID = 3_810
 
 /** What one join of the 256 x 144 view at the densest window measured. */
-async function join(paced: boolean, seed: number, hashMode: 'production' | 'all') {
-  // M45's full `Mixed` world (seed 7: 3,810 lines, 220 x 545 tiles), a client joining with the
-  // 256 x 144 view at M46's densest window (centre tile (96, 224)).
+async function join(
+  regime: BeltsRegime,
+  paced: boolean,
+  seed: number,
+  hashMode: 'production' | 'all',
+) {
+  // M45's full `Mixed` world (seed 7: 3,810 lines, 220 x 545 tiles; M48c: or `MixedFeeders`, the
+  // same lines and items at rest fed by stateless feeders), a client joining with the 256 x 144
+  // view at M46's densest window (centre tile (96, 224)).
   const h = await createNetHarness({
     fixture: await beltsFixture(),
     seed,
     clients: 1,
-    world: { ...beltsBenchWorld('Mixed', 1, BENCH_CAPS, paced), debugHashMode: hashMode },
+    world: { ...beltsBenchWorld(regime, 1, BENCH_CAPS, paced), debugHashMode: hashMode },
   })
   try {
     const client = h.clients[0]
@@ -97,105 +103,179 @@ async function join(paced: boolean, seed: number, hashMode: 'production' | 'all'
   }
 }
 
+/** One cell of `join_at_scale`: the paced join and its lifted reference, checked and pinned. */
+async function cell(regime: BeltsRegime, pins: JoinPins) {
+  const paced = await join(regime, true, 4821, 'production')
+  // The reference set: the same view joined with the chunk pacing lifted (every enter in the
+  // first frames, M47b's measuring setup). The engine exposes no host-side query of which lines
+  // meet a view (an ABI addition, out of M48b's scope), so the lifted join stands in. Hash-all
+  // there: the independent check that every line anchored in a held chunk is held.
+  const lifted = await join(regime, false, 4821, 'all')
+  if (process.env.MEASURE) {
+    console.log(
+      `MEASURE join ${JSON.stringify({ regime, paced: paced.m, checks: paced.checks, lifted: lifted.m })}`,
+    )
+  }
+  const label = JSON.stringify(regime)
+  expect(lifted.desyncs, `${label}: lifted join, hash-all: no chunk desync`).toEqual([])
+  expect(paced.desyncs, `${label}: paced join: no chunk desync`).toEqual([])
+  expect(paced.ids, `${label}: the held set equals the lifted join's`).toEqual(lifted.ids)
+  // M48c: a snapshot re-puts only what the client lacks, so no held line's list goes twice.
+  expect(paced.m.lists, `${label}: lists applied, one per line held`).toBe(paced.m.held)
+  expect(paced.m, `${label}: the join, measured`).toEqual(pins.paced)
+  expect(paced.checks, `${label}: each second: lines held, enters queued, degrade level`).toEqual(
+    pins.checks,
+  )
+  expect(lifted.m, `${label}: the lifted join`).toEqual(pins.lifted)
+}
+
+type JoinPins = {
+  paced: Awaited<ReturnType<typeof join>>['m']
+  checks: Awaited<ReturnType<typeof join>>['checks']
+  lifted: Awaited<ReturnType<typeof join>>['m']
+}
+
 test(
   'belts/join_at_scale @slow',
   async () => {
-    const paced = await join(true, 4821, 'production')
-    // The reference set: the same view joined with the chunk pacing lifted (every enter in the
-    // first frames, M47b's measuring setup). The engine exposes no host-side query of which lines
-    // meet a view (an ABI addition, out of this milestone's scope), so the lifted join stands in.
-    // Hash-all there: the independent check that every line anchored in a held chunk is held.
-    const lifted = await join(false, 4821, 'all')
-    if (process.env.MEASURE) {
-      console.log(
-        `MEASURE join ${JSON.stringify({ paced: paced.m, checks: paced.checks, lifted: lifted.m })}`,
-      )
-    }
-    expect(lifted.desyncs, 'lifted join, hash-all: no chunk desync').toEqual([])
-    expect(paced.desyncs, 'paced join: no chunk desync').toEqual([])
-    expect(paced.ids, "the held set equals the lifted join's").toEqual(lifted.ids)
-    expect(paced.m, 'the join, measured').toEqual(JOIN_PINS)
-    expect(paced.checks, 'each second: lines held, enters queued, degrade level').toEqual(
-      JOIN_CHECKS,
-    )
-    expect(lifted.m, 'the lifted join').toEqual(LIFTED_PINS)
+    await cell('Mixed', { paced: JOIN_PINS, checks: JOIN_CHECKS, lifted: LIFTED_PINS })
+    await cell('MixedFeeders', {
+      paced: FEEDERS_PINS,
+      checks: FEEDERS_CHECKS,
+      lifted: FEEDERS_LIFTED_PINS,
+    })
   },
   SLOW_TIMEOUT_MS,
 )
 
-/** `join_at_scale`'s figures (seed 4821), pinned: a moved pin is a finding. 18.85 s of virtual time,
- * over 0078's 10 s: recorded for the manager (M48b Deviations), not acted on here. */
+/** `join_at_scale`'s `Mixed` figures (seed 4821), pinned: a moved pin is a finding. M48b read 377
+ * ticks (18.85 s) and 2,915,247 B with 2,724 lists for 1,850 lines; M48c's snapshot re-puts only
+ * what the client lacks (and the bucket prices only that): 139 ticks (6.95 s), one list per line.
+ * The spawners' chunk deltas are still a third of the bytes (`MixedFeeders` below has none). */
 const JOIN_PINS = {
-  joinTicks: 377,
-  held: 1850,
-  lists: 2724,
+  joinTicks: 139,
+  held: 1_850,
+  lists: 1_850,
   listsUnknown: 0,
   recordsUnheld: 0,
   unknownHeld: 0,
-  bytesDown: 2_915_247,
+  bytesDown: 1_467_333,
   sections: {
     Global: 39,
     OwnPlayer: 3,
-    ChunkSnapshots: 24_195,
-    LineStructs: 95_625,
-    Forecasts: 1_477_699,
-    ChunkDeltas: 1_311_511,
-    Hashes: 1261,
+    ChunkSnapshots: 13_743,
+    LineStructs: 64_761,
+    Forecasts: 912_145,
+    ChunkDeltas: 474_328,
+    Hashes: 428,
     ChunkEnterPristine: 76,
   },
-  header: 3750,
-  other: 1088,
-  frames: 375,
+  header: 1_370,
+  other: 440,
+  frames: 137,
   heldChunks: 88,
-  collapses: 177,
-  bundles: 113,
+  collapses: 64,
+  bundles: 44,
   level: 4,
 }
 /** Each second of the paced join: lines held, enters queued, degrade level. */
 const JOIN_CHECKS = [
-  { tick: 20, held: 408, queued: 75, level: 2 },
-  { tick: 40, held: 552, queued: 74, level: 2 },
-  { tick: 60, held: 682, queued: 70, level: 4 },
-  { tick: 80, held: 789, queued: 66, level: 4 },
-  { tick: 100, held: 910, queued: 63, level: 4 },
-  { tick: 120, held: 945, queued: 61, level: 4 },
-  { tick: 140, held: 1_018, queued: 59, level: 4 },
-  { tick: 160, held: 1_076, queued: 56, level: 4 },
-  { tick: 180, held: 1_112, queued: 55, level: 4 },
-  { tick: 200, held: 1_192, queued: 52, level: 4 },
-  { tick: 220, held: 1_228, queued: 50, level: 4 },
-  { tick: 240, held: 1_286, queued: 44, level: 4 },
-  { tick: 260, held: 1_336, queued: 35, level: 4 },
-  { tick: 280, held: 1_454, queued: 33, level: 4 },
-  { tick: 300, held: 1_590, queued: 29, level: 4 },
-  { tick: 320, held: 1_664, queued: 26, level: 4 },
-  { tick: 340, held: 1_724, queued: 24, level: 4 },
-  { tick: 360, held: 1_804, queued: 22, level: 4 },
-  { tick: 380, held: 1_850, queued: 3, level: 4 },
-  { tick: 400, held: 1_850, queued: 0, level: 4 },
+  { tick: 20, held: 445, queued: 72, level: 2 },
+  { tick: 40, held: 906, queued: 62, level: 2 },
+  { tick: 60, held: 1_076, queued: 56, level: 4 },
+  { tick: 80, held: 1_228, queued: 52, level: 4 },
+  { tick: 100, held: 1_453, queued: 33, level: 4 },
+  { tick: 120, held: 1_664, queued: 26, level: 4 },
+  { tick: 140, held: 1_850, queued: 0, level: 4 },
+  { tick: 160, held: 1_850, queued: 0, level: 4 },
 ]
 /** The lifted join (the reference set's run, hash-all), pinned too. */
 const LIFTED_PINS = {
-  joinTicks: 78,
-  held: 1850,
-  lists: 2253,
+  joinTicks: 63,
+  held: 1_850,
+  lists: 1_850,
   listsUnknown: 0,
   recordsUnheld: 0,
   unknownHeld: 0,
-  bytesDown: 1_557_474,
+  bytesDown: 1_240_541,
   sections: {
     Global: 39,
     OwnPlayer: 3,
-    ChunkSnapshots: 7785,
-    LineStructs: 78_989,
-    Forecasts: 1_146_521,
-    ChunkDeltas: 320_770,
-    ChunkEnterPristine: 76,
-    Hashes: 2_489,
+    Hashes: 2_189,
+    ChunkSnapshots: 7_765,
+    LineStructs: 64_732,
+    Forecasts: 907_346,
+    ChunkDeltas: 257_741,
+    ChunkEnterPristine: 74,
   },
-  header: 760,
+  header: 610,
   other: 42,
-  frames: 76,
+  frames: 61,
+  heldChunks: 88,
+  collapses: 0,
+  bundles: 0,
+  level: 1,
+}
+
+/** M48c: the `MixedFeeders` cell (seed 4821), the same lines and items at rest fed by stateless
+ * feeders (0079 §19 (e)): no chunk delta, no collapse; 127 ticks (6.35 s), 948,754 B. */
+const FEEDERS_PINS = {
+  joinTicks: 127,
+  held: 1_850,
+  lists: 1_850,
+  listsUnknown: 0,
+  recordsUnheld: 0,
+  unknownHeld: 0,
+  bytesDown: 948_754,
+  sections: {
+    Global: 39,
+    OwnPlayer: 3,
+    ChunkSnapshots: 5_489,
+    LineStructs: 64_751,
+    Forecasts: 876_849,
+    Hashes: 376,
+    ChunkEnterPristine: 76,
+  },
+  header: 890,
+  other: 281,
+  frames: 89,
+  heldChunks: 88,
+  collapses: 0,
+  bundles: 33,
+  level: 4,
+}
+/** Each second of the paced `MixedFeeders` join. */
+const FEEDERS_CHECKS: JoinPins['checks'] = [
+  { tick: 20, held: 448, queued: 71, level: 2 },
+  { tick: 40, held: 910, queued: 62, level: 2 },
+  { tick: 60, held: 1_076, queued: 56, level: 4 },
+  { tick: 80, held: 1_286, queued: 42, level: 4 },
+  { tick: 100, held: 1_562, queued: 28, level: 4 },
+  { tick: 120, held: 1_791, queued: 22, level: 4 },
+  { tick: 140, held: 1_850, queued: 0, level: 4 },
+  { tick: 160, held: 1_850, queued: 0, level: 4 },
+]
+/** The lifted `MixedFeeders` join (hash-all). */
+const FEEDERS_LIFTED_PINS = {
+  joinTicks: 61,
+  held: 1_850,
+  lists: 1_850,
+  listsUnknown: 0,
+  recordsUnheld: 0,
+  unknownHeld: 0,
+  bytesDown: 958_055,
+  sections: {
+    Global: 39,
+    OwnPlayer: 3,
+    Hashes: 2_149,
+    ChunkSnapshots: 5_464,
+    LineStructs: 64_726,
+    Forecasts: 884_968,
+    ChunkEnterPristine: 74,
+  },
+  header: 590,
+  other: 42,
+  frames: 59,
   heldChunks: 88,
   collapses: 0,
   bundles: 0,
@@ -221,12 +301,14 @@ test(
   SLOW_TIMEOUT_MS,
 )
 
-/** `saturated_view_paced_bytes`' window (seed 4721), pinned: a moved pin is a finding. */
+/** `saturated_view_paced_bytes`' window (seed 4721), pinned: a moved pin is a finding. M48c: the
+ * join settles at 456 ticks (790 under M48b's forced re-put of every anchored line); the bytes
+ * are the same, items and runs are a later 20 s of world time (294,877 and 150,950 before). */
 const PACED_PINS = {
-  joinTicks: 790,
+  joinTicks: 456,
   held: 2_974,
-  items: 294_877,
-  runs: 150_950,
+  items: 294_869,
+  runs: 150_959,
   transportDownBytesPerSec: 3_958,
   structsBytes: 51_072,
   forecastsBytes: 28_084,
@@ -236,7 +318,7 @@ const PACED_PINS = {
   lateLists: 0,
   arrivals: 0,
   forecastSeenLate: 0,
-  correctionsPerRunPerSec: 4_576 / 150_950 / 20,
+  correctionsPerRunPerSec: 4_576 / 150_959 / 20,
   correctionsPerSec: 228.8,
   unknown: 0,
   degradeLevel: 4,
