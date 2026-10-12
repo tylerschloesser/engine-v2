@@ -1,8 +1,8 @@
 //! The standard belt world (M40 Scope, docs/decisions/0077 §2): 50,000 belt tiles (two lanes each,
 //! so 100,000 lane-tiles of 256 positions) and about 250,000 items at `speed = 24`, as plain data.
-//! A candidate representation (or M45's production `engine::transport`) is built from the
-//! [`LineSpec`]s and driven by [`Spawner`]s and the inserter-like call count; nothing here calls a
-//! candidate.
+//! M40's spike built its candidate representations from the [`LineSpec`]s; since M45 this module
+//! is in the library (it was `tests/common/world.rs`) and `Belts::genesis` builds the `Mixed`
+//! world in the production `engine::transport` (`super::build`), natively and in the `.wasm`.
 //!
 //! Layout: "belt chains" of 1-6 straight lines of 4-48 tiles each (merged lines, `len` a multiple of
 //! 256), each line `Next` into the one ahead of it; every belt chain gives two lane chains with the
@@ -22,8 +22,6 @@
 //! Tile coordinates (M41, plain data nothing in M40 reads): every line has a [`Span`] of tiles on
 //! one row. In the standard world belt chain `b` is row `b`, its front line at `x = 0` and each
 //! line behind it to the right (items move toward `-x`); both lanes share the span.
-#![allow(dead_code)]
-
 use engine::rng::SimRng;
 
 /// 0076 §1: the minimum distance between two items on a line and across a plain hand-off.

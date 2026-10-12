@@ -72,12 +72,13 @@ CI on x86-64 matched the Apple-silicon goldens in every runtime ([0068](../decis
 
 ## Benchmarks and baselines
 
-Wall-clock benchmarks are slow-tier only and call `gate(name, sample)` from `scripts/lib/bench-gate.mjs`. Baselines are `packages/engine/baselines/{tick,tick-node,worldgen,frame,frame-reference}.json`, each with a machine `fingerprint` (`os.cpus()[0].model` + `os.arch()`), `gated` metrics, absolute `limits` (the proxies of 0010 and 0018) and `conditions`.
+Wall-clock benchmarks are slow-tier only and call `gate(name, sample)` from `scripts/lib/bench-gate.mjs`. Baselines are `packages/engine/baselines/{tick,tick-node,worldgen,frame,frame-reference,belts-tick}.json`, each with a machine `fingerprint` (`os.cpus()[0].model` + `os.arch()`), `gated` metrics, absolute `limits` (the proxies of 0010 and 0018) and `conditions`.
 
 - The 25 % rule (`TOLERANCE = 0.25`, [0020](../decisions/0020-testing-strategy.md) §9) fails a gated metric only when the running machine's fingerprint equals the baseline's (Tyler's M3 Max). Elsewhere (CI, another Mac) nothing fails; the sample is recorded to `test-results/<suite>/bench/<name>.json`.
 - It also needs the metric to exceed the baseline by more than the baseline's `minDeltaMs` ([0047](../decisions/0047-bench-gate-absolute-floor.md); derived as twice the spread over 10+ runs, only `frame-reference` sets one, 0.1 ms). A `limits` figure fails on its own.
 - `tick-node` is warn-only. A baseline is rewritten only by `pnpm bench:baseline <name>` (promotes the newest record from this machine; fill `conditions` by hand; review the diff), for a reviewed expected cost. A miss is diagnosed with `.claude/skills/profile-frame/SKILL.md`, never fixed by moving a baseline, limit or workload. Check `uptime` first: the machine is shared.
 - Tick time desktop proxy 3 ms median on the standard large save ([0010](../decisions/0010-rates-and-subscriptions.md); the save is defined in 0020 §9).
+- `belts-tick` (M45): the whole tick of `fx-belts`' standard belt world (50,000 tiles, 250,000 items, eight maximum views) at most 5 ms median (Tyler, 2026-10-11; [0077](../decisions/0077-transport-item-representation.md)), by `slow_tick_belts_large`; its Node twin `tick-belts-large node` is warn-only. The release re-run and `gate` are `engine::testing::bench` (feature `testing`).
 
 ## Lint and the commit gate
 

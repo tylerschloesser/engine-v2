@@ -22,6 +22,9 @@ use fx_belts::{Action, Belts, Dir, Op, Pos, Seg, Tally, Thing, WPos};
 #[serde(rename_all = "camelCase")]
 struct GameCfg {
     seed: String,
+    /// `null` in every scenario but `bench-64` (M45: `BeltsParams.bench`).
+    #[serde(default)]
+    params: fx_belts::BeltsParams,
     max_entities: u32,
     max_modified_tiles: u32,
     max_action_growth: u32,
@@ -69,7 +72,7 @@ fn new_sim(cfg: &GameCfg) -> Sim<Belts> {
     let seed = u64::from_str_radix(cfg.seed.trim_start_matches("0x"), 16).expect("hex seed");
     Sim::genesis(WorldParams {
         seed,
-        worldgen: (),
+        worldgen: cfg.params,
         max_entities: cfg.max_entities,
         max_modified_tiles: cfg.max_modified_tiles,
         max_action_growth: cfg.max_action_growth,
@@ -1368,6 +1371,55 @@ fn belts_golden_forty_actions() {
     engine::testing::assert_golden_named(
         env!("CARGO_MANIFEST_DIR"),
         "golden-forty-actions.json",
+        &[hash],
+    );
+}
+
+/// `bench-64` (M45): `BeltsParams.bench` at seed 7, scale 64 (M40's `Mixed` world at 1/64: 78
+/// lines, 3,906 items, 22 spawners; `maxLines` 256 so the tile index holds its 1,562 lane-tiles) built by genesis, 300 ticks with nobody acting. The golden is
+/// the `.wasm`'s, so the genesis path (`fx_belts::bench`: the marker tiles, `bench_world`'s
+/// `SimRng` and arithmetic, `build`) is compared native vs Node vs Bun. Property after every tick:
+/// every line and spawner is there and items are conserved from genesis
+/// (`genesis + spawned == live + sunk`), and some sink and spawner did work.
+#[test]
+fn belts_golden_bench_64() {
+    use fx_belts::bench::world::{Regime, bench_world_scaled};
+    let world = bench_world_scaled(7, Regime::Mixed, 64);
+    let (mut spawned, mut sunk) = (0u64, 0u64);
+    let hash = run("scenario-bench-64.json", &mut |sim| {
+        let t = sim.tick().0;
+        let a = sim.authority();
+        let tr = a.transport();
+        assert_eq!(
+            tr.lines_len() as usize,
+            world.lines.len(),
+            "tick {t}: lines"
+        );
+        let (mut live, mut s_sunk) = (0u64, 0u64);
+        for id in 1..=world.lines.len() as u32 {
+            live += u64::from(tr.count(LineId(id)).expect("line"));
+            s_sunk += tr.sunk(LineId(id)).expect("line");
+        }
+        let mut n = 0;
+        let mut s_spawned = 0u64;
+        for (_, e) in a.store().entities() {
+            if let Thing::Spawner(s) | Thing::Cycling(s) = e {
+                n += 1;
+                s_spawned += u64::from(s.spawned);
+            }
+        }
+        assert_eq!(n, world.spawners.len(), "tick {t}: spawners");
+        assert_eq!(
+            world.items() + s_spawned,
+            live + s_sunk,
+            "tick {t}: genesis + spawned == live + sunk"
+        );
+        (spawned, sunk) = (s_spawned, s_sunk);
+    });
+    assert!(spawned > 0 && sunk > 0, "spawned {spawned}, sunk {sunk}");
+    engine::testing::assert_golden_named(
+        env!("CARGO_MANIFEST_DIR"),
+        "golden-bench-64.json",
         &[hash],
     );
 }

@@ -45,6 +45,11 @@ export const BENCHES = {
   frame: { gated: ['mainP50Ms', 'workerP50Ms'], limits: {} },
   // 0008 §6: ms per generated chunk of the reference game, release, native.
   worldgen: { gated: ['medianMsPerChunk'], limits: {} },
+  // M45 (0076 Consequences, Tyler's 5 ms whole-tick limit at 50,000 belt tiles and 250,000 items;
+  // 0077 A7 holds the measured figures): `slow_tick_belts_large` in `fx-belts`.
+  'belts-tick': { gated: ['medianMs'], limits: { medianMs: 5 } },
+  // M45: `slow_snapshot_belts_large`, recorded only (the snapshot proxy of M36 is reported, not gated).
+  'belts-snapshot': { gated: [], limits: {} },
 }
 
 /** Where this machine stands: no environment variable to forget. */

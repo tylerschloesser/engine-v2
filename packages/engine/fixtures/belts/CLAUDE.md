@@ -37,24 +37,21 @@ Seeded worlds on a native `Sim`: `prop_conservation`, `prop_spacing_invariant` (
 exceptions), `prop_throughput`, `prop_ring_lap_time` and `_packed_block` (found red in M44b, fixed
 by M44's cut-budget round, 0079 §11). `pnpm test rust -t prop_`.
 
-**The spike (M40, native only, ships nothing):** `tests/spike_repr.rs` times the three item
-representations of 0077 (A per-item list, B1 linked runs, B2 contiguous runs) on the standard belt
-world. `tests/common/world.rs` builds that world (`bench_world(seed, regime)`: 50,000 tiles,
-~250,000 items, `speed = 24`, four regimes) as plain `LineSpec` data, reused by M45's gated
-benchmark. `tests/common/bench_run.rs` copies the reference game's release re-run helper (M45 moves
-it to `engine::testing`). Commands: `pnpm test rust -t repr_`, `-t bench_world`, `pnpm test:slow
-rust -t slow_spike_item_representation` (release, one `BENCH_SAMPLE` per candidate x regime, also in
-`test-results/rust/bench/spike-item-representation.json`: nextest hides a passing test's output;
-`SPIKE_ONLY=B1/mixed SPIKE_PROFILE_REPEAT=150` on the release binary repeats one cell for a
-profiler). Numbers: 0077's Amendment; M45 deletes the spike.
+**The bench world (M45, `src/bench.rs`, `src/bench/world.rs`).** `BeltsParams { bench:
+Some(BenchSpec { seed, scale }) }` (JSON `params: {"bench": {"seed": 7, "scale": 1}}`; `null` is the
+empty world of every scenario) makes `Belts::genesis` build M40's standard `Mixed` world (3,810
+lines, 50,000 tiles, 250,000 items at seed 7) through `transport_mut()`, one straight segment per
+line, and 1,090 genesis-spawned spawners (activated on tick 1; `Thing::Cycling` for M40's
+mixed-kind chains). The worldgen carries the spec in the `aux` of four plain tiles at `y = -1`,
+`x = -1..=-4`. The benchmark's item cap is 393,216 (`BENCH_MAX_ITEMS`), so it never binds. The dev-dependency on `engine` turns on
+`bench-phases`, so a test reads the transport advance from `engine::bench_phase::take()`.
+`tests/bench_belts.rs`: `pnpm test rust -t bench_`, `-t transport_phone_caps`, `-t
+transport_budget_exceeds`; `belts_golden_bench_64` (`golden/scenario-bench-64.json`) replays the
+genesis at 1/64 natively, under Node and under Bun; `pnpm test:slow rust -t slow_tick_belts_large` (gated by
+`baselines/belts-tick.json`, 5 ms median; re-runs itself in release through
+`engine::testing::bench`), `-t slow_snapshot_belts_large` (reported); the `.wasm` twin is `pnpm
+test:slow netcode -t "tick-belts-large node"`.
 
-**The forecast spike (M41, native only):** `tests/spike_forecast.rs` measures 0078's forecast on B1
-(`common/forecast.rs`: the `Tracker`, an observe-only `Observer` of `ReprB`; builder; byte model).
-`Regime::SaturatedView { jam_pct, period }` is its own world (`saturated_view_world`: 256 x 144 belt
-tiles, every lane packed and fed, toggled sinks); every line has a tile `Span`, and
-`visible_at_centre` gives a regime's visible set. Commands: `pnpm test rust -t forecast_`, `-t
-saturated_view`, `pnpm test:slow rust -t slow_spike_forecast_cells` (one `BENCH_SAMPLE` per world x
-depth, variants inside (`variants_at`), plus the tracker's tick cost; also
-`test-results/rust/bench/spike-forecast.json`). `forecast_client_matches_advance` is the arbiter: a
-client following only the messages draws every visible item where the advance puts it. Numbers:
-M41's Deviations, 0078's Amendment.
+**The spikes (M40, M41) are deleted (M45).** Their numbers are in 0077's and 0078's Amendments;
+their code (`tests/spike_*.rs`, `tests/common/{repr,repr_a,repr_b,forecast,bench_run}.rs`, the
+forecast `Tracker` M47 reads) is at commit `864cb3a8` (M44b).

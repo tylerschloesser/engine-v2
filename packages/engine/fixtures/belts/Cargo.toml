@@ -16,5 +16,7 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 ts-rs = "12"
 
 [dev-dependencies]
-engine = { path = "../../crates/engine", features = ["testing"] }
+# `bench-phases` (M45): `slow_tick_belts_large` reads the transport advance's own time from
+# `engine::bench_phase::take()`. Dev-dependency only, so the `.wasm` never carries it.
+engine = { path = "../../crates/engine", features = ["testing", "bench-phases"] }
 serde_json = "1"

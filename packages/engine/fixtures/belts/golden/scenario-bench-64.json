@@ -1,0 +1,45 @@
+{
+  "kind": "script",
+  "role": "sim",
+  "config": {
+    "arenaBytes": 100663296,
+    "game": {
+      "seed": "0x1",
+      "params": {
+        "bench": {
+          "seed": 7,
+          "scale": 64
+        }
+      },
+      "maxEntities": 4096,
+      "maxModifiedTiles": 4096,
+      "maxActionGrowth": 4096,
+      "maxLines": 256,
+      "maxItems": 8192,
+      "cacheChunks": 1024
+    }
+  },
+  "encoderConfig": {
+    "arenaBytes": 50331648,
+    "game": {
+      "seed": "0x1",
+      "params": {
+        "bench": {
+          "seed": 7,
+          "scale": 64
+        }
+      },
+      "genWorkers": 1,
+      "cacheChunks": 1024
+    }
+  },
+  "genesis": true,
+  "checkpointAt": 300,
+  "script": [
+    {
+      "tick": 1,
+      "connect": true,
+      "actions": []
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "belts-tick",
+  "fingerprint": {
+    "cpu": "Apple M3 Max",
+    "arch": "arm64"
+  },
+  "measuredAt": "2026-10-12T05:14:14.588Z",
+  "conditions": "Tyler's Mac (Apple M3 Max), native release (cargo test --release), fx-belts' standard belt world at genesis (M40's Mixed regime, seed 7: 3,810 lines, 50,000 belt tiles, 1,090 spawners; caps 32,768 lines and 393,216 items, so the item cap never binds: 259,795 items at tick 200, 315,444 at tick 1,400, the sink lanes constant at 200,000, the dead-end lanes filling by design) through packages/engine/fixtures/belts/tests/bench_belts.rs: Host<Belts> with 8 connections holding maximum views (256 x 256 tiles, stacked over the 220 x 545-tile world), unpaced, production hashing, no actions; 200 warm-up ticks then 1,200 measured; a tick is admit + seal + tick + build_frame x 8, frames discarded. Promoted with pnpm bench:baseline from the manager's gate run (pnpm test:slow rust -t slow_tick_belts_large) at 2026-10-12 05:14 UTC, 1-min/5-min load 3.10/5.19. Thirteen earlier runs of the same build on 2026-10-11 22:01-22:06 local: three gated runs at 1-min load 3.84-3.96 (0.8645, 0.8628, 0.8542 ms) and ten runs of the release binary alone (--exact, no rebuild) at 1-min load 3.46-3.85 (0.8445-0.8572 ms); all fourteen span 0.8445-0.8815 ms (4.4 %), so no 0047 minDeltaMs is set. One run inside the full pnpm test:slow rust (every slow_* test in parallel) read +5 % over its quiet median. Working tree on top of 864cb3a8 (M45).",
+  "gated": ["medianMs"],
+  "limits": {
+    "medianMs": 5
+  },
+  "metrics": {
+    "medianMs": 0.8815,
+    "p99Ms": 2.0084,
+    "maxMs": 2.2732,
+    "tickMedianMs": 0.1939,
+    "advanceMedianMs": 0.0452,
+    "framesMedianMs": 0.6972,
+    "frameBytesPerTick": 53501
+  }
+}

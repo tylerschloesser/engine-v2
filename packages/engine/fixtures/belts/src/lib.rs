@@ -36,11 +36,14 @@
 //! `Destroy { line }` runs `destroy` and counts the deleted items in one [`Thing::Destroyed`] on
 //! the `"destroyed"` active list (the property tests' conservation needs it).
 //!
+//! **The bench world (M45).** `BeltsParams.bench` builds M40's standard `Mixed` world at genesis
+//! ([`bench`]); its mixed-kind chains' spawners are [`Thing::Cycling`] (the item steps through
+//! `1..=CYCLE_KINDS`), a variant only the bench genesis makes.
+//!
 //! Goldens (`golden/scenario-*.json`, `tests/golden_scenarios.rs`): `straight-chain` (also the
 //! canonical `scenario.json`), `deadend-backup`, `spawn-to-sink`, `big-step`, `edit-while-running`,
 //! `inserter-like`, `geometry-arc`, `sideload-saturated`, `sideload-contested`, `fork-50-50`,
-//! `fork-blocked-side`, `big-step-fork`, `forty-actions`; the item-representation and forecast spikes are
-//! `tests/spike_*.rs` (native only). `CLAUDE.md` has the detail.
+//! `fork-blocked-side`, `big-step-fork`, `forty-actions`. `CLAUDE.md` has the detail.
 
 use engine::game::{
     EntityId, Game, Growth, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead,
@@ -53,12 +56,17 @@ use engine::world::{
 use engine::worldgen::Worldgen;
 use ts_rs::TS;
 
+pub mod bench;
+pub use bench::{BeltsParams, BenchSpec};
+
 /// Capacity of [`Global::lines`]: chains a world can name.
 pub const MAX_CHAINS: u32 = 32;
 /// Items `Op::Chain` can place at rest.
 pub const REST_SLOTS: u32 = 8;
 /// Positions per tile (0076 §1: 1/256 tile).
 pub const TILE: u32 = 256;
+/// Item kinds a [`Thing::Cycling`] spawner steps through (M40's `KINDS`).
+pub const CYCLE_KINDS: u16 = 6;
 
 /// The spawner active list (`Belts::register`); the `fx-machines` `SPINNER_SYS` pattern:
 /// `Registry::system` hands out the same id for every `Registry`, so one process-wide value holds.
@@ -331,6 +339,11 @@ pub enum Thing {
     /// `"destroyed"` active list; made from the first such request, as the tally is. Separate from
     /// [`Tally`] so the tally's encoding, and the goldens holding one, did not change.
     Destroyed(u32),
+    /// A spawner whose item cycles (M45, made only by the bench genesis, [`bench`]): the `k`-th
+    /// accepted insert is kind `(item - 1 + k) % CYCLE_KINDS + 1`, M40's mixed-kind chains ("runs
+    /// that never merge", 0077 §2). Its own variant rather than a field of [`Spawner`], so every
+    /// golden holding a spawner keeps its encoding, and `Op::Spawner`'s `item` keeps its meaning.
+    Cycling(Spawner),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -568,13 +581,17 @@ impl Game for Belts {
     fn anchor(e: &Thing) -> TilePos {
         match e {
             Thing::Request(r) => r.at.tile(),
-            Thing::Spawner(s) => s.at.tile(),
+            Thing::Spawner(s) | Thing::Cycling(s) => s.at.tile(),
             Thing::Tally(_) | Thing::Destroyed(_) => TilePos::new(0, 0),
         }
     }
 
+    /// An empty world, or the bench world when the worldgen carried a spec ([`bench`]).
     fn genesis(w: &mut dyn WorldWrite<Self>) {
         w.put_global(Global::default());
+        if let Some(spec) = bench::marker(w) {
+            bench::build(w, spec);
+        }
     }
 
     fn on_player(w: &mut dyn WorldWrite<Self>, who: PlayerId, ev: PlayerEvent) {
@@ -606,8 +623,11 @@ impl Game for Belts {
         while let Some(id) = cx.next_woken() {
             match cx.entity(id).ok().flatten().copied() {
                 Some(Thing::Request(req)) => Self::execute(cx, id, req),
-                // Not woken in practice (`TickCx` puts never auto-wake); already on their lists.
-                Some(Thing::Spawner(_) | Thing::Tally(_) | Thing::Destroyed(_)) | None => {}
+                // Woken only when spawned at genesis (the bench world, M45; `TickCx` puts never
+                // auto-wake): it joins its list here, and runs below this same tick.
+                Some(Thing::Spawner(_) | Thing::Cycling(_)) => cx.activate(spawner_sys(), id),
+                // Not woken in practice; already on their lists.
+                Some(Thing::Tally(_) | Thing::Destroyed(_)) | None => {}
             }
         }
 
@@ -616,14 +636,22 @@ impl Game for Belts {
             let Some(id) = cx.active_at(sys, i) else {
                 continue; // a tombstoned slot (0007 §7).
             };
-            let Some(Thing::Spawner(was)) = cx.entity(id).ok().flatten().copied() else {
-                continue;
+            let (was, cycling) = match cx.entity(id).ok().flatten().copied() {
+                Some(Thing::Spawner(s)) => (s, false),
+                Some(Thing::Cycling(s)) => (s, true),
+                _ => continue,
             };
             let mut s = was;
             s.acc += 256;
             if s.acc >= s.period {
+                let item = if cycling {
+                    let k = s.spawned % u32::from(CYCLE_KINDS);
+                    ((u32::from(s.item.max(1)) - 1 + k) % u32::from(CYCLE_KINDS) + 1) as u16
+                } else {
+                    s.item
+                };
                 let ok = match cx.transport_mut() {
-                    Ok(t) => t.insert_back(LineId(s.line), Item(s.item)).is_ok(),
+                    Ok(t) => t.insert_back(LineId(s.line), Item(item)).is_ok(),
                     Err(Unknown) => false,
                 };
                 if ok {
@@ -636,7 +664,14 @@ impl Game for Belts {
             // A held refusal leaves the state as it was: no write, so a backed-up spawner costs
             // no delta (the idle-cost rule of `fx-machines`' `idle-world-costs-zero`).
             if s != was {
-                cx.put_entity(id, Thing::Spawner(s));
+                cx.put_entity(
+                    id,
+                    if cycling {
+                        Thing::Cycling(s)
+                    } else {
+                        Thing::Spawner(s)
+                    },
+                );
             }
         }
     }
@@ -658,17 +693,25 @@ impl Game for Belts {
     }
 }
 
-/// Flat grass everywhere: belt tests want a world with nothing in the way.
+/// Flat grass everywhere: belt tests want a world with nothing in the way. With a bench spec it
+/// also writes the three marker tiles of [`bench`] into chunk `(-1, -1)`.
 pub struct FlatWorldgen;
 
 const EDGE: usize = 32; // matches `Game::CHUNK_BITS`'s default (5)
 
 impl Worldgen for FlatWorldgen {
-    type Params = ();
+    type Params = BeltsParams;
     const WORLDGEN_VERSION: u32 = 1;
-    fn generate(_seed: u64, _params: &(), _chunk: ChunkCoord, out: &mut [Tile]) {
+    fn generate(_seed: u64, params: &BeltsParams, chunk: ChunkCoord, out: &mut [Tile]) {
         debug_assert_eq!(out.len(), EDGE * EDGE);
         out.fill(Tile::new(0, 0, 0));
+        if let Some(spec) = params.bench
+            && chunk == (ChunkCoord { x: -1, y: -1 })
+        {
+            for (i, t) in bench::marker_tiles(spec) {
+                out[i] = t;
+            }
+        }
     }
 }
 

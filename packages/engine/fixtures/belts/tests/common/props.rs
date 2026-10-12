@@ -61,7 +61,7 @@ impl World {
     pub fn new(seed: u64, max_lines: u32, max_items: u32) -> Self {
         let sim = Sim::genesis(WorldParams {
             seed,
-            worldgen: (),
+            worldgen: fx_belts::BeltsParams::default(),
             max_entities: 4096,
             max_modified_tiles: 4096,
             max_action_growth: 4096,
@@ -198,7 +198,7 @@ impl World {
         }
         for (_, e) in self.sim.authority().store().entities() {
             match e {
-                Thing::Spawner(s) => g.spawned += u64::from(s.spawned),
+                Thing::Spawner(s) | Thing::Cycling(s) => g.spawned += u64::from(s.spawned),
                 Thing::Tally(t) => {
                     g.inserted += u64::from(t.inserted);
                     g.removed += u64::from(t.removed);
