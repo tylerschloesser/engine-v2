@@ -22,6 +22,8 @@ mod action_round_trip;
 mod codec;
 #[path = "main/connection_and_subscriptions.rs"]
 mod connection_and_subscriptions;
+#[path = "main/forecasts.rs"]
+mod forecasts;
 #[path = "main/gen_queue.rs"]
 mod gen_queue;
 #[path = "main/integrity.rs"]

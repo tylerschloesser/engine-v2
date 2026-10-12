@@ -456,6 +456,13 @@ impl<G: Game> ClientCore<G> {
         &self.replica
     }
 
+    /// Steps the replica's held items to `tick` with no forecast records (M47): for a native test
+    /// that knows no frame is coming for the ticks between (a `Loopback` tick whose frame was
+    /// empty). Production never does this: a frame steps them (`Transport::apply_forecast`).
+    pub fn forecast_catch_up(&mut self, tick: u32) {
+        self.replica.forecast_catch_up(tick);
+    }
+
     /// Mutable counterpart of [`Self::replica`] (M15b
     /// rendering.md): `game_instance.rs`'s `ClientInstance` reaches `Replica::terrain`/`terrain_mut`
     /// through this for `TerrainFeed`/`Uploader`, which take `&TerrainStore`/`&mut TerrainStore`
@@ -1161,6 +1168,9 @@ impl<G: Game> ClientCore<G> {
                 SectionId::LineStructs => {
                     crate::wire::lines::read(&mut br, |_| {})?;
                 }
+                SectionId::Forecasts => {
+                    crate::wire::forecast::read(&mut br, |_| {})?;
+                }
             }
         }
         Ok(())
@@ -1178,6 +1188,12 @@ impl<G: Game> ClientCore<G> {
             ack_seq: header.ack_seq,
             ..Default::default()
         };
+        // M47 (review 2, finding 1): the ticks no frame came for are stepped first, under the
+        // structures and stops this replica held through them; only then does this frame's
+        // sections change anything (its structures, gones, snapshots, forecasts and tick `T`).
+        self.replica.forecast_catch_up(header.tick.wrapping_sub(1));
+        // M47: section 13's body, applied once the whole frame's structures are (below).
+        let mut forecasts: &[u8] = &[];
         while let Some((id, body)) = r.next_section().expect("validated") {
             let mut br = ByteReader::new(body);
             match id {
@@ -1357,9 +1373,14 @@ impl<G: Game> ClientCore<G> {
                     })
                     .expect("validated");
                 }
+                SectionId::Forecasts => forecasts = body,
                 SectionId::ChunkTiles | SectionId::ChunkKeeps => {} // Non-scope bodies
             }
         }
+        // M47: every frame steps the held items to its tick, applying its forecasts (if any)
+        // around the step (`transport/follow.rs`).
+        self.replica
+            .apply_forecast(header.tick, forecasts, self.render_t);
         self.finish_dumps();
         self.check_hashes(header.tick);
         summary

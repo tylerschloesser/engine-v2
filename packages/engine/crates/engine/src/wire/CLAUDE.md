@@ -9,8 +9,8 @@ Welcome · 0x04 ResyncChunk · 0x05 Bye · 0x06 FrameBundle`; `0x07..=0x7F` free
 `u32` (first byte `>= 0x80`, 0024 §8).
 **Section ids** (ascending, each once, empty omitted, unknown malformed): `1 ActionResults ·
 2 Global · 3 OwnPlayer · 4 ChunkEnterPristine · 5 ChunkSnapshots · 6 ChunkLeaves · 7 ChunkDeltas ·
-8 Presence · 9 Hashes · 10 ChunkTiles (reserved, unbuilt) · 11 ChunkKeeps · 12 LineStructs`. A client
-applies every section of a frame before it checks the frame's `Hashes` (section 12 comes after 9).
+8 Presence · 9 Hashes · 10 ChunkTiles (reserved, unbuilt) · 11 ChunkKeeps · 12 LineStructs · 13 Forecasts`. A
+client applies every section of a frame before it checks the frame's `Hashes` (sections 12 and 13 come after 9).
 **Frame**: `[type u8][flags u8][tick u32][ack_seq u32]` (10 B, flags reserved-zero: nonzero is `Malformed`, since strict build equality makes forward compatibility pointless); no sections =
 heartbeat. **FrameBundle** (`bundle.rs`): `[0x06][n varint]` then `n` x `[len varint][whole frame]`. **Coord list**: sorted `(cy,cx)`, first entry absolute zigzag pair, rest zigzag deltas.
 **Overlay runs**: `n_runs varint`, per run `gap varint`, `head=len<<1|repeat`, then `repeat?1:len`
@@ -46,6 +46,15 @@ tag, or `seg_count` 0 or past 16 (`MAX_SEGMENTS`). A line without segments is ne
 of a chunk entering by snapshot (and of a resync snapshot) ride the same frame's section 12, not the
 snapshot entry; the per-chunk hash covers, after the snapshot bytes, the `Put` records of the lines
 anchored in the chunk (`integrity.rs`).
+
+**Forecasts** (section 13, `wire/forecast.rs`, M47, 0078 A3; after 12, so a record meets the frame's structures): a flat record list to the section's end,
+kinds in the order `State`, `Arrival`, `RunList`, lines strictly ascending within `State` and `RunList`, `(line, pos)` within `Arrival`; record = `tag u8 ·
+line varint` then `0 State`: `flags u8 (bit0 has_stop, bit1 paused, bit2 resumed) · front_stop i32 if has_stop`; `1 Arrival`: `item u16 · pos u32 · flags u8
+(bit0 has_stop) · stop i32 if has_stop`; `2 RunList`: `flags u8 (bit0 has_spawner, bit1 unknown: nothing follows) · n varint · n x run · spawner if has_spawner`, run = `item u16 · count u16 ·
+pos u32 · stop i32` (`i32::MIN`: none; item `k` at `pos + 64k`, stopping at `stop + 64k`), spawner = `period varint · acc varint · kinds u16 · next u16 · flags u8
+(bit0 paused)`. Malformed: an unknown tag, truncation, line id 0, item 0 (a spawner's `next` too), undefined flag bits (`unknown` with any other), `paused` with `resumed`, a run `count` 0, run positions not
+strictly increasing across the list, a spawner `period` 0, kinds out of order or keys not ascending. Sizes: `State` 3 B (+4 with a stop) for a line id under
+128, `Arrival` 9 B (+4), `RunList` 4 B + 12 B per run (+7-15 B of spawner); an `unknown` list 3 B.
 
 A `FrameWriter::section` body runs twice (measure, then write): build any stateful writer (a
 coordinate cursor) *inside* the closure, never capture one by `&mut` from outside it.

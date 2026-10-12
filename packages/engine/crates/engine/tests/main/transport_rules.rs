@@ -1672,19 +1672,36 @@ fn transport_matches_per_item_reference() {
 /// version, M46) + 17 (Tarjan scratch) + 4 x 32 (segment pool, M43) + 8 x 16 (tile index, M43)
 /// = 377 B, the structure-change list a quarter of the lines x 4 B (M46, rounded up), a run node
 /// 16 B plus one spare node (none at 0 items), and the tile index's merge room, `MAX_LINE_TILES`
-/// x 16 = 65,536 B (none at 0 lines). At the recommended caps: 32,768 x 377 + 8,192 x 4 +
-/// 262,145 x 16 + 65,536 = 16,646,160 B.
+/// x 16 = 65,536 B (none at 0 lines). M47's forecast tracker adds 64 B a line (a 44 B track, 4 B
+/// of due heap, 4 B of dirty list, a 12 B message), 8 B per four lines (a
+/// changed `Next` output, M47 review 2), 48 B per two lines (a 20 B hand-off log entry
+/// and a 28 B spawner entry, half the lines each, rounded up) and a 16 B model segment per line
+/// plus one per four items plus one (none at 0 items). At the recommended caps: 32,768 x 377 +
+/// 8,192 x 4 + 262,145 x 16 + 65,536 = 16,646,160 B, plus 32,768 x 64 + 16,384 x 48 + 8,192 x 8 + 98,305 x
+/// 16 = 4,522,000 B: 21,168,160 B. A replica reserves no update order, Tarjan scratch, change
+/// list, run nodes or tracker, and the follower instead (48 B a line, 16 B a run node per item
+/// plus one): 17,498,128 B at the recommended caps (`Transport::replica_reserved_bytes`).
 #[test]
 fn transport_reserved_bytes_at_the_defaults() {
     assert_eq!(Transport::reserved_bytes(0, 0), 0);
-    assert_eq!(Transport::reserved_bytes(1, 0), 377 + 4 + 65_536);
-    assert_eq!(Transport::reserved_bytes(0, 1), 32);
+    assert_eq!(
+        Transport::reserved_bytes(1, 0),
+        377 + 4 + 65_536 + 64 + 48 + 8
+    );
+    assert_eq!(Transport::reserved_bytes(0, 1), 32 + 16);
     assert_eq!(
         Transport::reserved_bytes(
             engine::transport::DEFAULT_MAX_LINES,
             engine::transport::DEFAULT_MAX_ITEMS
         ),
-        16_646_160
+        21_168_160
+    );
+    assert_eq!(
+        Transport::replica_reserved_bytes(
+            engine::transport::DEFAULT_MAX_LINES,
+            engine::transport::DEFAULT_MAX_ITEMS
+        ),
+        17_498_128
     );
 }
 

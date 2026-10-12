@@ -79,6 +79,8 @@ export {
 } from './test/input.js'
 export {
   corruptLineStructure,
+  type ForecastCounters,
+  forecastCounters,
   type LineOutput,
   type LineSegment,
   type LineStructure,

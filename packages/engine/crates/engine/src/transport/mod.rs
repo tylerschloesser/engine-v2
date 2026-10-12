@@ -39,11 +39,18 @@
 //! `max_lines` ids (structures change at placement rate); past that it is marked overflowed and
 //! the host reconciles every line once instead (`host::lines`). A client replica's store is in
 //! *replica mode* ([`Transport::set_replica`]): it holds structures only, through
-//! [`Transport::apply_structure`], and answers `count`/`front`/`items_in`/`sunk`/`toggle` with
-//! `Unknown` (items replicate in M47).
+//! [`Transport::apply_structure`], and answers `sunk`/`toggle` with `Unknown`.
+//!
+//! M47 (0078 A3): items replicate as forecasts. On the host, `forecast.rs`'s tracker (derived,
+//! never encoded or hashed) follows every line's model through `advance`'s hooks and decides each
+//! tick's corrections, which `host::lines` routes into frame section 13 (`wire::forecast`); on a
+//! replica, `follow.rs` keeps one trajectory per held item and answers `count`/`front`/`items_in`
+//! from them at its forecast tick.
 
 mod advance;
 mod codec;
+mod follow;
+mod forecast;
 mod geometry;
 mod items;
 mod line;
@@ -56,6 +63,11 @@ use crate::world::{ChunkCoord, ChunkDims, TilePos, WorldPos};
 
 pub use advance::dry_visits;
 pub(crate) use codec::{read_out, read_segment, write_out, write_segment};
+pub use follow::ForecastCounters;
+pub use forecast::{
+    Crossing, HostCounters, MAX_DEPTH, MSG_RUN_LIST, MSG_STATE, Msg, ROUTE_FORK, ROUTE_INSERT,
+    ROUTE_MERGE, ROUTE_NEXT, Schedule,
+};
 pub use geometry::{Geometry, MAX_LINE_TILES, MAX_SEGMENTS, Segment, walk_evals};
 use geometry::{SegRec, TileEntry};
 use line::{Line, NIL, Node};
@@ -249,6 +261,14 @@ pub trait TransportWrite: TransportRead {
     fn insert_at(&mut self, line: LineId, pos: u32, item: Item) -> Result<(), TransportError>;
     /// The nearest item within `SPACING / 2` of `pos` (the front one on a tie), if any.
     fn remove_at(&mut self, line: LineId, pos: u32) -> Result<Option<Item>, TransportError>;
+    /// Declares the spawner the game's tick rule runs on this line (M47, [`Schedule`]: the engine
+    /// forecasts it, the game keeps inserting through `insert_back`), as it stands after this
+    /// tick; `None` clears it. Returns nothing: a declaration is derived state, never part of the
+    /// sim (no result the game could branch on). It is not encoded, so it is lost on restore: the
+    /// game declares again (M48 decides the hook); until then the line's inserts reach clients as
+    /// arrivals. One the tracker cannot hold (no such line, or half the line cap declared already)
+    /// is counted (`HostCounters::spawner_declarations_dropped`).
+    fn set_spawner(&mut self, line: LineId, s: Option<Schedule>);
 }
 
 /// The read side of a context that holds no transport state (a `WorldRead` implementor that does
@@ -337,6 +357,9 @@ pub struct Transport {
     /// What the item crossing now already moved on its feeder this tick (`advance` scratch, read
     /// by a landing across a cut; not state).
     cut_moved: i64,
+    /// Where the last `Merge` or `Fork` transfer landed, `(slot, pos)` (`advance` scratch for the
+    /// forecast tracker's hand-off; not state).
+    last_land: (u32, u32),
     scratch: order::Scratch,
     /// The segment pool (`geometry.rs`): every line's segments, contiguous per line, compacted in
     /// place when the tail is reached. `seg_cap` records at most (`max_lines x
@@ -369,8 +392,12 @@ pub struct Transport {
     struct_overflow: bool,
     /// The tick structure changes are stamped with ([`Transport::set_now`]).
     now: u32,
-    /// A client replica's store (module doc): structures only.
+    /// A client replica's store (module doc): structures and forecasts.
     replica: bool,
+    /// M47: the host's forecast tracker (`forecast.rs`), reserved by `set_caps` unless a replica.
+    fc: forecast::Tracker,
+    /// M47: the replica's forecast follower (`follow.rs`), reserved by `set_caps` on a replica.
+    fl: follow::Follower,
 }
 
 impl Transport {
@@ -393,6 +420,7 @@ impl Transport {
             graph_dirty: false,
             order_recomputes: 0,
             cut_moved: 0,
+            last_land: (NIL, 0),
             cut_fallbacks: 0,
             scratch: order::Scratch::default(),
             segs: Vec::new(),
@@ -409,6 +437,8 @@ impl Transport {
             struct_overflow: false,
             now: 0,
             replica: false,
+            fc: forecast::Tracker::default(),
+            fl: follow::Follower::default(),
         }
     }
 
@@ -440,33 +470,69 @@ impl Transport {
         let lines = max_lines.max(self.lines.len() as u32) as usize;
         reserve_to(&mut self.lines, lines);
         reserve_to(&mut self.struct_ver, lines);
-        self.struct_cap = struct_cap(max_lines);
-        reserve_to(&mut self.struct_changes, self.struct_cap as usize);
         reserve_to(&mut self.index, lines);
-        reserve_to(&mut self.order, lines);
-        self.scratch.reserve(lines);
         let items = max_items.max(self.items);
-        let nodes = if items == 0 {
-            0
-        } else {
-            (items as usize + 1).max(self.nodes.len())
-        };
-        reserve_to(&mut self.nodes, nodes);
-        self.node_cap = nodes as u32;
+        // M47 review (finding 3): a replica never advances, queues no change and holds its items
+        // in the follower, so it reserves no update order, Tarjan scratch, change list or run
+        // nodes.
+        if !self.replica {
+            self.struct_cap = struct_cap(max_lines);
+            reserve_to(&mut self.struct_changes, self.struct_cap as usize);
+            reserve_to(&mut self.order, lines);
+            self.scratch.reserve(lines);
+            let nodes = if items == 0 {
+                0
+            } else {
+                (items as usize + 1).max(self.nodes.len())
+            };
+            reserve_to(&mut self.nodes, nodes);
+            self.node_cap = nodes as u32;
+        }
         let (seg_cap, tile_cap, headroom) = geometry::caps(max_lines);
         self.seg_cap = seg_cap.max(self.segs.len() as u32);
         reserve_to(&mut self.segs, self.seg_cap as usize);
         self.tile_cap = tile_cap.max(self.tiles.len() as u32);
         reserve_to(&mut self.tiles, self.tile_cap as usize + headroom as usize);
+        // M47: the replica follows forecasts; the host tracks them.
+        if self.replica {
+            self.fl.reserve(lines as u32, items);
+        } else if lines > 0 || items > 0 {
+            let mut fc = std::mem::take(&mut self.fc);
+            fc.reserve(self, max_lines, max_items);
+            self.fc = fc;
+        }
         Ok(())
     }
 
     /// The bytes [`Transport::set_caps`] reserves for `max_lines` lines and `max_items` items on an
-    /// empty store: line records, the id index, the update order and Tarjan's scratch per line,
-    /// `max_items + 1` run nodes (none at 0 items), and the geometry (M43): the segment pool and
-    /// the tile index per line plus the index's merge room (`geometry::caps`). `Host::init`'s
-    /// memory-split check adds it (0079 §5).
+    /// empty host store: line records, the id index, the update order and Tarjan's scratch per
+    /// line, `max_items + 1` run nodes (none at 0 items), the geometry (M43): the segment pool and
+    /// the tile index per line plus the index's merge room (`geometry::caps`), and the forecast
+    /// tracker (M47). `Host::init`'s memory-split check adds it (0079 §5).
     pub fn reserved_bytes(max_lines: u32, max_items: u32) -> u64 {
+        Self::host_bytes(max_lines, max_items)
+    }
+
+    /// What a client replica's store reserves (M47 review, finding 3): the line records, id index
+    /// and structure versions, the geometry, and the forecast follower; no update order, scratch,
+    /// change list or run nodes.
+    pub fn replica_reserved_bytes(max_lines: u32, max_items: u32) -> u64 {
+        use core::mem::size_of;
+        let per_line = size_of::<Line>() + size_of::<(LineId, u32)>() + size_of::<u32>();
+        let (segs, tiles, headroom) = geometry::caps(max_lines);
+        u64::from(max_lines) * per_line as u64
+            + u64::from(segs) * size_of::<SegRec>() as u64
+            + (u64::from(tiles) + u64::from(headroom)) * size_of::<TileEntry>() as u64
+            + follow::reserved_bytes(max_lines, max_items)
+    }
+
+    /// The larger of the two roles' reserve: what a device that may host or join needs.
+    pub fn max_role_bytes(max_lines: u32, max_items: u32) -> u64 {
+        Self::host_bytes(max_lines, max_items)
+            .max(Self::replica_reserved_bytes(max_lines, max_items))
+    }
+
+    fn host_bytes(max_lines: u32, max_items: u32) -> u64 {
         use core::mem::size_of;
         // The record, the id index, the update order, the structure version (M46) and Tarjan's
         // scratch.
@@ -486,6 +552,7 @@ impl Transport {
             + nodes * size_of::<Node>() as u64
             + u64::from(segs) * size_of::<SegRec>() as u64
             + (u64::from(tiles) + u64::from(headroom)) * size_of::<TileEntry>() as u64
+            + forecast::reserved_bytes(max_lines, max_items)
     }
 
     /// The bytes this store's arenas hold now (their capacities): what `set_caps` reserved, or
@@ -500,7 +567,9 @@ impl Transport {
             + self.scratch.capacity_bytes()
             + self.nodes.capacity() * size_of::<Node>()
             + self.segs.capacity() * size_of::<SegRec>()
-            + self.tiles.capacity() * size_of::<TileEntry>()) as u64
+            + self.tiles.capacity() * size_of::<TileEntry>()
+            + self.fc.capacity_bytes()
+            + self.fl.capacity_bytes()) as u64
     }
 
     /// The line's runs front to back, `f(item, count, gap)` (the store's shape, 0077 A6; a later
@@ -620,6 +689,17 @@ impl Transport {
     /// segments; item writes mark `touched` themselves): `touched`, the world's `changed`, and the
     /// line's structure version and change-list entry (M46).
     fn touch(&mut self, slot: u32) {
+        self.touch_as(slot, false);
+    }
+
+    /// [`Transport::touch`] for a change of motion only (an output or a speed): the forecast tracker
+    /// can tell it as a state message (M47).
+    fn touch_motion(&mut self, slot: u32) {
+        self.touch_as(slot, true);
+    }
+
+    fn touch_as(&mut self, slot: u32, motion: bool) {
+        self.fc.structure(slot, motion);
         self.lines[slot as usize].mark = self.epoch;
         self.changed = true;
         self.struct_ver[slot as usize] = self.now;
@@ -644,7 +724,7 @@ impl Transport {
 
     /// Allocates a line slot (reusing a destroyed one first).
     fn alloc_line(&mut self, rec: Line) -> u32 {
-        if self.free_line != NIL {
+        let s = if self.free_line != NIL {
             let s = self.free_line;
             self.free_line = self.lines[s as usize].head;
             self.lines[s as usize] = rec;
@@ -655,7 +735,11 @@ impl Transport {
             self.lines.push(rec);
             self.struct_ver.push(self.now);
             s
-        }
+        };
+        // M47: a new line's model (host) or held items (replica) start empty.
+        self.fc.create(s);
+        self.fl.init_line(s);
+        s
     }
 
     fn read_line(&self, line: LineId) -> Result<&Line, Unknown> {
@@ -695,12 +779,19 @@ impl TransportRead for Transport {
     }
 
     fn count(&self, line: LineId) -> Result<u32, Unknown> {
-        self.items_known()?;
+        if self.replica {
+            // M47: from the held trajectories at the forecast tick.
+            let slot = self.slot(line).ok_or(Unknown)?;
+            return Ok(self.fl.count(slot));
+        }
         Ok(self.read_line(line)?.items)
     }
 
     fn front(&self, line: LineId) -> Result<Option<(Item, u32)>, Unknown> {
-        self.items_known()?;
+        if self.replica {
+            let slot = self.slot(line).ok_or(Unknown)?;
+            return Ok(self.fl.front(slot));
+        }
         let rec = self.read_line(line)?;
         if rec.head == NIL {
             return Ok(None);
@@ -710,7 +801,11 @@ impl TransportRead for Transport {
     }
 
     fn items_in(&self, line: LineId, f: &mut dyn FnMut(Item, u32)) -> Result<(), Unknown> {
-        self.items_known()?;
+        if self.replica {
+            let slot = self.slot(line).ok_or(Unknown)?;
+            self.fl.items_in(slot, f);
+            return Ok(());
+        }
         let rec = self.read_line(line)?;
         let mut prev_last: Option<i64> = None;
         let mut cur = rec.head;
@@ -838,7 +933,11 @@ impl TransportWrite for Transport {
 
     fn take_front(&mut self, line: LineId) -> Result<Option<Item>, TransportError> {
         let slot = self.slot(line).ok_or(TransportError::NoLine)?;
-        Ok(self.take_front_slot(slot).map(Item))
+        let r = self.take_front_slot(slot).map(Item);
+        if r.is_some() {
+            self.fc.invalidate(slot);
+        }
+        Ok(r)
     }
 
     fn set_segments(&mut self, line: LineId, segs: &[Segment]) -> Result<(), TransportError> {
@@ -881,6 +980,9 @@ impl TransportWrite for Transport {
                 (sa, sb)
             }
         };
+        if let Output::Next(old) = self.lines[slot as usize].out {
+            self.fc.next_changed(self.lines[slot as usize].id, old);
+        }
         let rec = &mut self.lines[slot as usize];
         rec.out = out;
         rec.next_slot = next_slot;
@@ -889,7 +991,7 @@ impl TransportWrite for Transport {
         rec.toggle = false;
         rec.jam_valid = false;
         self.graph_dirty = true;
-        self.touch(slot);
+        self.touch_motion(slot);
         Ok(())
     }
 
@@ -908,7 +1010,12 @@ impl TransportWrite for Transport {
             return Err(BadSpeed);
         }
         self.lines[slot as usize].speed = speed;
-        self.touch(slot);
+        self.touch_motion(slot);
+        // M47: a declared spawner's insert this tick may have landed by the old speed, which the
+        // client's replay (under the new structure) cannot know: the line's list is resent.
+        if rec.speed != speed {
+            self.fc.spawner_speed_changed(slot);
+        }
         Ok(())
     }
 
@@ -917,10 +1024,16 @@ impl TransportWrite for Transport {
         if item.0 == 0 {
             return Err(TransportError::BadItem);
         }
-        if self.items >= self.max_items {
-            return Err(Full);
-        }
-        self.insert_back_slot(slot, item.0)
+        let speed = self.lines[slot as usize].speed;
+        let r = if self.items >= self.max_items {
+            Err(Full)
+        } else {
+            self.insert_back_slot(slot, item.0)
+        };
+        // M47: the tracker sees the spawner's outcome and extends the line's model.
+        let pos = self.lines[slot as usize].tail_pos;
+        self.fc.insert_back(slot, r, item, pos, speed);
+        r
     }
 
     fn insert_at(&mut self, line: LineId, pos: u32, item: Item) -> Result<(), TransportError> {
@@ -931,11 +1044,28 @@ impl TransportWrite for Transport {
         if self.items >= self.max_items {
             return Err(Full);
         }
-        self.insert_at_slot(slot, pos, item.0)
+        let r = self.insert_at_slot(slot, pos, item.0);
+        if r.is_ok() {
+            // M47: an inserter's item the forecast cannot derive: the line's list is resent.
+            self.fc.invalidate(slot);
+        }
+        r
     }
 
     fn remove_at(&mut self, line: LineId, pos: u32) -> Result<Option<Item>, TransportError> {
         let slot = self.slot(line).ok_or(TransportError::NoLine)?;
-        Ok(self.remove_at_slot(slot, pos).map(Item))
+        let r = self.remove_at_slot(slot, pos).map(Item);
+        if r.is_some() {
+            self.fc.invalidate(slot);
+        }
+        Ok(r)
+    }
+
+    fn set_spawner(&mut self, line: LineId, s: Option<Schedule>) {
+        let valid = s.is_none_or(|s| s.period != 0 && s.next.0 != 0);
+        match self.slot(line) {
+            Some(slot) if valid => self.fc.set_spawner(slot, s),
+            _ => self.fc.counters.spawner_declarations_dropped += 1,
+        }
     }
 }

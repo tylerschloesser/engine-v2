@@ -58,7 +58,7 @@ impl Transport {
         self.replica
     }
 
-    /// `Unknown` for the item reads of a replica's store (M47 replicates items).
+    /// `Unknown` for the item reads a replica's forecasts do not answer (`sunk`, `toggle`).
     pub(super) fn items_known(&self) -> Result<(), Unknown> {
         if self.replica { Err(Unknown) } else { Ok(()) }
     }
@@ -230,6 +230,7 @@ impl Transport {
         self.struct_changes.clear();
         self.struct_overflow = false;
         self.graph_dirty = true;
+        self.fl.clear();
     }
 
     /// Removes a replica line's record (geometry already cleared): no redirect, no change-list
@@ -242,6 +243,8 @@ impl Transport {
         self.index.remove(k);
         self.lines[slot as usize] = Line::free(self.free_line);
         self.free_line = slot;
+        // M47: a line no longer held takes its items with it.
+        self.fl.drop_line(slot);
     }
 
     /// The anchor chunk of a put's segments (its front point's chunk), without holding it: the

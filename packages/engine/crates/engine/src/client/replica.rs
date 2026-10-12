@@ -13,7 +13,7 @@
 //! `Welcome` for the world's own caps ([`Replica::set_transport_caps`]: the client pays what the
 //! world declares, 0079 §5) and emptied there; it holds the structure of every line the host
 //! routes to this connection (`LineStructs`, applied through [`Replica::apply_structure`]) and
-//! answers item reads `Unknown` until M47. A snapshot of a chunk drops the structures anchored in
+//! answers item reads from its forecasts (M47, [`Replica::apply_forecast`]). A snapshot of a chunk drops the structures anchored in
 //! it first ([`Replica::drop_anchored_structures`]): the host sends them again in the same frame,
 //! so a resync replaces them like the chunk's entities.
 
@@ -158,6 +158,40 @@ impl<G: Game> Replica<G> {
         let t = self.store.transport_mut();
         let _ = t.set_caps(max_lines, max_items);
         t.clear_structures();
+    }
+
+    /// A frame's forecasts (M47): steps the held items to `tick`, applying section 13's `body`
+    /// (validated; empty when the frame has none) around the step.
+    pub(crate) fn apply_forecast(&mut self, tick: u32, body: &[u8], render_t: f64) {
+        self.store
+            .transport_mut()
+            .apply_forecast(tick, body, render_t);
+    }
+
+    /// Steps the held items to `tick` with no records: a native test that knows no frame is coming
+    /// for the ticks between (`forecast_client_matches_host`).
+    pub fn forecast_catch_up(&mut self, tick: u32) {
+        self.store.transport_mut().forecast_catch_up(tick);
+    }
+
+    /// The replica's forecast counters (M47; `engine/test`'s `forecastCounters`).
+    pub fn forecast_counters(&self) -> crate::transport::ForecastCounters {
+        self.store.transport().forecast_counters()
+    }
+
+    /// Whether the host sent the held line's items as `unknown` (M47 review, finding 1).
+    pub fn forecast_unknown(&self, line: LineId) -> bool {
+        self.store.transport().forecast_unknown(line)
+    }
+
+    /// The replica's forecast tick (the tick its held items are at).
+    pub fn forecast_tick(&self) -> Option<u32> {
+        self.store.transport().forecast_tick()
+    }
+
+    /// 0078 §2 at render time (`Transport::pos_at`).
+    pub fn pos_at(&self, line: LineId, idx: u32, render_t: f64) -> Option<(LineId, f64)> {
+        self.store.transport().pos_at(line, idx, render_t)
     }
 
     /// One `LineStructs` record (M46): `Transport::apply_structure` on the replica's store.

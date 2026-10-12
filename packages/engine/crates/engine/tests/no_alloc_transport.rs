@@ -26,6 +26,9 @@
 //! `Merge` or a `Fork` output in turn (the order recompute over two-target outputs). The test
 //! asserts merges landed and the fork's toggle flipped inside the window.
 //!
+//! `transport_forecast_tracker_no_alloc` (M47) runs the same world with the forecast tracker's
+//! paths all exercised inside the window (declared spawners, a toggled sink, the edits).
+//!
 //! `transport_surgery_no_alloc` (M43) runs the same world with surgery inside the window: every
 //! 100 ticks a line is cut in half and joined back (the run relink, a new line slot and id, the
 //! feeder redirects, the slot freed again), one line is extended at the front and shrunk back,
@@ -77,6 +80,9 @@ struct World {
     flips: u32,
     /// M43: run surgery every 100 ticks; how many cuts, joins, rescales and segment sets ran.
     surgery: bool,
+    /// M47: toggle the first sink lane's output every 20 ticks (halts and releases for the
+    /// forecast tracker).
+    toggle: bool,
     done: [u32; 4],
 }
 
@@ -229,6 +235,7 @@ fn build() -> World {
         rng: SimRng::seed_seq(7, 0x1A5E),
         sunk_lines,
         surgery: false,
+        toggle: false,
         done: [0; 4],
     }
 }
@@ -321,6 +328,15 @@ fn tick(w: &mut World, leak: Option<&mut Vec<u64>>) {
             w.t.destroy(old, &mut |_| {}).unwrap();
         }
         w.churn.push(l);
+    }
+    if w.toggle && w.ticks.is_multiple_of(20) {
+        let l = w.sunk_lines[0];
+        let out = if w.t.out(l) == Ok(Output::Sink) {
+            Output::DeadEnd
+        } else {
+            Output::Sink
+        };
+        w.t.set_out(l, out).unwrap();
     }
     // Nothing feeds the merge feeder during `advance`: what it lost, it side-loaded.
     let before = (w.t.count(w.merge).unwrap(), w.t.toggle(w.fork).unwrap());
@@ -422,6 +438,60 @@ fn transport_surgery_no_alloc() {
         (live, high),
         (0, 0),
         "surgery allocated (live, high-water bytes over {TICKS} ticks)"
+    );
+}
+
+/// M47: the forecast tracker inside the window (it is on in every reserved store): the full-rate
+/// spawners are declared (`set_spawner`, the schedule their rule follows), a sink lane toggles
+/// every 20 ticks, the inserter-like edits and the churn line stay. Its halts, releases, states,
+/// run lists, due ticks and hand-off log all run measured, allocating nothing, and the declared
+/// schedules hold.
+#[test]
+fn transport_forecast_tracker_no_alloc() {
+    use engine::transport::Schedule;
+    let mut w = build();
+    w.toggle = true;
+    for i in 0..w.spawners.len() {
+        let s = &w.spawners[i];
+        if s.rate256 == 256 {
+            let sch = Schedule {
+                period: 256,
+                acc: 0,
+                kinds: if s.cycle { KINDS } else { 0 },
+                next: Item(s.next),
+            };
+            w.t.set_spawner(s.line, Some(sch));
+        }
+    }
+    // One tick outside the window: the declarations' lists.
+    tick(&mut w, None);
+    let before = w.t.forecast_host_counters();
+    let pad = (thread_high_water_bytes() - thread_live_bytes()).max(0) as usize + 1;
+    let _pad = vec![0u8; pad];
+    let (live0, high0) = (thread_live_bytes(), thread_high_water_bytes());
+    for _ in 0..TICKS {
+        tick(&mut w, None);
+    }
+    let (live, high) = (
+        thread_live_bytes() - live0,
+        thread_high_water_bytes() - high0,
+    );
+    let c = w.t.forecast_host_counters();
+    println!("tracker counters over the window: {c:?} (before {before:?})");
+    assert!(
+        c.halts > before.halts && c.releases > before.releases,
+        "{c:?}"
+    );
+    assert!(c.states > before.states + 50, "{c:?}");
+    assert!(c.run_lists > before.run_lists + 100, "{c:?}");
+    assert_eq!(
+        c.spawner_mismatches, 0,
+        "the declared schedules hold: {c:?}"
+    );
+    assert_eq!(
+        (live, high),
+        (0, 0),
+        "the forecast tracker allocated (live, high-water bytes over {TICKS} ticks)"
     );
 }
 

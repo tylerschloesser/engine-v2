@@ -14,7 +14,7 @@ use crate::client::CameraBlock;
 
 use super::regions::RegionLayout;
 
-pub const ABI_VERSION: u32 = 41;
+pub const ABI_VERSION: u32 = 42;
 
 /// Size of the static boot region: config JSON in at offset 0, panic text out in the tail.
 pub const BOOT_BYTES: u32 = 65536;
@@ -585,6 +585,15 @@ pub trait Instance: Sized + 'static {
     /// when the line is not held.
     fn client_corrupt_line(&mut self, _line: u32) -> Status {
         Status::Unsupported
+    }
+
+    /// M47 (`ABI_VERSION` 41 -> 42), `engine/test` only: the client replica's forecast counters
+    /// (`transport::ForecastCounters`) as UTF-8 JSON into `Tx`, returning the byte count (`0` when
+    /// `Tx` is too small): `{"forecastsApplied","stateMessagesApplied","arrivalsApplied",
+    /// "forecastSeenLate","corrections","listsUnknown","recordsUnheld"}`, a fixed size whatever
+    /// the replica holds.
+    fn client_forecast_counters(&mut self, _tx: &mut [u8]) -> usize {
+        0
     }
 
     /// M16: parses one action-ring record (`[seq u32 LE][len u32
@@ -1202,6 +1211,10 @@ macro_rules! export_instance {
         #[unsafe(no_mangle)]
         pub extern "C" fn client_corrupt_line(line: u32) -> u32 {
             $crate::abi::client_corrupt_line(&__ENGINE_SLOT, line) as u32
+        }
+        #[unsafe(no_mangle)]
+        pub extern "C" fn client_forecast_counters() -> i32 {
+            $crate::abi::client_forecast_counters(&__ENGINE_SLOT)
         }
         #[unsafe(no_mangle)]
         pub extern "C" fn on_action(len: u32) -> u32 {

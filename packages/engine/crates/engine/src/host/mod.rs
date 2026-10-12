@@ -967,6 +967,26 @@ impl<G: Game> Host<G> {
         }
     }
 
+    /// Whether `conn`'s pacing holds built frames back for a later bundle (M47: a test that
+    /// steps a replica by itself on a tick with no frame must know none is coming).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn debug_holding_frames(&self, conn: ConnId) -> bool {
+        match self.conns.get(conn as usize) {
+            Some(Some(slot)) => slot.pace.hold_frames > 0,
+            _ => false,
+        }
+    }
+
+    /// Frames `conn` built that did not fit the output buffer and whose line plan had sent a held
+    /// line `Gone` for the budget (M47 review 3).
+    #[cfg(any(test, feature = "testing"))]
+    pub fn debug_lost_with_budget_gones(&self, conn: ConnId) -> u64 {
+        match self.conns.get(conn as usize) {
+            Some(Some(slot)) => slot.lines.lost_with_budget_gones,
+            _ => 0,
+        }
+    }
+
     /// Frames `conn` built that did not fit the output buffer (each was undone and rebuilt).
     #[cfg(any(test, feature = "testing"))]
     pub fn debug_overflows(&self, conn: ConnId) -> u64 {
@@ -1849,6 +1869,7 @@ impl<G: Game> Host<G> {
         if let Some(sim) = self.sim.as_mut() {
             sim.authority_mut().clear_changes();
             sim.authority_mut().drain_structure_changes();
+            sim.authority_mut().seal_forecasts();
         }
     }
 
@@ -2136,7 +2157,18 @@ impl<G: Game> Host<G> {
                 snapshots: &self.scratch_snapshot,
                 any_left: !self.scratch_left.is_empty(),
             },
-            // The put budget halves per consecutive overflow, like the bucket's frame cap.
+            // The put budget halves per consecutive overflow, like the bucket's frame cap; no list
+            // larger than an empty frame's budget is sent (M47 review, finding 1).
+            (
+                (out.len() / lines::PUT_BUDGET_DIVISOR) >> slot.pace.overflow_shift.min(8),
+                out.len() / lines::PUT_BUDGET_DIVISOR,
+            ),
+            &mut self.scratch_lines,
+        );
+        // -- Forecasts (M47, `host/lines.rs`): this frame's section 13, in what the puts left.
+        lines::plan_forecasts(
+            store.transport(),
+            &slot.lines,
             (out.len() / lines::PUT_BUDGET_DIVISOR) >> slot.pace.overflow_shift.min(8),
             &mut self.scratch_lines,
         );
@@ -2405,6 +2437,7 @@ impl<G: Game> Host<G> {
             && self.scratch_entity_ops.is_empty()
             && self.scratch_presence.is_empty()
             && self.scratch_lines.is_empty()
+            && self.scratch_lines.forecasts_empty()
         {
             let heartbeat_ticks = G::TICK_RATE.millis(HEARTBEAT_MS).0;
             let since_last_send = self.last_tick.0.wrapping_sub(slot.last_sent_tick.0);
@@ -2574,6 +2607,14 @@ impl<G: Game> Host<G> {
                     lines::write_section(transport, ops, s);
                 });
             }
+            // M47: `Forecasts` = 13, after `LineStructs`.
+            if !self.scratch_lines.forecasts_empty() {
+                let plan = &self.scratch_lines;
+                let transport = store.transport();
+                fw.section(SectionId::Forecasts, |s| {
+                    lines::write_forecasts(transport, plan, s);
+                });
+            }
 
             let _ = fw;
             // `SliceSink`'s own overflow convention: a too-small `out` never panics, it just drops the
@@ -2589,7 +2630,12 @@ impl<G: Game> Host<G> {
         } else {
             0
         };
-        lines::finish(&mut slot.lines, &self.scratch_lines, !overflowed);
+        lines::finish(
+            &mut slot.lines,
+            &mut self.scratch_lines,
+            store.transport(),
+            !overflowed,
+        );
         if overflowed {
             // The frame did not fit `out`, so nothing was sent: give back what the drain paid and
             // marked held for it (else the client would never get those chunks while the host sent

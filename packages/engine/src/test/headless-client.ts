@@ -44,7 +44,13 @@ import { createShell } from '../worker/shell.js'
 import { injectTrap } from '../worker/test-trap.js'
 import type { DrawRecord } from './client.js'
 import { type DesyncDump, type DesyncLog, readDesyncLog, takeDesyncDumps } from './desync.js'
-import { corruptLine, type LineStructuresDump, readLineStructures } from './lines.js'
+import {
+  corruptLine,
+  type ForecastCounters,
+  type LineStructuresDump,
+  readForecastCounters,
+  readLineStructures,
+} from './lines.js'
 import {
   decodeCounters,
   type InterpCounters,
@@ -167,6 +173,8 @@ export interface HeadlessClient {
   /** M46: the replica's held line structures and `transport.structsDropped`
    * (`client_line_structures`; `engine/test`'s `lineStructures`). */
   lineStructures(): LineStructuresDump
+  /** M47: the replica's forecast counters (`client_forecast_counters`; `forecastCounters`). */
+  forecastCounters(): ForecastCounters
   /** M46 fault injection (`client_corrupt_line`): flips bit 0 of a held line's `speed`. Throws when
    * the line is not held. */
   corruptLineStructure(id: number): void
@@ -682,6 +690,9 @@ export function createHeadlessClient(opts: HeadlessClientOptions): HeadlessClien
     },
     lineStructures() {
       return readLineStructures(inst)
+    },
+    forecastCounters() {
+      return readForecastCounters(inst)
     },
     corruptLineStructure(id) {
       corruptLine(inst, id)

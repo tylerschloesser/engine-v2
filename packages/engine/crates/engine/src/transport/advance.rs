@@ -42,6 +42,7 @@
 //! (a cut link) is a `count == 0` run (`Line::fresh_mid`) under the same budget (a side-load
 //! moved its feeder's full `speed`, so it is `target.speed - feeder.speed`, 0 at equal speeds).
 
+use super::forecast::{ROUTE_FORK, ROUTE_MERGE, ROUTE_NEXT};
 use super::line::{NIL, NO_CAP, Run, opt as opt_node};
 use super::{Output, SPACING, Transport, TransportError};
 
@@ -101,6 +102,10 @@ impl Transport {
         self.changed |= before;
         self.advanced_epoch = self.epoch;
         self.epoch = self.epoch.wrapping_add(1).max(1);
+        // M47: the forecast tracker's end of tick (dues, spawners, this tick's corrections).
+        let mut fc = std::mem::take(&mut self.fc);
+        fc.end_tick(self);
+        self.fc = fc;
         moved
     }
 
@@ -260,6 +265,10 @@ impl Transport {
             self.lines[l as usize].held = false;
             return;
         };
+        if self.lines[l as usize].squashed {
+            // M47: a squashed pair moves by the squash rule, which no forecast follows.
+            self.fc.invalidate(l);
+        }
         // The first of the back runs that crossed a cycle cut onto this line this tick (0079 §11):
         // they move at most `cap` more (their budget left), never across this line's front.
         let mut fresh = NIL;
@@ -326,6 +335,8 @@ impl Transport {
                     p = 0;
                 }
             }
+            // M47: the front check (one comparison per front item).
+            let crosser = self.fc.front(l, pos0, p, line.speed);
             if p >= 0 {
                 self.get_mut(h).gap = p as i32;
                 break pos0 - p;
@@ -347,9 +358,20 @@ impl Transport {
                         "a hand-off lands inside the target (set_out)"
                     );
                     self.land(target, r.item, (tlen + p) as u32, fresh_landing);
+                    self.fc
+                        .hand_off(l, target, (r.item, (tlen + p) as u32), crosser, ROUTE_NEXT);
                 }
                 // Already landed; the item left this line's run, so the next one is free.
-                _ => leader = NONE,
+                _ => {
+                    leader = NONE;
+                    let (ts, tp) = self.last_land;
+                    let route = if matches!(out, Output::Merge { .. }) {
+                        ROUTE_MERGE
+                    } else {
+                        ROUTE_FORK
+                    };
+                    self.fc.hand_off(l, ts, (r.item, tp), crosser, route);
+                }
             }
             self.lines[l as usize].items -= 1;
             if r.count > 1 {
@@ -508,6 +530,7 @@ impl Transport {
             let gap = i64::from(pos) - i64::from(line.tail_pos) - SP;
             if gap < 0 {
                 self.lines[l as usize].squashed = true;
+                self.fc.invalidate(l);
             }
             let gap = gap as i32;
             let b = line.tail;
@@ -546,6 +569,11 @@ impl Transport {
     fn note_cut_landing(&mut self, l: u32) {
         let rec = &mut self.lines[l as usize];
         let cap = (i64::from(rec.speed) - self.cut_moved).max(0) as u16;
+        if cap > 0 {
+            // M47: the landing moves again this tick, past its forecast.
+            self.fc.invalidate(l);
+        }
+        let rec = &mut self.lines[l as usize];
         rec.fresh_cap = match rec.fresh_cap {
             NO_CAP => cap,
             c if c == cap => cap,
@@ -559,6 +587,7 @@ impl Transport {
     fn merge_land(&mut self, t: u32, at: u32, o: i64, item: u16) -> bool {
         let tl = &self.lines[t as usize];
         let pos = (i64::from(at) - o).clamp(0, i64::from(tl.len) - 1);
+        self.last_land = (t, pos as u32);
         if tl.adv_mark != self.epoch {
             return self.land_fresh_at(t, pos, item);
         }
@@ -594,6 +623,7 @@ impl Transport {
         if tl.items > 0 && i64::from(tl.tail_pos) + SP > pos {
             return false;
         }
+        self.last_land = (t, pos as u32);
         let fresh = tl.adv_mark != self.epoch;
         self.land(t, item, pos as u32, fresh);
         true

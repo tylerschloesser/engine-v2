@@ -29,6 +29,7 @@
 pub mod bundle;
 pub mod coordlist;
 pub mod deltas;
+pub mod forecast;
 pub mod global;
 pub mod hashes;
 pub mod lines;
@@ -141,6 +142,8 @@ pub enum SectionId {
     ChunkKeeps = 11,
     /// Line structures (M46, `wire/lines.rs`).
     LineStructs = 12,
+    /// Line motion: forecasts and their corrections (M47, `wire/forecast.rs`).
+    Forecasts = 13,
 }
 
 impl SectionId {
@@ -158,6 +161,7 @@ impl SectionId {
             10 => Self::ChunkTiles,
             11 => Self::ChunkKeeps,
             12 => Self::LineStructs,
+            13 => Self::Forecasts,
             _ => return None,
         })
     }
@@ -388,7 +392,7 @@ mod tests {
         assert!(r2.next_section().unwrap().is_some());
         assert_eq!(r2.next_section(), Err(WireError::Malformed));
 
-        // Id 0 and an unknown id (e.g. 13) are equally malformed.
+        // Id 0 and an unknown id (e.g. 14) are equally malformed.
         let mut bytes3 = buf[..n].to_vec();
         bytes3.extend_from_slice(&[0, 1, 9]);
         assert_eq!(
@@ -397,7 +401,7 @@ mod tests {
         );
 
         let mut bytes4 = buf[..n].to_vec();
-        bytes4.extend_from_slice(&[13, 1, 9]);
+        bytes4.extend_from_slice(&[14, 1, 9]);
         assert_eq!(
             FrameReader::new(&bytes4).unwrap().next_section(),
             Err(WireError::Malformed)
@@ -807,6 +811,42 @@ mod tests {
                     }
                 });
             }
+            // M47: section 13, a state, an arrival and a run list (or none).
+            let forecast_records = if rng.below(2) == 0 { 0 } else { 3 };
+            if forecast_records > 0 {
+                let line = crate::transport::LineId(1 + rng.below(100));
+                fw.section(SectionId::Forecasts, |s| {
+                    forecast::write_state(
+                        s,
+                        &forecast::State {
+                            line,
+                            front_stop: Some(-64),
+                            paused: false,
+                            resumed: false,
+                        },
+                    );
+                    forecast::write_arrival(
+                        s,
+                        &forecast::Arrival {
+                            line,
+                            item: crate::transport::Item(1),
+                            pos: 640,
+                            stop: None,
+                        },
+                    );
+                    forecast::write_run_list(
+                        s,
+                        line,
+                        &[forecast::Run {
+                            item: crate::transport::Item(2),
+                            count: 2,
+                            pos: 0,
+                            stop: Some(0),
+                        }],
+                        None,
+                    );
+                });
+            }
 
             let n = sink
                 .finish()
@@ -911,6 +951,11 @@ mod tests {
                         assert_eq!(got.len() as u32, line_records);
                         assert_eq!(got[0], (line_put.id, true));
                     }
+                    SectionId::Forecasts => {
+                        let mut got = 0u32;
+                        forecast::read(&mut br, |_| got += 1).unwrap();
+                        assert_eq!(got, forecast_records);
+                    }
                 }
             }
         }
@@ -919,7 +964,7 @@ mod tests {
         // milestone builds must have appeared, and both the empty and non-empty shape of the
         // interesting variable-length fields must have appeared. If the generator regresses to
         // "always include everything" or "always include nothing", one of these fails loudly.
-        let built_ids: [u8; 10] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12];
+        let built_ids: [u8; 11] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13];
         for id in built_ids {
             assert!(
                 cov.section_ids_seen.contains(&id),
@@ -1113,6 +1158,7 @@ mod tests {
                                     Ok(())
                                 }
                                 SectionId::LineStructs => lines::read(&mut br, |_| {}),
+                                SectionId::Forecasts => forecast::read(&mut br, |_| {}),
                             };
                             match result {
                                 Ok(()) => {}

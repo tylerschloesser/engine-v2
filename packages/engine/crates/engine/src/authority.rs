@@ -416,6 +416,11 @@ impl<G: Game> Authority<G> {
         self.store.transport_mut().drain_structure_changes();
     }
 
+    /// `Host::seal` (M47): the tick's forecasts were read by every frame.
+    pub fn seal_forecasts(&mut self) {
+        self.store.transport_mut().forecast_sealed();
+    }
+
     pub fn clear_changes(&mut self) {
         self.changes.clear();
     }

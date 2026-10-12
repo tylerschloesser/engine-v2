@@ -1584,6 +1584,31 @@ where
         }
     }
 
+    fn client_forecast_counters(&mut self, tx: &mut [u8]) -> usize {
+        let GameInstance::Client(c) = self else {
+            return 0;
+        };
+        let fc = c.core.replica().forecast_counters();
+        let json = format!(
+            "{{\"forecastsApplied\":{},\"stateMessagesApplied\":{},\"arrivalsApplied\":{},\
+             \"forecastSeenLate\":{},\"corrections\":{},\"listsUnknown\":{},\"recordsUnheld\":{}}}",
+            fc.forecasts_applied,
+            fc.state_messages_applied,
+            fc.arrivals_applied,
+            fc.forecast_seen_late,
+            fc.corrections,
+            fc.lists_unknown,
+            fc.records_unheld
+        );
+        match tx.get_mut(..json.len()) {
+            Some(out) => {
+                out.copy_from_slice(json.as_bytes());
+                json.len()
+            }
+            None => 0,
+        }
+    }
+
     fn client_corrupt_line(&mut self, line: u32) -> Status {
         match self {
             GameInstance::Client(c) => {

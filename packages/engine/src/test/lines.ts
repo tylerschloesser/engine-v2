@@ -1,6 +1,7 @@
 // M46 (docs/decisions/0078 §1): `engine/test`'s view of a client's replicated line structures, read
 // through the test-only `client_line_structures` export (shape: `crates/engine/src/abi/registry.rs`),
-// and the `client_corrupt_line` fault. Test-only: allocates freely.
+// and the `client_corrupt_line` fault; M47's forecast counters come through `client_forecast_counters`.
+// Test-only: allocates freely.
 import { RegionId, Status } from '../abi.js'
 import type { EngineInstance } from '../loader.js'
 
@@ -31,6 +32,24 @@ export interface LineStructure {
   speed: number
   out: LineOutput
   segments: LineSegment[]
+}
+
+/** M47: the replica's forecast counters (`transport::ForecastCounters`, 0078 A3). */
+export interface ForecastCounters {
+  /** Run lists applied (a line's whole list: with its first put, or resent). */
+  forecastsApplied: number
+  /** State messages applied (a correction of a held line's stops). */
+  stateMessagesApplied: number
+  /** Arrivals applied (an item entering a held line by a route the client does not follow). */
+  arrivalsApplied: number
+  /** Corrections applied for a tick the client had already rendered (0078 §5). */
+  forecastSeenLate: number
+  /** States, and run lists for lines held before their frame: M47b's `transport.correctionsPerSec`. */
+  corrections: number
+  /** `unknown` lists applied (a line's list larger than a frame: its items are not held). */
+  listsUnknown: number
+  /** Records for lines the replica does not hold (dropped). */
+  recordsUnheld: number
 }
 
 export interface LineStructuresDump {
@@ -73,6 +92,26 @@ export function lineStructures(client: HasLineStructures): LineStructure[] {
 /** `transport.structsDropped` of `client`: `LineStructs` puts its replica could not hold. */
 export function structsDropped(client: HasLineStructures): number {
   return client.lineStructures().structsDropped
+}
+
+/** Reads `client_forecast_counters` (M47, `ABI_VERSION` 42) from a client instance. */
+export function readForecastCounters(inst: EngineInstance): ForecastCounters {
+  const len = inst.call0(inst.x.client_forecast_counters)
+  if (len <= 0)
+    throw new Error(`client_forecast_counters: ${len === 0 ? 'Tx too small' : `status ${-len}`}`)
+  const tx = inst.region(RegionId.Tx)
+  if (!tx) throw new Error('client_forecast_counters: no Tx region')
+  return JSON.parse(decoder.decode(tx.u8.slice(0, len))) as ForecastCounters
+}
+
+/** What a client holds: `HeadlessClient` implements it. */
+export interface HasForecastCounters {
+  forecastCounters(): ForecastCounters
+}
+
+/** The replica's forecast counters of `client` (M47, 0078 A3): what M47b's scenarios read. */
+export function forecastCounters(client: HasForecastCounters): ForecastCounters {
+  return client.forecastCounters()
 }
 
 /** Fault injection (M46): flips `speed` of held line `id` in `client`'s replica, so the line's anchor

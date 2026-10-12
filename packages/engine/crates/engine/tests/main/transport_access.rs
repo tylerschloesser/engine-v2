@@ -468,6 +468,24 @@ fn transport_caps_reserve_once() {
         "the same caps again reserve nothing more"
     );
     assert_eq!(t.set_caps(16, 256), Err(TransportError::CapsFixed));
+
+    // M47 review (finding 3): a replica reserves what `replica_reserved_bytes` says (no run nodes,
+    // no tracker; the follower instead).
+    let mut r = Transport::empty();
+    r.set_replica();
+    r.set_caps(
+        engine::transport::DEFAULT_MAX_LINES,
+        engine::transport::DEFAULT_MAX_ITEMS,
+    )
+    .unwrap();
+    assert_eq!(
+        r.arena_bytes(),
+        Transport::replica_reserved_bytes(
+            engine::transport::DEFAULT_MAX_LINES,
+            engine::transport::DEFAULT_MAX_ITEMS
+        ),
+        "a replica's reserve"
+    );
 }
 
 /// M42 review (finding 4): heavy mode's restores run with the world's own caps. A dead-ended line

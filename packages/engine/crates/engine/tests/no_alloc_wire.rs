@@ -214,6 +214,32 @@ fn encode_decode_no_alloc() {
         };
         p
     };
+    // forecast.rs (M47): a state, an arrival and a run list with a spawner.
+    let fc_runs = {
+        use engine::transport::Item;
+        use engine::wire::forecast::Run;
+        [
+            Run {
+                item: Item(1),
+                count: 3,
+                pos: 0,
+                stop: Some(0),
+            },
+            Run {
+                item: Item(2),
+                count: 1,
+                pos: 400,
+                stop: None,
+            },
+        ]
+    };
+    let fc_spawner = engine::wire::forecast::Spawner {
+        period: 512,
+        acc: 256,
+        kinds: 6,
+        next: engine::transport::Item(3),
+        paused: false,
+    };
     let action_bytes = [9u8, 8, 7];
     let presence_bytes = [1u8, 2, 3, 4];
 
@@ -264,6 +290,30 @@ fn encode_decode_no_alloc() {
             engine::wire::lines::write_put(s, &line_put);
             engine::wire::lines::write_gone(s, engine::transport::LineId(9));
         });
+        // forecast.rs (M47)
+        fw.section(SectionId::Forecasts, |s| {
+            use engine::transport::{Item, LineId};
+            use engine::wire::forecast as wf;
+            wf::write_state(
+                s,
+                &wf::State {
+                    line: LineId(2),
+                    front_stop: Some(-64),
+                    paused: false,
+                    resumed: true,
+                },
+            );
+            wf::write_arrival(
+                s,
+                &wf::Arrival {
+                    line: LineId(3),
+                    item: Item(4),
+                    pos: 900,
+                    stop: Some(128),
+                },
+            );
+            wf::write_run_list(s, LineId(3), &fc_runs, Some(&fc_spawner));
+        });
         let n = sink.finish().unwrap();
 
         // uplink.rs (a separate top-level message, not a frame section) + its CameraReport
@@ -293,6 +343,7 @@ fn encode_decode_no_alloc() {
         let mut got_delta_tiles = 0;
         let mut got_delta_ops = 0;
         let mut got_lines = 0;
+        let mut got_forecasts = (0, 0, 0);
         while let Some((id, body)) = r.next_section().unwrap() {
             let mut br = engine::bytes::ByteReader::new(body);
             match id {
@@ -338,10 +389,26 @@ fn encode_decode_no_alloc() {
                     })
                     .unwrap();
                 }
+                SectionId::Forecasts => {
+                    use engine::wire::forecast as wf;
+                    wf::read(&mut br, |r| match r {
+                        wf::Record::State(_) => got_forecasts.0 += 1,
+                        wf::Record::Arrival(_) => got_forecasts.1 += 1,
+                        wf::Record::RunList(l) => {
+                            assert_eq!(l.spawner, Some(fc_spawner));
+                            for (k, run) in l.runs.enumerate() {
+                                assert_eq!(run, fc_runs[k]);
+                                got_forecasts.2 += 1;
+                            }
+                        }
+                    })
+                    .unwrap();
+                }
                 _ => {}
             }
         }
         assert_eq!(got_lines, 2);
+        assert_eq!(got_forecasts, (1, 1, 2));
         assert_eq!(total_results, 4);
         assert_eq!(total_chunks, 2); // one entity in each of the two chunks
         assert_eq!(got_roster, 2);

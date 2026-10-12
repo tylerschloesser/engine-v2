@@ -782,6 +782,17 @@ pub fn client_line_structures<T: Instance>(slot: &Slot<T>) -> i32 {
     rt.inst.client_line_structures(out) as i32
 }
 
+/// `client_forecast_counters() -> len`, or `-(status)`: `Instance::client_forecast_counters`,
+/// into `Tx`. `engine/test`-only (M47).
+pub fn client_forecast_counters<T: Instance>(slot: &Slot<T>) -> i32 {
+    let rt = match slot.client() {
+        Ok(rt) => rt,
+        Err(status) => return -(status as i32),
+    };
+    let out = rt.layout.bytes_mut(RegionId::Tx);
+    rt.inst.client_forecast_counters(out) as i32
+}
+
 /// `client_corrupt_line(line) -> status`: `Instance::client_corrupt_line`. `engine/test`-only.
 pub fn client_corrupt_line<T: Instance>(slot: &Slot<T>, line: u32) -> Status {
     match slot.client() {

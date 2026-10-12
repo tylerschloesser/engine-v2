@@ -146,6 +146,9 @@ impl Transport {
                 _ => None,
             };
             if let Some((out, next_slot, alt_slot)) = moved {
+                if let Output::Next(old) = self.lines[s as usize].out {
+                    self.fc.next_changed(self.lines[s as usize].id, old);
+                }
                 let rec = &mut self.lines[s as usize];
                 if !matches!(out, Output::Fork { .. }) {
                     rec.toggle = false;
@@ -229,6 +232,16 @@ impl Transport {
             self.release_node(cur);
             cur = n.next;
         }
+        // M47 review 3: the line's own targets, as for any output change (a lost frame that
+        // destroyed it must also drop what its last step handed on).
+        match self.lines[slot as usize].out {
+            Output::Next(old) => self.fc.next_changed(line, old),
+            Output::Fork { a, b } => {
+                self.fc.next_changed(line, a);
+                self.fc.next_changed(line, b);
+            }
+            _ => {}
+        }
         self.clear_geometry(slot);
         self.free_slot(line, slot);
         self.redirect_feeders(line, Redirect::Gone);
@@ -251,6 +264,8 @@ impl Transport {
         self.lines[slot as usize] = Line::free(self.free_line);
         self.free_line = slot;
         self.graph_dirty = true;
+        // M47: the slot's forecast model goes with it.
+        self.fc.destroy(slot);
     }
 
     pub(super) fn split_line(&mut self, line: LineId, at: u32) -> Result<LineId, TransportError> {

@@ -35,6 +35,17 @@ allocate nothing; readers borrow and never panic.
   fourth replicated thing: section `LineStructs` puts a line while its chunk set meets a chunk the connection holds and sends `Gone` when
   it no longer does, the structures anchored in an entering or re-snapshotted chunk ride that frame, and the chunk hash covers the
   structures anchored in the chunk (`host/lines.rs`).
+- **Transport forecasts** ([0078](../decisions/0078-transport-forecast-replication.md) A3, M47). A held line's items travel as forecasts
+  in section `Forecasts` (13), only when the host's model of the line is wrong, never per tick. The host's tracker
+  (`transport/forecast.rs`, derived, never hashed) keeps what every holder was told, checks each line's front item inside `advance` plus a
+  due tick per segment whose stops part, and at the end of the tick sends a `State` (a new `front_stop` for the items the line held before
+  the tick; also a spawner's pause or resume), or a `RunList` (the line's whole list with its stops and spawner schedule: with every first
+  put of the line, after an edit, a surgery, a merge landing, or when a `State` cannot reproduce the tick), and per connection an
+  `Arrival` for an item that entered a held line by a route the client does not follow (from a line it does not hold, across a `Fork`).
+  `States` and `Arrivals` are unbudgeted; puts and run lists share the put budget, and a held line whose correction does not fit is dropped
+  and put again, so no client ever steps a stale model. The client runs no belt rule: `transport/follow.rs` moves each item to
+  `max(pos - speed, stop)` per tick, follows `Next` links it holds, replays declared spawners, and applies each frame's records around
+  that step; its items are never hashed (0078 §6).
 - **Versions, not acks.** A chunk's version is the tick of its last replicated change. The host stamps every footprint chunk of every
   write; a replica takes its version only from a snapshot or a frame-tick bump, so a stale replica version can only cause an over-snapshot,
   never a wrong keep ([0064](../decisions/0064-phase-3-decisions-sync-and-netcode.md) §18). `Host::chunk_versions` is never pruned (§17).

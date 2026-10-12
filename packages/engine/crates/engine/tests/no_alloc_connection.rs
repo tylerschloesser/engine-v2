@@ -55,6 +55,11 @@
 //! and leave inside the measured windows: puts (on enter, riding snapshots, on change) and gones
 //! (on leave) are counted there and must both be above zero, at zero growth.
 //!
+//! M47: the lines form one chain into a sink fed by declared spawners (`NGame::genesis`), so items
+//! flow and the forecasts (section 13: run lists riding puts, states on the speed changes and the
+//! jams, arrivals from lines the client does not hold) are routed and applied inside every
+//! measured window; the wide band counts them and needs them above zero.
+//!
 //! Every test here drives `Host`/`ClientCore` directly, not `testing::testkit::Loopback` (`Loopback::step`
 //! itself allocates a fresh `Vec<u8>` per client per call, by design -- a test-only convenience,
 //! never claimed allocation-free).
@@ -64,7 +69,7 @@ use engine::abi::arena::thread_high_water_bytes as high_water_bytes;
 use engine::game::{EntityId, Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldRead, WorldWrite};
 use engine::host::Host;
 use engine::sim::WorldParams;
-use engine::transport::{Geometry, LineId, Segment};
+use engine::transport::{Geometry, Item, LineId, Output, Schedule, Segment};
 use engine::wire::{CameraReport, UplinkWriter};
 use engine::world::WorldPos;
 use engine::world::{
@@ -152,6 +157,10 @@ impl Game for NGame {
     }
     fn genesis(w: &mut dyn WorldWrite<Self>) {
         w.put_global(NGlobal::default());
+        if NO_LINES.with(|n| n.get()) {
+            // The pre-M42 shape (entities and tiles only): the lost-frame control.
+            return;
+        }
         // M46: lines in the world (module doc).
         let t = w.transport_mut().expect("genesis: transport_mut is Ok");
         for k in 0..LINES {
@@ -171,6 +180,47 @@ impl Game for NGame {
                 },
             };
             t.set_segments(l, &[seg]).expect("one straight segment");
+        }
+        // M47: the lines form one chain toward line 1, which sinks; every eighth line has a
+        // full-rate spawner the tracker is told of, so items flow, hand off and get corrected.
+        for k in 2..=LINES {
+            t.set_out(LineId(k), Output::Next(LineId(k - 1))).unwrap();
+        }
+        t.set_out(LineId(1), Output::Sink).unwrap();
+        // M47 review 2, finding 6: one line whose list is larger than a frame (1,600 tiles, 6,000
+        // items of alternating kinds): the client holds it `unknown`.
+        let long = t.create(1_600 * 256, 24).unwrap();
+        t.set_segments(
+            long,
+            &[Segment {
+                len: 1_600 * 256,
+                geometry: Geometry::Straight {
+                    from: WorldPos {
+                        x: 128,
+                        y: 3 * 256 + 128,
+                    },
+                    to: WorldPos {
+                        x: 1_600 * 256 + 128,
+                        y: 3 * 256 + 128,
+                    },
+                },
+            }],
+        )
+        .unwrap();
+        for k in 0..6_000u32 {
+            t.insert_at(long, 10 + 64 * k, Item(1 + (k % 2) as u16))
+                .unwrap();
+        }
+        for k in (8..=LINES).step_by(8) {
+            t.set_spawner(
+                LineId(k),
+                Some(Schedule {
+                    period: 256,
+                    acc: 0,
+                    kinds: 0,
+                    next: Item(1),
+                }),
+            );
         }
     }
     fn on_player(w: &mut dyn WorldWrite<Self>, who: PlayerId, ev: PlayerEvent) {
@@ -208,11 +258,19 @@ impl Game for NGame {
     }
     /// M46: every 7 ticks one line's speed alternates between 12 and 24 (a structure change).
     fn tick(cx: &mut TickCx<'_, Self>) {
-        let n = cx.tick().0 / 7;
-        if !cx.tick().0.is_multiple_of(7) {
+        let now = cx.tick().0;
+        let n = now / 7;
+        if NO_LINES.with(|n| n.get()) {
             return;
         }
         let t = cx.transport_mut().expect("tick: transport_mut is Ok");
+        // M47: the declared spawners' rule (period 256: an attempt every tick).
+        for k in (8..=LINES).step_by(8) {
+            let _ = t.insert_back(LineId(k), Item(1));
+        }
+        if !now.is_multiple_of(7) {
+            return;
+        }
         let speed = if n.is_multiple_of(2) { 12 } else { 24 };
         let _ = t.set_speed(LineId(1 + n % LINES), speed);
     }
@@ -400,11 +458,17 @@ struct PanState {
     /// `LineStructs` records built so far (M46 review: the measured windows must route lines).
     puts: u64,
     gones: u64,
+    /// `Forecasts` records built so far (M47: the measured windows must route forecasts).
+    forecasts: u64,
+    /// `live_bytes()` growth inside the host's own calls so far.
+    host_bytes: i64,
+    /// Lose a frame every 32 ticks (M47 review 2).
+    lossy: bool,
 }
 
-/// Counts the `LineStructs` records of one built message (a frame or a bundle of frames), with no
-/// allocation.
-fn count_line_records(msg: &[u8], puts: &mut u64, gones: &mut u64) {
+/// Counts the `LineStructs` and `Forecasts` records of one built message (a frame or a bundle of
+/// frames), with no allocation.
+fn count_line_records(msg: &[u8], puts: &mut u64, gones: &mut u64, forecasts: &mut u64) {
     use engine::wire::lines::{Record, read};
     use engine::wire::{BundleReader, FrameReader, MsgType, SectionId};
     let mut one = |frame: &[u8]| {
@@ -414,6 +478,12 @@ fn count_line_records(msg: &[u8], puts: &mut u64, gones: &mut u64) {
                 read(&mut engine::bytes::ByteReader::new(body), |rec| match rec {
                     Record::Put(_) => *puts += 1,
                     Record::Gone(_) => *gones += 1,
+                })
+                .unwrap();
+            }
+            if id == SectionId::Forecasts {
+                engine::wire::forecast::read(&mut engine::bytes::ByteReader::new(body), |_| {
+                    *forecasts += 1
                 })
                 .unwrap();
             }
@@ -468,7 +538,9 @@ fn run_panning_tick(
         let mut sink = engine::bytes::SliceSink::new(&mut s.uplink_buf);
         UplinkWriter::write(&mut sink, 0, core::iter::empty(), Some(camera), None);
         let n = sink.finish().unwrap();
+        let b = live();
         let _ = host.on_uplink(0, &s.uplink_buf[..n]);
+        p.host_bytes += live() as i64 - b as i64;
     }
 
     if i.is_multiple_of(2) {
@@ -511,13 +583,32 @@ fn run_panning_tick(
         host.queue_action_for_test(player, s.seq, NAction::SetPlayer { n: i });
     }
 
+    let b = live();
     host.tick();
-    let n = host.build_frame(0, &mut s.frame_buf);
+    p.host_bytes += live() as i64 - b as i64;
+    // M47 review 2, finding 6: a frame too small for what it must carry every 32 ticks of a lossy
+    // run (the lost-frame path inside the window; 32 divides the 256-tick round trip, so both
+    // windows end at the same phase of the losses).
+    let len = if p.lossy && i % 32 == 7 {
+        64
+    } else {
+        s.frame_buf.len()
+    };
+    let b = live();
+    let n = host.build_frame(0, &mut s.frame_buf[..len]);
+    p.host_bytes += live() as i64 - b as i64;
     if n > 0 {
-        count_line_records(&s.frame_buf[..n], &mut p.puts, &mut p.gones);
+        count_line_records(
+            &s.frame_buf[..n],
+            &mut p.puts,
+            &mut p.gones,
+            &mut p.forecasts,
+        );
         client.on_frame(&s.frame_buf[..n]).unwrap();
     }
+    let b = live();
     host.seal();
+    p.host_bytes += live() as i64 - b as i64;
     client.drain_dirty(|_| {});
     s.t_ms += 50;
     let _ = client.poll_uplink(s.t_ms, &mut s.uplink_buf);
@@ -535,6 +626,15 @@ const BAND_TILES: i32 = 512;
 struct PanRun {
     /// `live_bytes()` growth over the measured window.
     bytes: i64,
+    /// The part of `bytes` allocated inside the host's own calls (`on_uplink`, `tick`,
+    /// `build_frame`, `seal`); the rest is the client's.
+    host_bytes: i64,
+    /// Lossy runs only: growth from the window's start to two lossless round trips after it.
+    settled: i64,
+    /// Lossy runs only: growth over the two lossless round trips after that.
+    tail_bytes: i64,
+    /// Client desync reports raised inside the window.
+    desyncs: u64,
     /// Chunks the host saw a replicated change in for the first time during the window -- the
     /// "newly reached chunks" the panning ceiling is expressed per.
     new_chunks: u64,
@@ -545,6 +645,11 @@ struct PanRun {
     /// `LineStructs` puts and gones built inside the window.
     puts: u64,
     gones: u64,
+    /// `Forecasts` records built inside the window (M47).
+    forecasts: u64,
+    /// Frames lost and `unknown` lists applied inside the window (M47 review 2).
+    overflows: u64,
+    lists_unknown: u64,
 }
 
 /// Warm up a host + client to the panning workload's steady state, then measure `window` ticks of
@@ -585,6 +690,9 @@ fn pan_run_band(bounded: bool, band: i32, window: u32) -> PanRun {
         band,
         puts: 0,
         gones: 0,
+        forecasts: 0,
+        lossy: LOSSY.with(|l| l.get()),
+        host_bytes: 0,
     };
 
     // Connect + join burst, unmeasured.
@@ -612,13 +720,22 @@ fn pan_run_band(bounded: bool, band: i32, window: u32) -> PanRun {
     }
 
     let chunks_before = host.debug_chunk_version_count();
-    let (puts_before, gones_before) = (p.puts, p.gones);
+    let (puts_before, gones_before, forecasts_before) = (p.puts, p.gones, p.forecasts);
+    let overflows_before = host.debug_overflows(0);
+    let unknown_before = client.replica().forecast_counters().lists_unknown;
+    let desyncs_before = client.desyncs().len();
     let before = live();
+    let host_before = p.host_bytes;
     for i in 0..window {
         run_panning_tick(&mut host, player, &mut client, &mut s, &mut p, 2_000 + i);
     }
     let bytes = live() as i64 - before as i64;
-    let (puts, gones) = (p.puts - puts_before, p.gones - gones_before);
+    let host_bytes = p.host_bytes - host_before;
+    let (puts, gones, forecasts) = (
+        p.puts - puts_before,
+        p.gones - gones_before,
+        p.forecasts - forecasts_before,
+    );
     let new_chunks = (host.debug_chunk_version_count() - chunks_before) as u64;
     let host_queued_cache_events = host
         .sim()
@@ -628,13 +745,38 @@ fn pan_run_band(bounded: bool, band: i32, window: u32) -> PanRun {
         .terrain()
         .queued_cache_events();
     let lines_held = client.replica().transport().lines_len();
+    let desyncs_in_window = client.desyncs().len() - desyncs_before;
+    let overflows = host.debug_overflows(0) - overflows_before;
+    let lists_unknown = client.replica().forecast_counters().lists_unknown - unknown_before;
+    // The lossy windows' recovery (M47 review 3): losses stop, two round trips settle the pacing
+    // state, and the next two must not move a byte.
+    let (mut settled, mut tail_bytes) = (0, 0);
+    if p.lossy {
+        p.lossy = false;
+        for i in 0..2 * round_trip {
+            run_panning_tick(&mut host, player, &mut client, &mut s, &mut p, 4_000 + i);
+        }
+        let mid = live();
+        settled = mid as i64 - before as i64;
+        for i in 0..2 * round_trip {
+            run_panning_tick(&mut host, player, &mut client, &mut s, &mut p, 5_000 + i);
+        }
+        tail_bytes = live() as i64 - mid as i64;
+    }
     PanRun {
         bytes,
+        host_bytes,
+        settled,
+        tail_bytes,
+        desyncs: desyncs_in_window as u64,
         new_chunks,
         host_queued_cache_events,
         lines_held,
         puts,
         gones,
+        forecasts,
+        overflows,
+        lists_unknown,
     }
 }
 
@@ -689,12 +831,82 @@ fn host_and_client_wide_band_routes_lines_no_alloc() {
             r.puts,
             r.gones
         );
+        println!(
+            "{name}-tick window: {} puts, {} gones, {} forecast records, {} B",
+            r.puts, r.gones, r.forecasts, r.bytes
+        );
+        assert!(
+            r.lists_unknown > 0,
+            "the {name}-tick window applied {} unknown lists",
+            r.lists_unknown
+        );
+        assert!(
+            r.forecasts > 0,
+            "the {name}-tick window routed {} forecast records",
+            r.forecasts
+        );
     }
     assert_eq!(
         long.bytes, short.bytes,
         "wide-band host+client loop allocates per tick: {} B over 256 ticks, {} B over 1,024",
         short.bytes, long.bytes
     );
+}
+
+thread_local! {
+    /// Lose a frame every 32 ticks in the next `pan_run_band` (M47 review 2).
+    static LOSSY: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    /// Build the next world with no transport line (the lost-frame control).
+    static NO_LINES: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
+/// M47 review 2, finding 6, and review 3: the lost-frame path inside the measured windows (the
+/// wide band, a frame too small for what it must carry every 32 ticks: the next frame drops what
+/// the lost one named and puts it again), on the lined world and on the same world with no line
+/// (`NO_LINES`, the pre-M42 shape: the control). Every assertion is exact:
+/// - the host's own calls allocate 0 B over every lossy window (the lost set, unknown lists and
+///   routing of `host/lines.rs` included);
+/// - once losses stop, two round trips later the live bytes do not move by one byte over the next
+///   two.
+///
+/// What the client's `on_frame` does allocate inside a lossy window is not M47's: measured by
+/// bracketing every section (Deviations, "Review fixes, round 3"), sections `LineStructs` and
+/// `Forecasts` and the follower's catch-up allocate 0 B; the residue is the replica's chunk store
+/// (`ChunkReplica::held`, a `BTreeMap` whose node layout follows its insertion history, and the
+/// overlay's per-chunk `Vec<Entry>` capacities: a re-snapshot replaces a grown vector with an
+/// exact one), which losses reshuffle in both worlds alike, plus 64 B once in `check_hashes` (the
+/// desyncs losses raise, in both worlds: Deviations): lined 112, 48, 288, 48 B; no lines 288,
+/// 528, 528, 288 B over 256, 512, 1,024 and 2,048 ticks.
+#[test]
+fn host_and_client_lost_frames_do_not_grow() {
+    LOSSY.with(|l| l.set(true));
+    let mut table = Vec::new();
+    for no_lines in [false, true] {
+        NO_LINES.with(|n| n.set(no_lines));
+        for w in [256u32, 512, 1_024, 2_048] {
+            table.push((no_lines, w, pan_run_band(true, WIDE_BAND_TILES, w)));
+        }
+    }
+    NO_LINES.with(|n| n.set(false));
+    LOSSY.with(|l| l.set(false));
+    for (no_lines, w, r) in &table {
+        let world = if *no_lines { "no lines" } else { "lined" };
+        println!(
+            "lossy {world} {w}: {} B ({} B host), {} lost frames, {} desyncs; settled {} B, tail {} B",
+            r.bytes, r.host_bytes, r.overflows, r.desyncs, r.settled, r.tail_bytes
+        );
+        assert!(r.overflows > 0, "{world} {w}: frames were lost");
+        assert_eq!(r.host_bytes, 0, "{world} {w}: the host allocated");
+        assert_eq!(
+            r.tail_bytes, 0,
+            "{world} {w}: the recovered run still moves"
+        );
+        assert_eq!(
+            r.lines_held == 0,
+            *no_lines,
+            "{world} {w}: the world's lines"
+        );
+    }
 }
 
 /// The other half: a camera panning forever *does* allocate, and legitimately so -- it reaches

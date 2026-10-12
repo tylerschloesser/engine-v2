@@ -234,19 +234,22 @@ fn bench_cycling_spawners_cycle_kinds() {
 
 /// 0079 §16: the recommended caps reserve 16.5 MiB, over 0007 §8's 8 MiB slack, so they do not fit
 /// a phone's split. The largest caps of the form `(lines, 8 x lines)`, `lines` a multiple of 1,024,
-/// whose arena fits the slack are pinned here as literals with their bytes (a record growth moves
-/// them): milestone 57's phone candidates, and an upper bound, not a usable cap: 0007 §8's 8 MiB
-/// line is "lists, timers, players, and slack", which this pair leaves 32,752 B of (114,672 before
-/// M46's structure version and change list, 5 B a line).
+/// whose arena fits the slack in the larger of a host's and a replica's reserve (a phone may host
+/// or join) are pinned here as literals with their bytes (a record growth moves them): milestone
+/// 57's phone candidates, and an upper bound, not a usable cap: 0007 §8's 8 MiB line is "lists,
+/// timers, players, and slack", which this pair leaves 409,568 B of (the host's 7,979,040; a
+/// replica reserves 6,602,768). M47's forecast tracker (106 B a line and 4 B an item at these
+/// caps) moved the pair from (16,384, 131,072), which reserved 8,355,856 B before it and would now
+/// reserve 10,616,864 B on a host and 8,781,840 B on a replica.
 #[test]
 fn transport_phone_caps_fit_split() {
     const SLACK: u64 = 8 * MIB;
-    const LINES: u32 = 16_384;
-    const BYTES: u64 = 8_355_856;
+    const LINES: u32 = 12_288;
+    const BYTES: u64 = 7_979_040;
     let mut found = None;
     let mut lines = engine::transport::DEFAULT_MAX_LINES;
     while lines > 0 {
-        if Transport::reserved_bytes(lines, 8 * lines) <= SLACK {
+        if Transport::max_role_bytes(lines, 8 * lines) <= SLACK {
             found = Some(lines);
             break;
         }
@@ -259,15 +262,33 @@ fn transport_phone_caps_fit_split() {
         Transport::reserved_bytes(lines, 8 * lines)
     );
     assert_eq!((lines, 8 * lines), (LINES, 8 * LINES));
-    assert_eq!(Transport::reserved_bytes(LINES, 8 * LINES), BYTES);
-    assert!(Transport::reserved_bytes(LINES + 1_024, 8 * (LINES + 1_024)) > SLACK);
+    assert_eq!(Transport::max_role_bytes(LINES, 8 * LINES), BYTES);
+    assert_eq!(
+        Transport::reserved_bytes(LINES, 8 * LINES),
+        BYTES,
+        "the host is the larger"
+    );
+    assert_eq!(
+        Transport::replica_reserved_bytes(LINES, 8 * LINES),
+        6_602_768
+    );
+    assert!(Transport::max_role_bytes(LINES + 1_024, 8 * (LINES + 1_024)) > SLACK);
     assert_eq!(
         Transport::reserved_bytes(
             engine::transport::DEFAULT_MAX_LINES,
             engine::transport::DEFAULT_MAX_ITEMS
         ),
-        16_646_160,
-        "0079 §16's figure at the recommended caps, plus M46's 5 B a line"
+        21_168_160,
+        "0079 §16's figure at the recommended caps, plus M46's 5 B a line and M47's tracker"
+    );
+    assert_eq!(
+        Transport::reserved_bytes(16_384, 131_072),
+        10_616_864,
+        "M46's phone pair"
+    );
+    assert_eq!(
+        Transport::replica_reserved_bytes(16_384, 131_072),
+        8_781_840
     );
 }
 

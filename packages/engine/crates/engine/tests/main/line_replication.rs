@@ -491,14 +491,15 @@ fn replica_apply_structure_put_and_gone() {
     t.lines_at(TilePos::new(33, 0), &mut |l, o| at.push((l, o)))
         .unwrap();
     assert_eq!(at, [(LineId(7), 3 * 256 - 128)], "tile 33's first position");
+    // M47: items come from the forecasts (none yet); the sink count and the fork toggle never do.
+    assert_eq!(t.count(LineId(7)), Ok(0));
+    assert_eq!(t.front(LineId(7)), Ok(None));
+    assert_eq!(t.items_in(LineId(7), &mut |_, _| {}), Ok(()));
     for r in [
-        t.count(LineId(7)).map(|_| ()),
-        t.front(LineId(7)).map(|_| ()),
-        t.items_in(LineId(7), &mut |_, _| {}),
         t.sunk(LineId(7)).map(|_| ()),
         t.toggle(LineId(7)).map(|_| ()),
     ] {
-        assert_eq!(r, Err(Unknown), "item reads are M47's");
+        assert_eq!(r, Err(Unknown), "no forecast carries them");
     }
 
     // Replace: a new length and path re-index the tiles.
@@ -565,7 +566,11 @@ fn replica_transport_reads_are_unknown_for_unheld() {
     assert_eq!(tr.chunks_of(other, dims(), &mut |_| {}), Err(Unknown));
     assert_eq!(tr.anchor(other, dims()), Err(Unknown));
     assert_eq!(tr.len(held), Ok(32 * 256), "the held line is known");
-    assert_eq!(tr.count(held), Err(Unknown), "its items are not");
+    assert_eq!(
+        tr.count(held),
+        Ok(0),
+        "its items come from the forecasts (M47): none on it"
+    );
     assert!(
         tr.lines_at(TilePos::new(16, 16), &mut |_, _| {}).is_ok(),
         "a held chunk's tile"
@@ -847,10 +852,11 @@ fn assert_flowing(lb: &Loopback<LrGame>, tick: u32) {
 }
 
 /// Finding 1 of the M46 review: more structure puts fall due in one tick than a 64 KiB frame holds
-/// (2,000 two-segment lines, 53 B a put, created in one tick, then all re-sped in one tick). The
-/// puts spill over several frames under the byte budget; frames keep reaching the client, none
-/// overflows, every structure arrives, and hash-all sees no desync (the frames that defer a held
-/// line's put carry no chunk hash).
+/// (2,000 two-segment lines, 53 B a put, created in one tick, then 2,000 more in another). The
+/// puts of lines the client does not hold spill over several frames under the byte budget and are
+/// never dropped; frames keep reaching the client, none overflows, every structure arrives, and
+/// hash-all sees no desync. (A held line's update past the budget: M47's
+/// `host_held_update_over_budget_goes_gone_then_put`.)
 #[test]
 fn host_puts_spill_over_frames() {
     const N: i32 = 2_000;
@@ -892,14 +898,20 @@ fn host_puts_spill_over_frames() {
         "no frame overflowed"
     );
 
-    // Every held line changes in one tick (2,000 changes, under the list's 2,048).
+    // Another 2,000 lines in one tick, none held yet (M47 review, finding 4: a put of a held line
+    // that does not fit now goes `Gone` and comes again, `host_held_update_over_budget_goes_gone_\
+    // then_put` in `forecasts.rs`; the spill is a property of the lines the client does not
+    // hold): they spill over frames, every one arrives, none is ever sent `Gone`.
     let now = lb.host.sim().unwrap().tick().0;
     at(now, |t| {
-        for k in 0..N as usize {
-            t.set_speed(id(k), 12).unwrap();
+        for k in 0..N {
+            let l = t.create(256, 24).unwrap();
+            t.set_segments(l, &tile_line(k % 64, 40 + k / 64)).unwrap();
+            IDS.with(|i| i.borrow_mut().push(l));
         }
     });
     let mut frames_with_puts = 0;
+    let first_log = logs[0].len();
     for tick in 0..20 {
         let before = logs[0].len();
         step_all(&mut lb, 1, &mut logs);
@@ -908,11 +920,15 @@ fn host_puts_spill_over_frames() {
             frames_with_puts += 1;
         }
     }
-    assert!(frames_with_puts >= 2);
-    let tr = lb.client(0).replica().transport();
-    for k in 0..N as usize {
-        assert_eq!(tr.speed(id(k)), Ok(12), "line {k} re-sped");
-    }
+    assert!(
+        frames_with_puts >= 2,
+        "spilled over {frames_with_puts} frames"
+    );
+    assert_eq!(held(&lb), 2 * N as u32, "every structure arrived");
+    assert!(
+        logs[0][first_log..].iter().all(|r| r.1.is_some()),
+        "a pending put is never dropped (no `Gone`)"
+    );
     assert_eq!(lb.host.debug_overflows(lb.conn(0)), 0);
     assert_eq!(
         lb.client(0).replica().region_hash(),
