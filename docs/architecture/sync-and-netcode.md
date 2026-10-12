@@ -72,7 +72,8 @@ allocate nothing; readers borrow and never panic.
   frames: past it, or when the `last_received_tick` backlog grows, the connection degrades to every 2nd, then 4th tick, and a chunk whose
   queued deltas exceed its snapshot is collapsed into a snapshot. Hard ceiling 64 KB/s. Known limits: degrade cannot get a client under the
   soft cap by itself and per-tick pacing cost is not O(1) per client ([0064](../decisions/0064-phase-3-decisions-sync-and-netcode.md)
-  §20-22). A frame that overflows the `SliceSink` is lost whole: the host re-sends every held chunk it carried a delta for as a queued
+  §20-22). Degrade drops and coalesces nothing: every tick's frame is built whole and held, the held frames go out in
+  `FrameBundle`s, in order (a frame that does not fit waits for the next bundle), and the client applies them in order, sections 12 and 13 included (`belts/degraded_client_follows`; M48b). A frame that overflows the `SliceSink` is lost whole: the host re-sends every held chunk it carried a delta for as a queued
   snapshot and sends `Gone` for the lines it named ([0078](../decisions/0078-transport-forecast-replication.md) A8; M48).
 - **Admission rate limit**: 20 actions/s, burst 40, `EngineReject::RateLimited`; unlogged and leaves the action pending (§10). The client
   refuses to dispatch past 32 pending (`OUTBOX_CAPACITY`).
@@ -101,7 +102,8 @@ allocate nothing; readers borrow and never panic.
 - **Reconnect is join plus the resume hint**; the host keeps no per-session state. The hint is up to `MAX_RESUME_CHUNKS = 128` `(dx, dy,
   version)` entries relative to the view centre (`session/resume.rs` `build_resume_hint`/`diff_resume_hint`); equal version gives a 3-byte
   `ChunkKeeps` entry, otherwise a snapshot. `epoch` (in the manifest) bumps on every host start over an existing world; a hint from another
-  epoch is ignored.
+  epoch is ignored. The hint keeps chunks, not transport lines: the client clears its line structures at every `Welcome` and the host's
+  line routing is per connection, so every held line is put again with its list (`belts/reconnect_reputs_structures`; M48b).
 - **Resync is a second `Welcome`** on an attached connection. `client_on_welcome` (`game_instance.rs`) resets replica and overlay only if
   the epoch differs. The pending queue survives: `ClientCore::resend_after_welcome` resends actions above `last_processed_action_seq` and
   reports those at or below it as `Lost` (client-side only, never on the wire).
@@ -126,7 +128,8 @@ never encode a provisional id, a predicted status is a hint.
   then replica). The overlay (`predict/overlay.rs`) is preallocated vectors; a failed action rolls back by truncating to a mark.
   `predict/diff.rs` (`OverlayDiff`) is the only thing that marks chunks dirty for re-upload.
 - `Prediction` is `Applied | NotPredictable | Rejected(R)`. `Unknown` reads (outside the subscription, including any spawn touching an
-  unheld chunk) make the action `NotPredictable`: no ghost, still sent. Taint rule: once one action is `NotPredictable`, every later queued
+  unheld chunk) make the action `NotPredictable`: no ghost, still sent. Every transport read under `Predicting` is `Unknown`, held lines
+  or not, so an action whose `apply` reads a line is `NotPredictable` (`belts/predicted_request_is_not_predictable`; M48b). Taint rule: once one action is `NotPredictable`, every later queued
   action is too until it pops (§1). A local `Rejected` is never shown as a rejection; the host's `ActionResults` entry (`Applied |
   Rejected::Game | Rejected::Engine`) is the verdict, and `Lost` covers the reconnect gap. A locally dropped action (decode, out-of-memory)
   gets no result (§11).

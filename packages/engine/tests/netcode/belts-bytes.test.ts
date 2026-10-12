@@ -8,19 +8,11 @@
 // gates the (20 %, 100) cell on `counters.transport.downBytesPerSec`; `saturated_view_stress`
 // records the (20 %, 20) cell in the row's source, not gated.
 import { expect, test } from 'vitest'
-import { serverInternals } from '../../src/server.js'
 import { assertBudget } from '../../src/test/budget.js'
-import { forecastCounters, lineItems } from '../../src/test/lines.js'
-import { createNetHarness } from '../../src/test/net-harness.js'
-import { type BeltsRegime, beltsBenchWorld, beltsFixture } from './support.js'
+import { type BeltsRegime, BYTES_WINDOW_TICKS, measure, SATURATED_LINES } from './support.js'
 
-const TICK_HZ = 20
-/** 0078 A4's world: `saturated_view_world(7, .., 144)`. */
-const LINES = 2_974
-/** The highest line id of the full-scale bench worlds (`Mixed` has 3,810 lines). */
-const MAX_ID = 3_810
-/** 20 s of virtual time after the join settles. */
-const WINDOW_TICKS = 20 * TICK_HZ
+const LINES = SATURATED_LINES
+const WINDOW_TICKS = BYTES_WINDOW_TICKS
 
 // Per-test timeouts: vitest's default is 5 s. These scenarios run whole 1/64 or full-scale worlds
 // through real frames (2-5 s on Tyler's M3 Max) and CI's runner is 5-10x slower (run 38251055049:
@@ -28,99 +20,6 @@ const WINDOW_TICKS = 20 * TICK_HZ
 // ceiling on a hang, not a budget: the suite's 10 s budget (scripts/suites.mjs) still gates locally.
 const FAST_TIMEOUT_MS = 60_000
 const SLOW_TIMEOUT_MS = 180_000
-
-/** One run of the scenario: the window's numbers. `regime` and `view` default to the saturated
- * viewport; `lines` is how many lines the view holds once joined. */
-export async function measure(
-  regime: BeltsRegime,
-  seed: number,
-  view = { x: 128, y: 72, halfW: 128, halfH: 72 },
-  lines = LINES,
-) {
-  const world = beltsBenchWorld(
-    regime,
-    1,
-    // The bench caps (`bench_host.rs`): the recommended line cap (its tile index holds 8 tiles a
-    // line: this world has 73,728 lane tiles) and an item cap that never binds.
-    { maxLines: 32_768, maxItems: 393_216 },
-  )
-  const h = await createNetHarness({
-    fixture: await beltsFixture(),
-    seed,
-    clients: 1,
-    clientFrameMs: 12.5,
-    world: { ...world, debugHashMode: 'production' },
-  })
-  try {
-    const client = h.clients[0]
-    if (!client) throw new Error('one client')
-    h.link(0).set({ latencyMs: 40, jitterMs: 20 })
-    // The whole 256 x 144 viewport (0010's clamp is 256 tiles a side).
-    client.setView(view)
-    // The join: every line put with its list (about 1.9 MB of lists at the put budget's 16 KB a
-    // frame); it has settled once `lines` lists arrived and none for a second.
-    let joinTicks = 0
-    let quiet = 0
-    let last = -1
-    while (quiet < TICK_HZ) {
-      await h.advanceTicks(1)
-      const n = forecastCounters(client).forecastsApplied
-      quiet = n >= lines && n === last ? quiet + 1 : 0
-      last = n
-      if (++joinTicks > 1_200) {
-        throw new Error(`the join never settled: ${JSON.stringify(forecastCounters(client))}`)
-      }
-    }
-    const c0 = h.counters(0)
-    const f0 = forecastCounters(client)
-    await h.advanceTicks(WINDOW_TICKS)
-    const c1 = h.counters(0)
-    const f1 = forecastCounters(client)
-    const section = (c: typeof c0, name: string) => c.sections[name] ?? 0
-    const structs = section(c1, 'LineStructs') - section(c0, 'LineStructs')
-    const forecasts = section(c1, 'Forecasts') - section(c0, 'Forecasts')
-    // The visible runs at the end (a run: consecutive items of one kind `SPACING` apart).
-    let runs = 0
-    let items = 0
-    let held = 0
-    const inst = serverInternals(h.server).rawInstance
-    if (!inst) throw new Error('no live sim instance')
-    for (let id = 1; id <= MAX_ID; id++) {
-      const d = lineItems(client, id)
-      if (!d) continue
-      held++
-      const it = d.lines[0]?.items ?? []
-      items += it.length / 2
-      for (let k = 0; k < it.length; k += 2) {
-        if (k === 0 || it[k] !== it[k - 2] || (it[k + 1] as number) - (it[k - 1] as number) !== 64)
-          runs++
-      }
-    }
-    const corrections = f1.corrections - f0.corrections
-    return {
-      joinTicks,
-      held,
-      items,
-      runs,
-      transportDownBytesPerSec: Math.round((structs + forecasts) / (WINDOW_TICKS / TICK_HZ)),
-      structsBytes: structs,
-      forecastsBytes: forecasts,
-      frames: c1.frames - c0.frames,
-      states: f1.stateMessagesApplied - f0.stateMessagesApplied,
-      lists: f1.forecastsApplied - f0.forecastsApplied,
-      lateLists: corrections - (f1.stateMessagesApplied - f0.stateMessagesApplied),
-      arrivals: f1.arrivalsApplied - f0.arrivalsApplied,
-      forecastSeenLate: f1.forecastSeenLate - f0.forecastSeenLate,
-      correctionsPerRunPerSec: corrections / runs / (WINDOW_TICKS / TICK_HZ),
-      /** 0078 §5's `transport.correctionsPerSec`: States and lists for held lines, per second. */
-      correctionsPerSec: corrections / (WINDOW_TICKS / TICK_HZ),
-      unknown: f1.listsUnknown,
-      degradeLevel: c1.degradeLevel,
-    }
-  } finally {
-    await h.dispose()
-  }
-}
 
 /** What both cells assert besides their own counts: the whole view held, nothing but States after
  * the join, every frame sent, nothing late, no degrade (level 1: a frame every tick). */

@@ -18,7 +18,7 @@ never a burst); it is written only when its state changed, and declares that rul
 `set_spawner`) after its first step on the list, again after a restore (M48, `declare_spawners`). `Action::Noop` stays first; `SCHEMA_VERSION` 2. M43b adds `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`, `Remove`,
 `TakeFront`, `Segments` and a `Thing::Tally` of accepted item requests; M44b `Merge`, `Fork`
 (`set_out`) and `Destroy` (counted in `Thing::Destroyed`); M46 `Speed` (`set_speed`, appended
-last so no encoded op moved). Semantics: the `src/lib.rs` module doc.
+last so no encoded op moved); M48b `Belt` and `Action::Probe { tile }` (reads `lines_at` in `apply`, so `NotPredictable` on a client). Semantics: the `src/lib.rs` module doc.
 
 **Goldens (M42b, `tests/golden_scenarios.rs`).** `pnpm golden belts` writes them from the `.wasm`
 under Node; the native tests parse the same scenario files (`connect` is `Joined` then `Connected`)

@@ -6,15 +6,9 @@
 // host's `LineStructs` and `Forecasts` sections alone. The arbiter compares, every tick, the items
 // on every line the client holds with the host's (`engine/test`'s `lineItems`, `hostLineItems`).
 import { expect, test } from 'vitest'
-import { serverInternals } from '../../src/server.js'
-import {
-  forecastCounters,
-  hostLineItems,
-  type LineItemsDump,
-  lineItems,
-} from '../../src/test/lines.js'
-import { createNetHarness, type NetHarness } from '../../src/test/net-harness.js'
-import { type BeltsRegime, beltsBenchWorld, beltsFixture } from './support.js'
+import { forecastCounters } from '../../src/test/lines.js'
+import { createNetHarness } from '../../src/test/net-harness.js'
+import { arbitrate, type BeltsRegime, beltsBenchWorld, beltsFixture } from './support.js'
 
 /** The arbiter's small worlds' caps (1/64: about 60 lines and 4,000 items). */
 const SMALL = { maxLines: 4_096, maxItems: 16_384 }
@@ -24,137 +18,6 @@ const SMALL = { maxLines: 4_096, maxItems: 16_384 }
 // netcode 36 s against 6.4 s locally; the arbiter and the gate timed out at 5 s). A timeout is a
 // ceiling on a hang, not a budget: the suite's 10 s budget (scripts/suites.mjs) still gates locally.
 const FAST_TIMEOUT_MS = 60_000
-
-function host(h: NetHarness): LineItemsDump {
-  const inst = serverInternals(h.server).rawInstance
-  if (!inst) throw new Error('no live sim instance')
-  return hostLineItems(inst)
-}
-
-/** What one arbiter run saw. */
-interface Seen {
-  /** Ticks the client's forecast tick equalled the host's (every one compared). */
-  ticks: number
-  /** Ticks the client was not at the host's tick (no frame yet: the join). */
-  lagging: number
-  /** Ticks no frame came for, which the arbiter stepped the client through itself. */
-  caughtUp: number
-  /** `(line, tick)` pairs compared, and the items in them. */
-  compared: number
-  items: number
-  /** `(line, tick)` pairs skipped: the client holds the line's items as `unknown`. */
-  unknown: number
-  maxHeld: number
-  /** Lines held, and lines on the host, at the last tick. */
-  held: number
-  lines: number
-  /** Full view: compared ticks before every line was held (the join's puts spill over frames),
-   * and whether every line has been held since. */
-  partial: number
-  whole: boolean
-}
-
-/**
- * Runs `ticks` ticks; after each, every line the client holds (and knows the items of) must hold
- * exactly the host's items, kind and position, front to back. Throws naming the world, tick and
- * line on the first difference. The client may lag the host only before the first compared tick
- * (the join); a lagging tick after it fails. `fullView`: the whole world is in view, so once every
- * host line is held (the join's puts spill over a few frames) every compared tick must hold all.
- */
-async function arbitrate(
-  h: NetHarness,
-  index: number,
-  label: string,
-  ticks: number,
-  fullView = false,
-): Promise<Seen> {
-  const client = h.clients[index]
-  if (!client) throw new Error(`no client ${index}`)
-  const seen: Seen = {
-    ticks: 0,
-    lagging: 0,
-    caughtUp: 0,
-    compared: 0,
-    items: 0,
-    unknown: 0,
-    maxHeld: 0,
-    held: 0,
-    lines: 0,
-    partial: 0,
-    whole: false,
-  }
-  for (let i = 0; i < ticks; i++) {
-    const frames = h.counters(index).frames
-    await h.advanceTicks(1)
-    const hd = host(h)
-    let held = 0
-    let lagging = false
-    let caught = false
-    for (const hl of hd.lines) {
-      let cd = lineItems(client, hl.id)
-      if (cd === null) continue
-      held++
-      if (cd.tick !== hd.tick && cd.tick >= 0 && !caught && h.counters(index).frames === frames) {
-        // No frame for this tick: nothing changed for the client. It steps this tick when its
-        // next frame comes, by the same call (`on_frame` catches up first); the arbiter takes
-        // that step now to compare this tick (the native arbiter's rule).
-        client.forecastCatchUp(hd.tick)
-        caught = true
-        seen.caughtUp++
-        cd = lineItems(client, hl.id)
-        if (cd === null) throw new Error(`${label}: line ${hl.id} dropped by a catch-up`)
-      }
-      if (cd.tick !== hd.tick) {
-        if (seen.ticks > 0) {
-          throw new Error(
-            `${label}: tick ${hd.tick}: line ${hl.id}: the client is at tick ${cd.tick} after the join`,
-          )
-        }
-        lagging = true
-        break
-      }
-      const l = cd.lines[0]
-      if (!l) throw new Error(`${label}: line ${hl.id}: empty dump`)
-      if (l.unknown) {
-        seen.unknown++
-        continue
-      }
-      const want = hl.items
-      if (l.items.length !== want.length || l.items.some((v, k) => v !== want[k])) {
-        expect(
-          pairs(l.items),
-          `${label}: tick ${hd.tick}: line ${l.id}: client vs host (items as [item, pos])`,
-        ).toEqual(pairs(want))
-      }
-      seen.compared++
-      seen.items += want.length / 2
-    }
-    if (lagging || held === 0) {
-      if (seen.ticks > 0) throw new Error(`${label}: tick ${hd.tick}: no line held after the join`)
-      seen.lagging++
-      continue
-    }
-    if (fullView) {
-      if (held === hd.lines.length) seen.whole = true
-      else if (seen.whole) {
-        // Once the join has put every line, a line in view is never dropped (a budget `Gone`
-        // would leave it uncompared while it is gone).
-        throw new Error(`${label}: tick ${hd.tick}: ${held} of ${hd.lines.length} lines held`)
-      } else seen.partial++
-    }
-    seen.ticks++
-    seen.maxHeld = Math.max(seen.maxHeld, held)
-    seen.held = held
-    seen.lines = hd.lines.length
-  }
-  return seen
-}
-
-function pairs(flat: number[]): [number, number][] {
-  const out: [number, number][] = []
-  for (let k = 0; k < flat.length; k += 2) out.push([flat[k] as number, flat[k + 1] as number])
-  return out
-}
 
 /** What one world measures, pinned exactly (seed 4701 + index): a moved pin is a finding. */
 interface Pins {

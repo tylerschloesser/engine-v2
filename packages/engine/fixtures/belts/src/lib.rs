@@ -44,6 +44,12 @@
 //! the `"destroyed"` active list (the property tests' conservation needs it). `Speed { line,
 //! speed }` (M46) is `set_speed`, for the netcode scenario's structure changes.
 //!
+//! **A read in `apply` (M48b).** [`Action::Probe`] is the one action whose `apply` reads a line: it
+//! asks `lines_at` whether a line enters its tile, rejects `Occupied` if one does, and otherwise
+//! spawns an `Op::Belt` request (a `Chain` with its straight segment and an item at rest at every
+//! tile). A client's `Predicting` answers `Unknown` to every transport read, so the action is
+//! `NotPredictable` there; the host runs it as any other request.
+//!
 //! **The bench world (M45).** `BeltsParams.bench` builds M40's standard `Mixed` world at genesis
 //! ([`bench`]); its mixed-kind chains' spawners are [`Thing::Cycling`] (the item steps through
 //! `1..=CYCLE_KINDS`), a variant only the bench genesis makes. Its regime (M47b,
@@ -251,6 +257,16 @@ pub enum Op {
     Destroy { line: u8 },
     /// `set_speed(line, speed)` (M46: a structure change the netcode scenario replicates).
     Speed { line: u8, speed: u16 },
+    /// A `Chain` with its path (M48b, what [`Action::Probe`] requests): `tiles x 256` positions at
+    /// `speed`, appended to the table as `Chain` is, one straight segment east through the tile
+    /// centres from `from` (position 0, the front, at `from`), and `item` at rest at every whole
+    /// tile from the front (`0`: none). Appended last, so no encoded op moved.
+    Belt {
+        from: Pos,
+        tiles: u16,
+        speed: u16,
+        item: u16,
+    },
 }
 
 impl Op {
@@ -278,13 +294,25 @@ impl Op {
             Op::Fork { line, a, b } => idx(line) && idx(a) && idx(b),
             Op::Destroy { line } => idx(line),
             Op::Speed { line, speed } => idx(line) && speed >= 1,
+            // The far end tile too: `execute` computes its centre in `i32` (M48b review).
+            Op::Belt {
+                from, tiles, speed, ..
+            } => {
+                from.tile().in_range()
+                    && from
+                        .x
+                        .checked_add(i32::from(tiles))
+                        .is_some_and(|x| TilePos::new(x, from.y).in_range())
+                    && tiles >= 1
+                    && speed >= 1
+            }
         }
     }
 
     /// The request entity's anchor: a chain's own start tile, else the origin.
     fn anchor(&self) -> Pos {
         match *self {
-            Op::Chain { from, .. } => from,
+            Op::Chain { from, .. } | Op::Belt { from, .. } => from,
             _ => Pos::default(),
         }
     }
@@ -297,7 +325,20 @@ pub enum Action {
     Noop,
     /// Spawns a [`Thing::Request`] for `Belts::tick` to execute (module doc).
     Request(Op),
+    /// M48b: places a belt at `tile` only where no line is. `apply` reads the line index
+    /// (`lines_at`), so on a client the action is `NotPredictable` (`Predicting` answers `Unknown`
+    /// to every transport read, 0079 §17 (f)); on the host it spawns an `Op::Belt` request of
+    /// [`PROBE_TILES`] tiles at speed [`PROBE_SPEED`] with item [`PROBE_ITEM`] at every tile, or
+    /// rejects `Occupied`. Appended last, so no encoded action moved.
+    Probe {
+        tile: Pos,
+    },
 }
+
+/// What [`Action::Probe`] places: tiles, speed and item at rest of its `Op::Belt`.
+pub const PROBE_TILES: u16 = 4;
+pub const PROBE_SPEED: u16 = 24;
+pub const PROBE_ITEM: u16 = 1;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
@@ -306,6 +347,8 @@ pub enum Reject {
     Unknown,
     /// `Request`: the op's shape is invalid (`Op::valid`).
     BadOp,
+    /// `Probe`: a line already enters the tile (M48b; appended last).
+    Occupied,
 }
 
 impl From<Unknown> for Reject {
@@ -624,6 +667,41 @@ impl Belts {
             Op::Speed { line, speed } => {
                 let _ = t.set_speed(g.line(u32::from(line)), speed);
             }
+            Op::Belt {
+                from,
+                tiles,
+                speed,
+                item,
+            } => {
+                if g.chains >= MAX_CHAINS {
+                    cx.despawn(id);
+                    return;
+                }
+                let len = u32::from(tiles) * TILE;
+                let line = t.create(len, speed).unwrap_or(LineId::NONE);
+                if line != LineId::NONE {
+                    let centre = |x: i32| WorldPos {
+                        x: x * TILE as i32 + TILE as i32 / 2,
+                        y: from.y * TILE as i32 + TILE as i32 / 2,
+                    };
+                    let seg = Segment {
+                        len,
+                        geometry: Geometry::Straight {
+                            from: centre(from.x),
+                            to: centre(from.x + i32::from(tiles)),
+                        },
+                    };
+                    let _ = t.set_segments(line, &[seg]);
+                    if item != 0 {
+                        for k in 0..u32::from(tiles) {
+                            let _ = t.insert_at(line, k * TILE, Item(item));
+                        }
+                    }
+                }
+                g.lines[g.chains as usize] = line.0;
+                g.chains += 1;
+                cx.put_global(g);
+            }
         }
         cx.despawn(id);
     }
@@ -734,6 +812,29 @@ impl Game for Belts {
                 }));
                 Ok(())
             }
+            Action::Probe { tile } => {
+                let op = Op::Belt {
+                    from: *tile,
+                    tiles: PROBE_TILES,
+                    speed: PROBE_SPEED,
+                    item: PROBE_ITEM,
+                };
+                if !op.valid() {
+                    return Err(Reject::BadOp);
+                }
+                // A read of the line index: `?` makes it `NotPredictable` on a client.
+                let mut taken = false;
+                w.transport()
+                    .lines_at(tile.tile(), &mut |_, _| taken = true)?;
+                if taken {
+                    return Err(Reject::Occupied);
+                }
+                w.spawn(Thing::Request(Request {
+                    at: op.anchor(),
+                    op,
+                }));
+                Ok(())
+            }
         }
     }
 
@@ -813,7 +914,7 @@ impl Game for Belts {
     fn growth(a: &Action) -> Option<Growth> {
         match a {
             Action::Noop => Some(Growth::NONE),
-            Action::Request(_) => Some(Growth::entities(1)),
+            Action::Request(_) | Action::Probe { .. } => Some(Growth::entities(1)),
         }
     }
 

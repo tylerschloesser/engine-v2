@@ -15,8 +15,8 @@ use engine::game::{PlayerEvent, PlayerId, WorldRead, WorldWrite};
 use engine::sim::{Record, Sim, WorldParams};
 use engine::time::Tick;
 use engine::transport::{Item, LineId, Output, SPACING};
-use engine::world::{ChunkCoord, ChunkDims, TilePos, WorldPos};
-use fx_belts::{Action, Belts, Dir, Op, Pos, Seg, Tally, Thing, WPos};
+use engine::world::{ChunkCoord, ChunkDims, TILE_MAX, TilePos, WorldPos};
+use fx_belts::{Action, Belts, Dir, Op, Pos, Reject, Seg, Tally, Thing, WPos};
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1421,5 +1421,65 @@ fn belts_golden_bench_64() {
         env!("CARGO_MANIFEST_DIR"),
         "golden-bench-64.json",
         &[hash],
+    );
+}
+
+/// M48b review: an `Op::Belt` (and so an `Action::Probe`) whose far end lies past `TILE_MAX` is
+/// refused in `apply` (`BadOp`), never reaching `execute`'s `i32` centre arithmetic; one ending
+/// exactly at `TILE_MAX` is placed.
+#[test]
+fn belts_op_belt_rejects_past_tile_max() {
+    let sc = read_scenario("scenario.json");
+    let mut sim = new_sim(&sc.config.game);
+    let mut out = Vec::new();
+    let joined =
+        [PlayerEvent::Joined, PlayerEvent::Connected].map(|ev| Record::Player { who: WHO, ev });
+    sim.step(&joined, &mut out);
+    let belt = |x: i32, tiles: u16| {
+        Action::Request(Op::Belt {
+            from: Pos { x, y: 0 },
+            tiles,
+            speed: 24,
+            item: 1,
+        })
+    };
+    let actions = [
+        belt(TILE_MAX - 3, 4),
+        belt(TILE_MAX, u16::MAX),
+        Action::Probe {
+            tile: Pos {
+                x: TILE_MAX - 1,
+                y: 0,
+            },
+        },
+        belt(TILE_MAX - 4, 4),
+    ];
+    let batch: Vec<Record<Belts>> = actions
+        .iter()
+        .enumerate()
+        .map(|(k, a)| Record::Action {
+            who: WHO,
+            seq: k as u32 + 1,
+            action: *a,
+        })
+        .collect();
+    out.clear();
+    sim.step(&batch, &mut out);
+    let refused: Vec<bool> = out
+        .iter()
+        .map(|o| matches!(o.result, Err(engine::sim::Rejected::Game(Reject::BadOp))))
+        .collect();
+    assert_eq!(
+        refused,
+        [true, true, true, false],
+        "BadOp past TILE_MAX only"
+    );
+    out.clear();
+    sim.step(&[], &mut out);
+    let l = line(&sim, 0);
+    assert_eq!(
+        sim.authority().transport().len(l),
+        Ok(4 * 256),
+        "the in-range belt is placed"
     );
 }

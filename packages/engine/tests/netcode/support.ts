@@ -2,10 +2,18 @@
 // against the real `fx-puts` fixture (Consumes: "M16's action fixture and M15's puts fixture,
 // unchanged" -- one and the same crate, `on_player(Joined)` puts the player slot every ledger-noted
 // ack depends on).
+import { expect } from 'vitest'
 import { RegionId, Role } from '../../src/abi.js'
 import { instantiate } from '../../src/loader.js'
-import { seedToHexU64 } from '../../src/server.js'
+import { seedToHexU64, serverInternals } from '../../src/server.js'
+import {
+  forecastCounters,
+  hostLineItems,
+  type LineItemsDump,
+  lineItems,
+} from '../../src/test/lines.js'
 import { createNetHarness, type NetHarness } from '../../src/test/net-harness.js'
+import { type ParsedFrame, parseMessage } from '../../src/test/net-sections.js'
 import { loadFixture } from '../support/fixtures.js'
 
 export async function putsFixture(): Promise<{ wasm: WebAssembly.Module; buildHash: string }> {
@@ -145,9 +153,13 @@ export function beltsBenchWorld(
   regime: BeltsRegime,
   scale: number,
   caps: { maxLines: number; maxItems: number },
+  paced = false,
 ) {
+  const params = { worldgen: { bench: { seed: 7, scale, regime } }, ...caps }
+  // M48b: `paced` keeps the default caps (0010: 48 KB/s chunk bucket, 16 KB/s soft cap).
+  if (paced) return { params }
   return {
-    params: { worldgen: { bench: { seed: 7, scale, regime } }, ...caps },
+    params,
     // The bench spawners are entities that write on every insert (thousands of chunk deltas a
     // second at full scale): with the default caps those deltas alone degrade the connection and
     // collapse chunks into snapshots. The scenarios measure sections 12 and 13, so the chunk
@@ -162,3 +174,280 @@ export function beltsBenchWorld(
 }
 
 const LIFTED = 1_000_000_000
+
+/** The full-scale bench caps (`bench_host.rs`). */
+export const BENCH_CAPS = { maxLines: 32_768, maxItems: 393_216 }
+
+const TICK_HZ = 20
+/** 0078 A4's world: `saturated_view_world(7, .., 144)`. */
+export const SATURATED_LINES = 2_974
+/** The highest line id of the full-scale bench worlds (`Mixed` has 3,810 lines). */
+const MAX_ID = 3_810
+/** 20 s of virtual time after the join settles. */
+export const BYTES_WINDOW_TICKS = 20 * TICK_HZ
+
+/** M47b's `belts/saturated_view_*` run (moved here from `belts-bytes.test.ts` by M48b): the window's
+ * numbers. `regime` and `view` default to the saturated viewport; `lines` is how many lines the view
+ * holds once joined; `paced` keeps the default chunk pacing (`beltsBenchWorld`). */
+export async function measure(
+  regime: BeltsRegime,
+  seed: number,
+  view = { x: 128, y: 72, halfW: 128, halfH: 72 },
+  lines = SATURATED_LINES,
+  paced = false,
+) {
+  const world = beltsBenchWorld(
+    regime,
+    1,
+    // The bench caps (`bench_host.rs`): the recommended line cap (its tile index holds 8 tiles a
+    // line: this world has 73,728 lane tiles) and an item cap that never binds.
+    BENCH_CAPS,
+    paced,
+  )
+  const h = await createNetHarness({
+    fixture: await beltsFixture(),
+    seed,
+    clients: 1,
+    clientFrameMs: 12.5,
+    world: { ...world, debugHashMode: 'production' },
+  })
+  try {
+    const client = h.clients[0]
+    if (!client) throw new Error('one client')
+    h.link(0).set({ latencyMs: 40, jitterMs: 20 })
+    // The whole 256 x 144 viewport (0010's clamp is 256 tiles a side).
+    client.setView(view)
+    // The join: every line put with its list (about 1.9 MB of lists at the put budget's 16 KB a
+    // frame); it has settled once `lines` lists arrived and none for a second (and, paced, no enter
+    // is queued).
+    let joinTicks = 0
+    let quiet = 0
+    let last = -1
+    while (quiet < TICK_HZ) {
+      await h.advanceTicks(1)
+      const n = forecastCounters(client).forecastsApplied
+      quiet = n >= lines && n === last ? quiet + 1 : 0
+      // Paced (M48b): the chunk bucket drains the view's enters over many seconds and lists can go
+      // quiet for a second between them (a held line is put again with its list when its anchor
+      // chunk enters by snapshot), so the join has also settled only once no enter is queued.
+      if (paced && quiet === TICK_HZ && h.counters(0).queuedEnters !== 0) quiet = 0
+      last = n
+      if (++joinTicks > 1_200) {
+        throw new Error(`the join never settled: ${JSON.stringify(forecastCounters(client))}`)
+      }
+    }
+    const c0 = h.counters(0)
+    const f0 = forecastCounters(client)
+    await h.advanceTicks(BYTES_WINDOW_TICKS)
+    const c1 = h.counters(0)
+    const f1 = forecastCounters(client)
+    const section = (c: typeof c0, name: string) => c.sections[name] ?? 0
+    const structs = section(c1, 'LineStructs') - section(c0, 'LineStructs')
+    const forecasts = section(c1, 'Forecasts') - section(c0, 'Forecasts')
+    // The visible runs at the end (a run: consecutive items of one kind `SPACING` apart).
+    let runs = 0
+    let items = 0
+    let held = 0
+    const inst = serverInternals(h.server).rawInstance
+    if (!inst) throw new Error('no live sim instance')
+    for (let id = 1; id <= MAX_ID; id++) {
+      const d = lineItems(client, id)
+      if (!d) continue
+      held++
+      const it = d.lines[0]?.items ?? []
+      items += it.length / 2
+      for (let k = 0; k < it.length; k += 2) {
+        if (k === 0 || it[k] !== it[k - 2] || (it[k + 1] as number) - (it[k - 1] as number) !== 64)
+          runs++
+      }
+    }
+    const corrections = f1.corrections - f0.corrections
+    return {
+      joinTicks,
+      held,
+      items,
+      runs,
+      transportDownBytesPerSec: Math.round((structs + forecasts) / (BYTES_WINDOW_TICKS / TICK_HZ)),
+      structsBytes: structs,
+      forecastsBytes: forecasts,
+      frames: c1.frames - c0.frames,
+      states: f1.stateMessagesApplied - f0.stateMessagesApplied,
+      lists: f1.forecastsApplied - f0.forecastsApplied,
+      lateLists: corrections - (f1.stateMessagesApplied - f0.stateMessagesApplied),
+      arrivals: f1.arrivalsApplied - f0.arrivalsApplied,
+      forecastSeenLate: f1.forecastSeenLate - f0.forecastSeenLate,
+      correctionsPerRunPerSec: corrections / runs / (BYTES_WINDOW_TICKS / TICK_HZ),
+      /** 0078 §5's `transport.correctionsPerSec`: States and lists for held lines, per second. */
+      correctionsPerSec: corrections / (BYTES_WINDOW_TICKS / TICK_HZ),
+      unknown: f1.listsUnknown,
+      degradeLevel: c1.degradeLevel,
+      /** M48b: chunk deltas collapsed into snapshots, and bundles sent, in the window. */
+      collapses: c1.collapses - c0.collapses,
+      bundles: c1.bundles - c0.bundles,
+    }
+  } finally {
+    await h.dispose()
+  }
+}
+
+// M47b's arbiter (`belts-forecast.test.ts`), shared since M48b (`belts-edits`, `belts-degrade`).
+
+export function hostItems(h: NetHarness): LineItemsDump {
+  const inst = serverInternals(h.server).rawInstance
+  if (!inst) throw new Error('no live sim instance')
+  return hostLineItems(inst)
+}
+
+/** What one arbiter run saw. */
+export interface Seen {
+  /** Ticks the client's forecast tick equalled the host's (every one compared). */
+  ticks: number
+  /** Ticks the client was not at the host's tick (no frame yet: the join). */
+  lagging: number
+  /** Ticks no frame came for, which the arbiter stepped the client through itself. */
+  caughtUp: number
+  /** `(line, tick)` pairs compared, and the items in them. */
+  compared: number
+  items: number
+  /** `(line, tick)` pairs skipped: the client holds the line's items as `unknown`. */
+  unknown: number
+  maxHeld: number
+  /** Lines held, and lines on the host, at the last tick. */
+  held: number
+  lines: number
+  /** Full view: compared ticks before every line was held (the join's puts spill over frames),
+   * and whether every line has been held since. */
+  partial: number
+  whole: boolean
+}
+
+/**
+ * Runs `ticks` ticks; after each, every line the client holds (and knows the items of) must hold
+ * exactly the host's items, kind and position, front to back. Throws naming the world, tick and
+ * line on the first difference. The client may lag the host only before the first compared tick
+ * (the join); a lagging tick after it fails. `fullView`: the whole world is in view, so once every
+ * host line is held (the join's puts spill over a few frames) every compared tick must hold all.
+ * `before(i)` runs before tick `i` is advanced (a scenario's dispatches; M48b).
+ */
+export async function arbitrate(
+  h: NetHarness,
+  index: number,
+  label: string,
+  ticks: number,
+  fullView = false,
+  before?: (i: number) => void,
+): Promise<Seen> {
+  const client = h.clients[index]
+  if (!client) throw new Error(`no client ${index}`)
+  const seen: Seen = {
+    ticks: 0,
+    lagging: 0,
+    caughtUp: 0,
+    compared: 0,
+    items: 0,
+    unknown: 0,
+    maxHeld: 0,
+    held: 0,
+    lines: 0,
+    partial: 0,
+    whole: false,
+  }
+  for (let i = 0; i < ticks; i++) {
+    before?.(i)
+    const frames = h.counters(index).frames
+    await h.advanceTicks(1)
+    const hd = hostItems(h)
+    let held = 0
+    let lagging = false
+    let caught = false
+    for (const hl of hd.lines) {
+      let cd = lineItems(client, hl.id)
+      if (cd === null) continue
+      held++
+      if (cd.tick !== hd.tick && cd.tick >= 0 && !caught && h.counters(index).frames === frames) {
+        // No frame for this tick: nothing changed for the client. It steps this tick when its
+        // next frame comes, by the same call (`on_frame` catches up first); the arbiter takes
+        // that step now to compare this tick (the native arbiter's rule).
+        client.forecastCatchUp(hd.tick)
+        caught = true
+        seen.caughtUp++
+        cd = lineItems(client, hl.id)
+        if (cd === null) throw new Error(`${label}: line ${hl.id} dropped by a catch-up`)
+      }
+      if (cd.tick !== hd.tick) {
+        if (seen.ticks > 0) {
+          throw new Error(
+            `${label}: tick ${hd.tick}: line ${hl.id}: the client is at tick ${cd.tick} after the join`,
+          )
+        }
+        lagging = true
+        break
+      }
+      const l = cd.lines[0]
+      if (!l) throw new Error(`${label}: line ${hl.id}: empty dump`)
+      if (l.unknown) {
+        seen.unknown++
+        continue
+      }
+      const want = hl.items
+      if (l.items.length !== want.length || l.items.some((v, k) => v !== want[k])) {
+        expect(
+          pairs(l.items),
+          `${label}: tick ${hd.tick}: line ${l.id}: client vs host (items as [item, pos])`,
+        ).toEqual(pairs(want))
+      }
+      seen.compared++
+      seen.items += want.length / 2
+    }
+    if (lagging || held === 0) {
+      if (seen.ticks > 0) throw new Error(`${label}: tick ${hd.tick}: no line held after the join`)
+      seen.lagging++
+      continue
+    }
+    if (fullView) {
+      if (held === hd.lines.length) seen.whole = true
+      else if (seen.whole) {
+        // Once the join has put every line, a line in view is never dropped (a budget `Gone`
+        // would leave it uncompared while it is gone).
+        throw new Error(`${label}: tick ${hd.tick}: ${held} of ${hd.lines.length} lines held`)
+      } else seen.partial++
+    }
+    seen.ticks++
+    seen.maxHeld = Math.max(seen.maxHeld, held)
+    seen.held = held
+    seen.lines = hd.lines.length
+  }
+  return seen
+}
+
+export function pairs(flat: number[]): [number, number][] {
+  const out: [number, number][] = []
+  for (let k = 0; k < flat.length; k += 2) out.push([flat[k] as number, flat[k + 1] as number])
+  return out
+}
+
+/** M48b: how many `Welcome`s link `link` received, and every downlink frame (bundles split) after
+ * the last, from `harness.trace()` (`[t u32][link u32][dir u8][len u32][bytes]` an entry, dir 0
+ * down; a `Welcome` opens with `0x03`, as in `net-harness.ts`'s `reconnectCost`). */
+export function framesAfterWelcome(
+  trace: Uint8Array,
+  link: number,
+): { welcomes: number; frames: ParsedFrame[] } {
+  const view = new DataView(trace.buffer, trace.byteOffset, trace.byteLength)
+  let out: ParsedFrame[] = []
+  let welcomes = 0
+  let off = 0
+  while (off < trace.length) {
+    const l = view.getUint32(off + 4, true)
+    const dir = trace[off + 8]
+    const len = view.getUint32(off + 9, true)
+    const bytes = trace.subarray(off + 13, off + 13 + len)
+    off += 13 + len
+    if (l !== link || dir !== 0) continue
+    if (bytes[0] === 0x03) {
+      welcomes++
+      out = []
+    } else out.push(...parseMessage(bytes))
+  }
+  return { welcomes, frames: out }
+}
