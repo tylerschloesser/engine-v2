@@ -119,6 +119,11 @@ async function run(
 const ALL_CONTROL_KINDS = ['object', 'burst', 'post-message'] as const
 type ControlKind = (typeof ALL_CONTROL_KINDS)[number]
 
+/** `test.setTimeout(project timeout x scale)` inside a running test; nothing without a scale. */
+function scaleTimeout(scale: number | undefined): void {
+  if (scale !== undefined) test.setTimeout(test.info().project.timeout * scale)
+}
+
 export function zeroGcSuite(opts: {
   pageId: string
   path: string
@@ -143,6 +148,10 @@ export function zeroGcSuite(opts: {
    * item 3, gate round 1) is the first caller. Every other page passes nothing, so this is a no-op
    * for them. */
   afterClean?: (page: Page) => Promise<void>
+  /** M50 (M49's CI follow-up): every test this page generates runs with the project's timeout
+   * (`testInfo.project.timeout`) times this factor. A ceiling on a hang, never a budget: the
+   * measurement itself has no time limit. Every other page passes nothing and keeps the project's. */
+  timeoutScale?: number | undefined
 }): void {
   const budgets = gcPage(opts.pageId)
   const isolates = Object.keys(budgets.isolates)
@@ -152,6 +161,7 @@ export function zeroGcSuite(opts: {
   const controlKinds = opts.controlKinds ?? ALL_CONTROL_KINDS
 
   test(`${opts.pageId} clean`, async ({ page, browser }) => {
+    scaleTimeout(opts.timeoutScale)
     const r = await run(page, browser, opts.pageId, opts.path, null, opts.extraSettleFrames)
     assertEnvironment(r, opts.path, opts)
     // Gate round 3 (M09, Deviations): with `burst` demoted to `@slow`
@@ -184,6 +194,7 @@ export function zeroGcSuite(opts: {
           opts.slowWorkerObjectControls === true,
         )
         test(title, async ({ page, browser }) => {
+          scaleTimeout(opts.timeoutScale)
           const control: NegativeControl = { isolate: name, kind }
           const r = await run(
             page,
@@ -204,6 +215,7 @@ export function zeroGcSuite(opts: {
   if (controlKinds.includes('post-message')) {
     for (const name of workers) {
       test(`${opts.pageId} neg post-message main<->${name}`, async ({ page, browser }) => {
+        scaleTimeout(opts.timeoutScale)
         const control: NegativeControl = { isolate: name, kind: 'post-message' }
         const r = await run(page, browser, opts.pageId, opts.path, control, opts.extraSettleFrames)
         assertEnvironment(r, opts.path, opts)

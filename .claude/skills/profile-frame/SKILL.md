@@ -1,6 +1,6 @@
 ---
 name: profile-frame
-description: Profile the repo's real-rAF frame-time benchmarks (bench.frame_worstcase and bench.frame_reference, docs/decisions/0018-renderer.md §9) -- prints main-thread and client-worker frame durations plus the top five self-time functions per thread. Use when a frame-time benchmark fails, when a renderer or `extract`/sort change is suspected of a regression, or before updating packages/engine/baselines/frame.json or frame-reference.json.
+description: Profile the repo's real-rAF frame-time benchmarks (bench.frame_worstcase, bench.frame_reference and bench.frame_belts, docs/decisions/0018-renderer.md §9) -- prints main-thread and client-worker frame durations plus the top five self-time functions per thread. Use when a frame-time benchmark fails, when a renderer or `extract`/sort change is suspected of a regression, or before updating packages/engine/baselines/frame.json, frame-reference.json or frame-belts.json.
 ---
 
 # profile-frame
@@ -14,10 +14,11 @@ checked-in baseline (`packages/engine/baselines/frame.json`) within 25%. This sk
 diagnostic twin: it runs the identical scene and measurement window but prints numbers instead of
 asserting, plus a CPU self-time breakdown the pass/fail test does not compute.
 
-## Two scenes
+## Three fixtures
 
 - `--fixture drawables` (default): the synthetic worst case above (`frame-bench.html`, 65,536 drawables), baseline `baselines/frame.json`.
 - `--fixture reference` (M36): **the capture for reference-game regressions**, behind `bench.frame_reference` (`packages/engine/tests/browser/frame-bench-reference.spec.ts`). It builds `games/reference` in bench mode (`vite build --mode bench`: cargo feature `bench`, output `dist-bench/`), serves it, opens `index.html?bench=large-save` (the standard large save of 0020 §9, single-player, camera at maximum zoom-out over the dense furnace block, a slow pan, a few thousand furnaces in the DrawList) and runs the same park / wrap / resume / warm-up / timed-window sequence through the page's own `window.__bench`. Baseline `baselines/frame-reference.json`; budgets main <= 1.3 ms and worker <= 2.7 ms (0018 §9). Use it when `bench.frame_reference` fails, when a game's `extract`, the furnace sprites or the DrawList publish path changed, or when the bench HUD on a phone (`?bench=large-save`, `main p95` / `frame p95` / `tick p95`) misses its share: capture the same view on the desktop first. A miss is reported with this profile and handled as a plan edit; never retune the scene, a limit or a threshold. The profile's own `mark` calls inflate both thread totals; read the ranking, not the totals.
+- `--fixture belts` with `--zoom max` (the default: the gated zoom-out, 256 tiles across) or `--zoom <n>` (12 to 256; only `max` and 64 have a baseline) (M50): `belts-bench.html`, the `fx-belts` `SaturatedView` world at scale 1 (36,864 belt tiles, 294,912 items) on a 1280 x 720 canvas under a slow pan; `max` is belt sprites only (the fixture's item LOD is 20 px a tile), 64 the gated mid zoom with items. Behind `bench.frame_belts` (`frame-bench-belts.spec.ts`, both scenes in one test), baseline `baselines/frame-belts.json` (four gated p50s, 0047 A1), the record count pinned by `counters.render.beltsViewRecords`. The mid-zoom worker is the tight case (the items' geometry); run it at a 1-min load under 4; a red is rerun twice (0047 A1).
 
 ## When to use it
 
@@ -35,7 +36,7 @@ asserting, plus a CPU self-time breakdown the pass/fail test does not compute.
 ## The command
 
 ```
-node packages/engine/scripts/profile-frame.mjs [--fixture drawables|reference] [--frames 300]
+node packages/engine/scripts/profile-frame.mjs [--fixture drawables|reference|belts] [--zoom <n>] [--frames 300]
 ```
 
 Run from the repo root. `--frames`
@@ -113,4 +114,4 @@ reviewed; update `conditions` by hand. Only raise the baseline for a change that
 reviewed as such; a baseline that silently absorbs a regression defeats the whole point of checking
 one in.
 
-`baselines/frame-reference.json` follows the same rule (`pnpm test:slow frame-bench -t bench.frame_reference` a few times, then `pnpm bench:baseline frame-reference`; its `limits` are the 0018 §9 proxies and stay).
+`baselines/frame-reference.json` follows the same rule (`pnpm test:slow frame-bench -t bench.frame_reference` a few times, then `pnpm bench:baseline frame-reference`; its `limits` are the 0018 §9 proxies and stay). `baselines/frame-belts.json` likewise (`-t frame_belts`, `pnpm bench:baseline frame-belts`).

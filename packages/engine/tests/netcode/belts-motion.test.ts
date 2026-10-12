@@ -140,7 +140,7 @@ test(
       // A narrow view (the client's 4 KiB `Tx` holds the structures of the lines it meets): tiles
       // 6..=26 drawn (`visible()` adds a 2-tile margin), the picked line culled outside them.
       client.setView({ x: VIEW_X, y: 1, halfW: HALF_W, halfH: 8 })
-      // `tilesAcross` stays the camera default (32): 20 px a tile (the fixture style needs 4).
+      // `tilesAcross` stays the camera default (32): 20 px a tile (the fixture style needs 20).
       client.setViewportPx(640, 640)
       await h.advanceTicks(20)
       const picked = pickLine(client)

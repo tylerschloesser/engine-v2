@@ -1,18 +1,22 @@
 //! M49: items drawn on the item clock (docs/decisions/0078 A12), through `fx-belts`' client
-//! (`src/client.rs`: `transport::draw::draw_items` with the fixture style).
+//! (`src/client.rs`: `transport::draw::draw_items` with the fixture style; since M50 one belt
+//! sprite per belt tile in view first, from `Transport::for_each_tile_in`).
 //!
 //! - `drawlist_belts_hash_golden`: a real `GameInstance<Belts>` pair (sim + client, the
 //!   `fx-drawables` driver's shape: `frame`, `client_poll_uplink`, `sim_admit`, `sim_tick`,
-//!   `sim_build_frame`, `on_frame`) on the 1/64 `SaturatedView { jam_pct: 20, period: 20 }` world for
-//!   16 ticks, the frame time advanced 50 ms a tick, then one frame at 15 x 50 + 25 ms (the item
-//!   clock half a tick past the follower's tick), the camera on the stream.
-//!   `tests/golden/drawlist_belts_hash.hash` is read by this test and by `tests/wasm/drawlist.test.ts`'s
-//!   `drawlist_belts_hash_matches_native_golden`, which drives the same steps through the raw ABI.
+//!   `sim_build_frame`, `on_frame`) on the 1/64 `SaturatedView { jam_pct: 20, period: 20 }`
+//!   world for 16 ticks, the frame time advanced 50 ms a tick, then one frame at 15 x 50 + 25 ms
+//!   (the item clock half a tick past the follower's tick), the camera on the stream: 90 belt
+//!   tiles and 720 items. `tests/golden/drawlist_belts_hash.hash` is read by this test and by
+//!   `tests/wasm/drawlist.test.ts`' `drawlist_belts_hash_matches_native_golden`, which drives the
+//!   same steps through the raw ABI.
 //! - `no_alloc_drawlist_belts_2000_items`: the same driver on the gc page's world (1/32
-//!   `SaturatedView { 0, 0 }`, about 2,000 items in view): `frame` (extract with every item drawn,
-//!   then the sort) allocates nothing, summed over 300 frames between ticks. This binary's
-//!   allocator is `fx_belts`' own `Arena` (`export_game!` installs it), so `thread_live_bytes`
-//!   counts (`no_alloc_*`'s instrument, net bytes).
+//!   `SaturatedView { 0, 0 }`) with its own camera, `gc_camera()` (centre (128, 2), half extent
+//!   (32, 4): 4 rows x 69 = 276 belt tiles in view; the gc page's half extent (30, 8) shows
+//!   4 x 65 = 260): `frame` (extract with every belt tile and about 2,200 items drawn, then the
+//!   sort) allocates nothing, summed over 300 frames between ticks. This binary's allocator is
+//!   `fx_belts`' own `Arena` (`export_game!` installs it), so `thread_live_bytes` counts
+//!   (`no_alloc_*`'s instrument, net bytes).
 //! - `slow_draw_items_time`: the native time of `draw_items` per 1,000 items drawn (M50), on the
 //!   `Mixed` 1/64 world's centre view and on the gc page's world; reported, not gated.
 
@@ -43,7 +47,8 @@ fn golden_camera() -> CameraBlock {
     c
 }
 
-/// The gc page's view: 64 tiles across the four rows (20 px a tile).
+/// 64 tiles across the gc page's four rows (20 px a tile); half extent (32, 4), not the page's
+/// (30, 8).
 fn gc_camera() -> CameraBlock {
     let mut c = CameraBlock::for_test([128.0, 2.0], [0.0, 0.0], [32.0, 4.0]);
     c.tiles_across = 64.0;
@@ -96,8 +101,8 @@ impl Driver {
         assert_eq!(self.client.frame(t_ms, &self.camera, &mut []), Status::Ok);
     }
 
-    /// A client frame at `t_ms`, then one sim tick (the frame's uplink admitted first) and its frame
-    /// to the client.
+    /// A client frame at `t_ms`, then one sim tick (the frame's uplink admitted first) and its
+    /// frame to the client.
     fn tick(&mut self, t_ms: f64) {
         self.frame(t_ms);
         let up_len = self.client.client_poll_uplink(0, &mut self.up);
@@ -136,7 +141,11 @@ fn drawlist_belts_hash_golden() {
         },
         "the golden frame's stats"
     );
-    assert_eq!(n, 720, "one record per item drawn");
+    assert_eq!(
+        n,
+        90 + 720,
+        "one record per belt tile in view (2 rows x 45) and per item drawn"
+    );
     let hash = engine::client::drawlist::hash_region(d.client_layout.bytes(RegionId::DrawList), n);
     engine::assert_golden_hash!("drawlist_belts_hash", hash);
 }
@@ -178,6 +187,11 @@ fn no_alloc_drawlist_belts_2000_items() {
             too_small: false
         },
         "the last measured frame's stats"
+    );
+    assert_eq!(
+        d.client.drawlist_len(),
+        276 + 2_200,
+        "the last frame's records: a belt sprite per belt tile in view (4 rows x 69), then the items"
     );
     assert_eq!(
         frame_bytes, 0,

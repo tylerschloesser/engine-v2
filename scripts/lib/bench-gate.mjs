@@ -50,6 +50,19 @@ export const BENCHES = {
   'belts-tick': { gated: ['medianMs'], limits: { medianMs: 5 } },
   // M45: `slow_snapshot_belts_large`, recorded only (the snapshot proxy of M36 is reported, not gated).
   'belts-snapshot': { gated: [], limits: {} },
+  // M50: `bench.frame_belts`, 0018 §9's desktop proxies in both scenes of the belts worst case
+  // (maximum zoom-out, belts only; 64 tiles across, the item cut, belts and items); `minDeltaMs`
+  // derived per 0047 (the baseline's `conditions`).
+  'frame-belts': {
+    gated: ['zoomoutMainP50Ms', 'zoomoutWorkerP50Ms', 'midMainP50Ms', 'midWorkerP50Ms'],
+    limits: {
+      zoomoutMainP50Ms: 1.3,
+      zoomoutWorkerP50Ms: 2.7,
+      midMainP50Ms: 1.3,
+      midWorkerP50Ms: 2.7,
+    },
+    minDeltaMs: 0.04,
+  },
 }
 
 /** Where this machine stands: no environment variable to forget. */
@@ -184,6 +197,9 @@ export function promote(name) {
     conditions: old?.conditions ?? '',
     gated: old?.gated ?? defaults.gated,
     limits: old?.limits ?? defaults.limits,
+    ...(old === null && defaults.minDeltaMs !== undefined
+      ? { minDeltaMs: defaults.minDeltaMs }
+      : {}),
     ...Object.fromEntries(
       Object.entries(old ?? {}).filter(
         ([k]) =>

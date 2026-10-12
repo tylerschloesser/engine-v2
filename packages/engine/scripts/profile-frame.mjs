@@ -10,12 +10,16 @@
 // raw CDP trace to `test-results/profile-frame/trace.json` and exits 0 regardless of the numbers: a
 // diagnostic tool, not a gate (`bench.frame_worstcase`, the Playwright test, is the gate).
 //
-// Usage: `node packages/engine/scripts/profile-frame.mjs [--fixture drawables|reference] [--frames 300]`.
+// Usage: `node packages/engine/scripts/profile-frame.mjs [--fixture drawables|reference|belts]
+// [--zoom max|<n>] [--frames 300]`.
 // `--fixture drawables` (default): `frame-bench.html`, the synthetic worst case behind
 // `bench.frame_worstcase`. `--fixture reference` (M36): the reference game's bench build at
 // `?bench=large-save` (the standard large save, maximum zoom-out, slow pan), the capture behind
 // `bench.frame_reference`; it builds `games/reference` with `vite build --mode bench`, serves
-// `dist-bench/`, and drives the page's `window.__bench` the way the spec does.
+// `dist-bench/`, and drives the page's `window.__bench` the way the spec does. `--fixture belts`
+// (M50): `belts-bench.html?zoom=<max|n>`, one scene of `bench.frame_belts` (`fx-belts`'
+// `SaturatedView` at scale 1; `--zoom max` by default): started, joined (every belt tile of the held
+// view drawn), then the pan released, as `frame-bench-belts.spec.ts` drives it.
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -29,16 +33,44 @@ function argValue(name, fallback) {
 }
 
 const fixture = argValue('fixture', 'drawables')
-if (fixture !== 'drawables' && fixture !== 'reference') {
-  console.error(`profile-frame: --fixture is drawables or reference (got '${fixture}')`)
+if (fixture !== 'drawables' && fixture !== 'reference' && fixture !== 'belts') {
+  console.error(`profile-frame: --fixture is drawables, reference or belts (got '${fixture}')`)
   process.exit(2)
 }
 const isReference = fixture === 'reference'
-// The page API both scenes share (`park`, `resume`, `framesRendered`, `startMarking`, `stopMarking`):
-// `window.__frameBench` (frame-bench.html) or `window.__bench` (the reference bench page).
-const API = isReference ? '__bench' : '__frameBench'
-const BASELINE_FILE = isReference ? 'frame-reference.json' : 'frame.json'
-const TITLE = isReference ? 'bench.frame_reference' : 'bench.frame_worstcase'
+const isBelts = fixture === 'belts'
+const zoom = argValue('zoom', 'max')
+const tilesAcross = zoom === 'max' ? 256 : Number(zoom)
+if (isBelts && !(Number.isInteger(tilesAcross) && tilesAcross >= 12 && tilesAcross <= 256)) {
+  console.error(`profile-frame: --zoom is max or an integer 12..256 (got '${zoom}')`)
+  process.exit(2)
+}
+// `bench.frame_belts`' scene names in its baseline's metrics (`zoomoutMainP50Ms`, `midMainP50Ms`; any
+// other zoom has no baseline) and the belt tiles of the held view, which mark the end of the join:
+// `visible_tile_rect` (centre (128, 72), the 1280 x 720 half extents plus 2, floored) clipped to the
+// 256 x 144 stream, as `frame-bench-belts.spec.ts` counts them.
+const BELTS_SCENE = zoom === 'max' ? 'zoomout' : zoom === '64' ? 'mid' : `zoom${zoom}`
+function viewTiles(centre, half, size) {
+  const lo = Math.max(0, Math.floor(centre - half - 2))
+  const hi = Math.min(size - 1, Math.floor(centre + half + 2))
+  return hi - lo + 1
+}
+const BELT_TILES =
+  viewTiles(128, tilesAcross / 2, 256) * viewTiles(72, (720 * tilesAcross) / 2560, 144)
+// The page API the scenes share (`park`, `resume`, `framesRendered`, `startMarking`, `stopMarking`):
+// `window.__frameBench` (frame-bench.html), `window.__bench` (the reference bench page) or
+// `window.__beltsBench` (belts-bench.html).
+const API = isReference ? '__bench' : isBelts ? '__beltsBench' : '__frameBench'
+const BASELINE_FILE = isReference
+  ? 'frame-reference.json'
+  : isBelts
+    ? 'frame-belts.json'
+    : 'frame.json'
+const TITLE = isReference
+  ? 'bench.frame_reference'
+  : isBelts
+    ? `bench.frame_belts (zoom=${zoom})`
+    : 'bench.frame_worstcase'
 const TIMED_FRAMES = Number(argValue('frames', '300'))
 const WARMUP_FRAMES = 120
 const PORT = 4520
@@ -244,9 +276,12 @@ const browser = await chromium.launch({
 try {
   const page = await browser.newPage()
   page.on('pageerror', (e) => console.error(`profile-frame: page error: ${e.message}`))
-  await page.goto(
-    `http://127.0.0.1:${PORT}/${isReference ? 'index.html?bench=large-save' : 'frame-bench.html'}`,
-  )
+  const path = isReference
+    ? 'index.html?bench=large-save'
+    : isBelts
+      ? `belts-bench.html?zoom=${zoom}`
+      : 'frame-bench.html'
+  await page.goto(`http://127.0.0.1:${PORT}/${path}`)
   await page.waitForFunction(() => window.__pageReady === true, { timeout: 60_000 })
   if (isReference) {
     // The save is generated and the first view's furnaces are in the DrawList.
@@ -255,23 +290,31 @@ try {
     })
   }
 
-  const setup = await page.evaluate((reference) => {
-    if (reference) {
-      return {
-        adapter: window.__bench?.adapter() ?? null,
-        recordCount: window.__bench?.hud().records ?? 0,
+  const setup = await page.evaluate(
+    ([reference, belts]) => {
+      if (belts) {
+        // Nothing drawn before `start()` (the join runs under the real loop, below).
+        return { adapter: window.__beltsBench?.adapterInfo ?? null, recordCount: 0 }
       }
-    }
-    return {
-      adapter: window.__frameBench?.adapterInfo ?? null,
-      recordCount: window.__frameBench?.recordCount ?? 0,
-    }
-  }, isReference)
+      if (reference) {
+        return {
+          adapter: window.__bench?.adapter() ?? null,
+          recordCount: window.__bench?.hud().records ?? 0,
+        }
+      }
+      return {
+        adapter: window.__frameBench?.adapterInfo ?? null,
+        recordCount: window.__frameBench?.recordCount ?? 0,
+      }
+    },
+    [isReference, isBelts],
+  )
   console.log(
     `profile-frame: adapter=${JSON.stringify(setup.adapter)} recordCount=${setup.recordCount}`,
   )
   if (
-    isReference ? setup.recordCount < MIN_REFERENCE_RECORDS : setup.recordCount !== RECORD_COUNT
+    !isBelts &&
+    (isReference ? setup.recordCount < MIN_REFERENCE_RECORDS : setup.recordCount !== RECORD_COUNT)
   ) {
     console.error(
       `profile-frame: expected ${isReference ? `at least ${MIN_REFERENCE_RECORDS}` : RECORD_COUNT} entities, page reports ${setup.recordCount}`,
@@ -309,10 +352,24 @@ try {
   await page.evaluate((api) => window[api]?.resume(), API)
   // The reference page's loop is already running; only `frame-bench.html` waits for `start()`.
   await page.evaluate((api) => window[api]?.start?.(), API)
+  let beltRecords = 0
+  if (isBelts) {
+    // The join (every belt tile of the held view drawn), then the pan.
+    // `>=` as the spec: a doubled emission profiles instead of timing out.
+    await page.waitForFunction((n) => (window.__beltsBench?.beltTiles() ?? 0) >= n, BELT_TILES, {
+      timeout: 180_000,
+    })
+    beltRecords = await page.evaluate(() => window.__beltsBench?.records() ?? 0)
+    await page.evaluate(() => window.__beltsBench?.releasePan())
+  }
 
+  // The warm-up counts from the pan's release on the belts page (its join ran frames already).
+  const warmupFrom = isBelts
+    ? await page.evaluate(() => window.__beltsBench?.framesRendered() ?? 0)
+    : 0
   await page.waitForFunction(
     ([api, n]) => (window[api]?.framesRendered() ?? 0) >= n,
-    [API, WARMUP_FRAMES],
+    [API, warmupFrom + WARMUP_FRAMES],
     { timeout: 60_000 },
   )
 
@@ -354,7 +411,7 @@ try {
 
   const gpuErrors = isReference
     ? []
-    : await page.evaluate(() => window.__frameBench?.errors() ?? [])
+    : await page.evaluate((api) => window[api]?.errors() ?? [], API)
   if (gpuErrors.length > 0) {
     console.error(`profile-frame: uncapturederror: ${JSON.stringify(gpuErrors)}`)
     exitCode = 1
@@ -375,23 +432,28 @@ try {
 
   const baselineUrl = new URL(`../baselines/${BASELINE_FILE}`, import.meta.url)
   const baseline = existsSync(baselineUrl) ? JSON.parse(readFileSync(baselineUrl, 'utf8')) : null
+  // `frame-belts.json` keys its metrics by scene.
+  const key = (metric) =>
+    isBelts ? `${BELTS_SCENE}${metric[0].toUpperCase()}${metric.slice(1)}` : metric
+  const baseMain = baseline?.metrics[key('mainP50Ms')]
+  const baseWorker = baseline?.metrics[key('workerP50Ms')]
 
   console.log('')
   console.log(
-    `${TITLE} profile: records=${isReference ? setup.recordCount : RECORD_COUNT} frames main=${mainMs.length} worker=${workerMs.length} warmup=${WARMUP_FRAMES}`,
+    `${TITLE} profile: records=${isReference ? setup.recordCount : isBelts ? beltRecords : RECORD_COUNT} frames main=${mainMs.length} worker=${workerMs.length} warmup=${WARMUP_FRAMES}`,
   )
   console.log(
     `  main   p50=${mainP50.toFixed(3)}ms p95=${mainP95.toFixed(3)}ms  budget<=${MAIN_BUDGET_MS}ms` +
-      (baseline
-        ? `  baseline.p50=${baseline.metrics.mainP50Ms}ms (+${(BASELINE_TOLERANCE * 100).toFixed(0)}%=${(baseline.metrics.mainP50Ms * (1 + BASELINE_TOLERANCE)).toFixed(3)}ms)`
+      (baseMain !== undefined
+        ? `  baseline.p50=${baseMain}ms (+${(BASELINE_TOLERANCE * 100).toFixed(0)}%=${(baseMain * (1 + BASELINE_TOLERANCE)).toFixed(3)}ms)`
         : ''),
   )
   console.log(`    top self-time (${mainCpu.totalMs.toFixed(2)}ms sampled):`)
   for (const [name, ms] of mainCpu.top5) console.log(`      ${ms.toFixed(3)}ms  ${name}`)
   console.log(
     `  worker p50=${workerP50.toFixed(3)}ms p95=${workerP95.toFixed(3)}ms  budget<=${WORKER_BUDGET_MS}ms` +
-      (baseline
-        ? `  baseline.p50=${baseline.metrics.workerP50Ms}ms (+${(BASELINE_TOLERANCE * 100).toFixed(0)}%=${(baseline.metrics.workerP50Ms * (1 + BASELINE_TOLERANCE)).toFixed(3)}ms)`
+      (baseWorker !== undefined
+        ? `  baseline.p50=${baseWorker}ms (+${(BASELINE_TOLERANCE * 100).toFixed(0)}%=${(baseWorker * (1 + BASELINE_TOLERANCE)).toFixed(3)}ms)`
         : ''),
   )
   console.log(`    top self-time (${workerCpu.totalMs.toFixed(2)}ms sampled):`)

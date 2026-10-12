@@ -243,7 +243,8 @@ test('drawlist_belts_hash_matches_native_golden', async () => {
   client.call1(client.x.frame, 15 * 50 + 25)
 
   const recordCount = client.call0(client.x.drawlist_len)
-  expect(recordCount).toBe(720)
+  // M50: 90 belt tiles in view (2 rows x 45), then 720 items.
+  expect(recordCount).toBe(90 + 720)
   const region = client.region(RegionId.DrawList)
   if (!region) throw new Error('client instance has no DrawList region')
   const hash = hashDrawListFields(

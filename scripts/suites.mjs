@@ -224,7 +224,9 @@ export const suites = [
     kind: 'playwright',
     tiers: ['slow'],
     solo: true,
-    args: ['--project', 'frame-bench'],
+    // `--workers 1` (M50): the project's three bench files would otherwise run at once (the
+    // config's five workers, `fullyParallel`), one bench's join inside another's timed window.
+    args: ['--project', 'frame-bench', '--workers', '1'],
     port: 4519,
   },
 ]

@@ -11,6 +11,8 @@ Status: Accepted (2026-10-01). Amends [0020](0020-testing-strategy.md) §9 (the 
 **3. The absolute proxies are independent.** A `limits` figure (the ADR proxies of [0010](0010-rates-and-subscriptions.md), [0018](0018-renderer.md) §9) still fails on its own; the floor only relaxes the relative rule.
 **4. Only `frame-reference` sets one now:** `minDeltaMs` 0.1 (2 x (0.155 - 0.106) = 0.098).
 
+**A1 (2026-10-12, milestone 50; amends §4).** `frame-belts` sets `minDeltaMs` 0.04: twice the spread of its sub-millisecond gated metric with the largest spread (the mid-zoom main p50, 0.020 over thirteen quiet runs; `baselines/frame-belts.json` `conditions`). Its worker metrics are over a millisecond and get no floor, as the Consequences say; the zoom-out worker's run-to-run spread there (0.914-1.762 ms over the same runs, bimodal by about 1.35 with the mode fixed within a run, plus a tail) is recorded in the baseline's `conditions` and in `docs/plan/50-dense-viewport-frame-budget.md`, not absorbed by a floor. The rule for a red: rerun twice at a 1-min load under 4; red in two of three runs is a regression, one of three is the spread (recorded in the milestone's gate). A bench milestone owns the diagnosis of the modes if the rule fires on the spread twice.
+
 ## Alternatives rejected
 - Widening the percentage for that benchmark: a relative figure is the wrong unit below a millisecond, and it would loosen the gate for larger metrics sharing the helper.
 - Gating on a larger statistic or a mean of several runs: costs minutes of wall-clock per benchmark for the same noise.
@@ -20,4 +22,4 @@ Status: Accepted (2026-10-01). Amends [0020](0020-testing-strategy.md) §9 (the 
 A real regression smaller than `minDeltaMs` is not caught for sub-millisecond metrics; the proxy and a larger scene catch the rest. Revisit if the measured spread changes (a new baseline machine) or the metric grows past a millisecond, where the floor should go back to 0.
 
 ## Sources
-`packages/engine/baselines/frame-reference.json` (`conditions`: the ten runs), `docs/plan/36-slow-tier-and-benchmarks.md` Deviations, 2026-10-01.
+`packages/engine/baselines/frame-reference.json` (`conditions`: the ten runs), `docs/plan/36-slow-tier-and-benchmarks.md` Deviations, 2026-10-01. A1: `packages/engine/baselines/frame-belts.json`, `docs/plan/50-dense-viewport-frame-budget.md` Deviations, 2026-10-12.

@@ -32,7 +32,7 @@
 
 use super::line::NIL;
 use super::{LineId, MAX_LEN, Transport, TransportError};
-use crate::world::{ChunkCoord, ChunkDims, TilePos, WorldPos};
+use crate::world::{ChunkCoord, ChunkDims, TilePos, TileRect, WorldPos};
 
 /// Segments one line may have (a merged straight run is one; a curve one arc per lane).
 pub const MAX_SEGMENTS: usize = 16;
@@ -415,6 +415,37 @@ impl Transport {
         }
     }
 
+    /// Every tile of `rect` (inclusive) that some line's path enters, once each, by row (`y`)
+    /// then `x` ascending, with the lowest id of the lines entering it (M50: a belt tile's two
+    /// lanes are one tile). One `partition_point` per row of `rect` over the sorted index, then
+    /// the row's entries up to `rect.max.x`: O(rows x log N + entries), no allocation. The
+    /// renderer's read (a game drawing one sprite per belt tile from `extract`); a store holding
+    /// no transport state has an empty index and reports nothing.
+    pub fn for_each_tile_in(&self, rect: TileRect, f: &mut dyn FnMut(TilePos, LineId)) {
+        if rect.min.x > rect.max.x || rect.min.y > rect.max.y {
+            return;
+        }
+        let mut y = rect.min.y;
+        loop {
+            let key = (y, rect.min.x);
+            let mut k = self.tiles.partition_point(|e| (e.y, e.x) < key);
+            while let Some(e) = self.tiles.get(k) {
+                if e.y != y || e.x > rect.max.x {
+                    break;
+                }
+                f(TilePos::new(e.x, y), LineId(e.line));
+                k += 1;
+                while self.tiles.get(k).is_some_and(|n| n.y == y && n.x == e.x) {
+                    k += 1;
+                }
+            }
+            if y == rect.max.y {
+                break;
+            }
+            y += 1;
+        }
+    }
+
     /// Frees the slot's segments and removes its tile-index entries (O(index)).
     pub(super) fn clear_geometry(&mut self, l: u32) {
         let rec = self.lines[l as usize];
@@ -604,6 +635,71 @@ impl Transport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::TransportWrite;
+
+    /// M50's `for_each_tile_in`: a belt (two lanes on tile row 0, `x = 0..=4`, at sub-tile `y` 64
+    /// and 192) and a quarter arc (centre tile corner (0, 3), radius 1.5 tiles, from `+x` toward
+    /// `+y`: tiles (1, 3), (1, 4), (0, 4)). A lane tile is reported once with the lower line id;
+    /// the rect `x = 1..=3, y = 0..=4` holds 8 index entries and 5 tiles; row 2 and an inverted
+    /// rect report nothing.
+    #[test]
+    fn transport_tiles_in_rect() {
+        let wp = |x, y| WorldPos { x, y };
+        let lane = |y| Segment {
+            len: 1280,
+            geometry: Geometry::Straight {
+                from: wp(0, y),
+                to: wp(1280, y),
+            },
+        };
+        let mut t = Transport::new(8, 64);
+        let a = t.create(1280, 24).unwrap();
+        let b = t.create(1280, 24).unwrap();
+        let c = t.create(603, 24).unwrap();
+        t.set_segments(b, &[lane(192)]).unwrap();
+        t.set_segments(a, &[lane(64)]).unwrap();
+        let arc = Segment {
+            len: 603,
+            geometry: Geometry::Arc {
+                centre: wp(0, 768),
+                radius_q8: 384,
+                start_turn_q8: 0,
+                sweep_q8: 64,
+            },
+        };
+        t.set_segments(c, &[arc]).unwrap();
+        let tiles = |r: TileRect| {
+            let mut v = Vec::new();
+            t.for_each_tile_in(r, &mut |p, l| v.push((p.x, p.y, l.0)));
+            v
+        };
+        let rect = |x0, y0, x1, y1| TileRect::new(TilePos::new(x0, y0), TilePos::new(x1, y1));
+        let (a, c) = (a.0, c.0);
+        assert_eq!(
+            tiles(rect(1, 0, 3, 4)),
+            [(1, 0, a), (2, 0, a), (3, 0, a), (1, 3, c), (1, 4, c)]
+        );
+        assert_eq!(
+            tiles(rect(-10, -10, 10, 10)),
+            [
+                (0, 0, a),
+                (1, 0, a),
+                (2, 0, a),
+                (3, 0, a),
+                (4, 0, a),
+                (1, 3, c),
+                (0, 4, c),
+                (1, 4, c)
+            ]
+        );
+        assert_eq!(
+            t.tiles.len(),
+            13,
+            "two entries a lane tile, one an arc tile"
+        );
+        assert_eq!(tiles(rect(-10, 2, 10, 2)), []);
+        assert_eq!(tiles(rect(3, 0, 1, 4)), []);
+    }
 
     /// The table is a quarter of the unit circle without a transcendental: symmetric about the
     /// diagonal, exact at both ends, monotone, and every point within the rounding bound of

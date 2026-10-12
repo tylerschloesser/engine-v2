@@ -17,13 +17,13 @@ use crate::client::frame_view::FrameView;
 use crate::game::Game;
 use crate::world::TileRect;
 
-/// How one item kind is drawn.
+/// How one item kind is drawn. No size: the uberquad shader sizes a sprite from its atlas entry
+/// (`uberquad.wgsl`, `box_size` from the sprite table), never from `Draw::size` (M50 removed the
+/// field, which did nothing).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ItemSprite {
     pub sprite: SpriteId,
     pub layer: u8,
-    /// Tiles.
-    pub size: [f32; 2],
     /// `drawlist::rgba`.
     pub color: u32,
 }
@@ -93,9 +93,7 @@ pub fn draw_items<G: Game>(
                 return;
             }
             let s = style.sprite(item.0);
-            let d = out.sprite(s.layer, wp, s.sprite);
-            d.size = s.size;
-            d.color = s.color;
+            out.sprite(s.layer, wp, s.sprite).color = s.color;
             st.items += 1;
         });
     }

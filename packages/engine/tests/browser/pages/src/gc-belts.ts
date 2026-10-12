@@ -3,8 +3,9 @@
 // `SaturatedView { jam_pct: 0, period: 0 }` at scale 32 (four rows of 256 belt tiles, every lane
 // packed and flowing into a sink); the camera sits still over the stream, 64 tiles of it in view
 // (about 2,000 items, `fixtures/belts/src/client.rs` drawing each as a sprite through
-// `transport::draw::draw_items`). `drive()` steps one sim tick and one 50 ms frame (the item clock
-// moving with the follower's tick), drains uploads and draws terrain plus the drawables layers.
+// `transport::draw::draw_items`, after one belt sprite per belt tile in view since M50). `drive()`
+// steps one sim tick and one 50 ms frame (the item clock moving with the follower's tick), drains
+// uploads and draws terrain plus the drawables layers.
 // Setup (the join, the forecasts' first lists) runs before `installGcPage`, outside every window.
 
 import { clientTestHandle, createClient } from '../../../../src/client.ts'
@@ -31,8 +32,8 @@ import { fixtureWasm } from './fixture-wasm.ts'
 declare global {
   interface Window {
     __pageReady?: true
-    /** Records in the last published DrawList (the items drawn), read after setup. */
-    __beltsItemsDrawn?: number
+    /** Records in the last published DrawList (belt tiles and items drawn), read after setup. */
+    __beltsRecords?: number
   }
 }
 
@@ -90,8 +91,8 @@ drawablesRenderer.setSpriteAtlas(
   }),
 )
 
-// The stream: rows 0..3, x 0..256; 64 tiles across at 20 px a tile (the fixture style draws nothing
-// below 4).
+// The stream: rows 0..3, x 0..256; 64 tiles across at 20 px a tile, exactly the fixture style's
+// item cut (no item below 20).
 const { cameraState } = client
 cameraState.centreX = 128
 cameraState.centreY = 2
@@ -112,7 +113,7 @@ harness.stepFrame(FRAME_MS)
 harness.stepTick()
 
 const records: DrawRecord[] = []
-window.__beltsItemsDrawn = drawListRecords(client, records)
+window.__beltsRecords = drawListRecords(client, records)
 
 const uploadDrain = createUploadDrain(new RingConsumer(client.uploadRing), renderer, {
   sabWriteTextureOk: device.sabWriteTextureOk,
