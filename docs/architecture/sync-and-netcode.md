@@ -46,9 +46,13 @@ allocate nothing; readers borrow and never panic.
   and put again, so no client ever steps a stale model. The client runs no belt rule: `transport/follow.rs` moves each item to
   `max(pos - speed, stop)` per tick, follows `Next` links it holds, replays declared spawners, and applies each frame's records around
   that step; its items are never hashed (0078 §6).
-- **Versions, not acks.** A chunk's version is the tick of its last replicated change. The host stamps every footprint chunk of every
-  write; a replica takes its version only from a snapshot or a frame-tick bump, so a stale replica version can only cause an over-snapshot,
-  never a wrong keep ([0064](../decisions/0064-phase-3-decisions-sync-and-netcode.md) §18). `Host::chunk_versions` is never pruned (§17).
+- **Versions, not acks.** A chunk's version is the tick of its last replicated change. The host stamps a tile write's chunk, every
+  chunk of every write of an entity that existed at tick start, and only the tick-end footprint of one born this tick, so an entity
+  born and gone in one tick stamps nothing (M48, `Host::tick`). The replica bumps a coalesced op's tick-start and tick-end footprints,
+  so two cases still over-stamp on the host (its region hash differs): an old entity moved twice across chunks, or moved and then
+  gone, in one tick. A replica takes its version only from a snapshot or a frame-tick bump, so a stale replica version can only cause
+  an over-snapshot, never a wrong keep ([0064](../decisions/0064-phase-3-decisions-sync-and-netcode.md) §18). `Host::chunk_versions`
+  is never pruned (§17).
 - The uplink is `UplinkBatch`: pending actions, the latest `CameraReport` (16 B, never seen by the sim), the latest presence sample,
   `last_received_tick`. Entity ids are never encoded as provisional (below).
 - `codec.rs` bytes feed snapshots, the log and `hash.rs` (`Fnv64`); see [determinism](../../.claude/rules/determinism.md).
@@ -67,8 +71,9 @@ allocate nothing; readers borrow and never panic.
   refill, 128 KB burst, visible chunks first, then nearest the look-ahead centre); tick frames never queue behind it. Soft cap 16 KB/s of
   frames: past it, or when the `last_received_tick` backlog grows, the connection degrades to every 2nd, then 4th tick, and a chunk whose
   queued deltas exceed its snapshot is collapsed into a snapshot. Hard ceiling 64 KB/s. Known limits: degrade cannot get a client under the
-  soft cap by itself, per-tick pacing cost is not O(1) per client, and a frame that overflows the `SliceSink` loses other chunks' deltas
-  ([0064](../decisions/0064-phase-3-decisions-sync-and-netcode.md) §20-22).
+  soft cap by itself and per-tick pacing cost is not O(1) per client ([0064](../decisions/0064-phase-3-decisions-sync-and-netcode.md)
+  §20-22). A frame that overflows the `SliceSink` is lost whole: the host re-sends every held chunk it carried a delta for as a queued
+  snapshot and sends `Gone` for the lines it named ([0078](../decisions/0078-transport-forecast-replication.md) A8; M48).
 - **Admission rate limit**: 20 actions/s, burst 40, `EngineReject::RateLimited`; unlogged and leaves the action pending (§10). The client
   refuses to dispatch past 32 pending (`OUTBOX_CAPACITY`).
 - Games must never replicate per-tick progress: replicate parameters (`started_at`, `done_at`) and derive bars from the tick clock. Byte

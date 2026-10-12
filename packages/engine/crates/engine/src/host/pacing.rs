@@ -5,7 +5,7 @@
 //! Host-side, unlogged and a function of tick count alone: the bucket refills per tick in integer
 //! bytes (`refill / tick rate`, the remainder carried), the soft-cap window is 1 s of ticks, and
 //! nothing reads a wall clock, so a run is reproducible under the virtual clock
-//! (`.claude/rules/determinism.md`). Every `Vec` is reserved once in [`Pacing::new`] (a connection that outgrows a reservation, such as a `view.maxChunks` above 160, grows once); steady state
+//! (`.claude/rules/determinism.md`). Every `Vec` is reserved once in [`Pacing::new`], the frame hold in [`Pacing::with_hold_for`] from the frame buffer's size (M48) (a connection that outgrows a reservation, such as a `view.maxChunks` above 160, grows once); steady state
 //! allocates nothing (`.claude/rules/hot-paths.md`).
 
 use crate::time::TickRate;
@@ -209,8 +209,24 @@ pub struct Pacing {
     pub camera_held: Option<crate::wire::CameraReport>,
     /// Frames that did not fit the output buffer and were rebuilt next tick.
     pub overflows: u64,
+    /// Held chunks queued for a snapshot because a lost frame carried their deltas (M48).
+    pub lost_resnapshots: u64,
+    /// `take_bundle` calls whose first held frame was longer than `out` (M48).
+    pub bundles_too_large: u64,
+    /// The most bytes the hold has held, measured after each append (before a bundle takes from
+    /// it): `hold_bytes(tx)` bounds it (M48).
+    pub hold_high_water: usize,
     /// Consecutive overflows: each halves the next frame's chunk budget.
     pub overflow_shift: u32,
+}
+
+/// `Pacing::take_bundle`'s refusal: the first held frame is longer than the output buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BundleTooLarge;
+
+/// The hold's reservation for frames built into `tx` bytes: two `[len varint][frame]` records.
+pub fn hold_bytes(tx: usize) -> usize {
+    2 * (tx + 10)
 }
 
 impl Pacing {
@@ -234,12 +250,14 @@ impl Pacing {
             acking: false,
             backlog_sample: 0,
             last_uplink_tick: now,
-            hold: Vec::with_capacity(8192),
+            // Sized from the frame buffer by the host (`with_hold_for`, M48).
+            hold: Vec::new(),
             hold_frames: 0,
             held_since: now,
             last_emit_tick: now,
             delta_est: Vec::with_capacity(160),
-            collapsed: Vec::with_capacity(16),
+            // Every held chunk may be collapsed at once (a lost frame re-sends each it changed, M48).
+            collapsed: Vec::with_capacity(160),
             recent_leaves: Vec::with_capacity(1024),
             late_hist: [0; LATE_BUCKETS],
             late_total: 0,
@@ -263,6 +281,9 @@ impl Pacing {
             camera_reports_dropped: 0,
             camera_held: None,
             overflows: 0,
+            lost_resnapshots: 0,
+            bundles_too_large: 0,
+            hold_high_water: 0,
             overflow_shift: 0,
         }
     }
@@ -332,6 +353,11 @@ impl Pacing {
 
     pub fn cfg(&self) -> BandwidthConfig {
         self.cfg
+    }
+
+    /// Replaces a live connection's limits (native tests: degrade engaging mid-run, M48).
+    pub fn set_cfg(&mut self, cfg: BandwidthConfig) {
+        self.cfg = cfg;
     }
 
     pub fn is_held(&self, c: ChunkCoord) -> bool {
@@ -548,11 +574,75 @@ impl Pacing {
         }
     }
 
-    /// Moves as many whole held frames as fit into `out` (at least one): a lone frame goes out as it
-    /// was built, several as a `FrameBundle` (`wire/bundle.rs`; the hold already stores its body,
-    /// `[len varint][frame]` per frame). Returns `(bytes written, frames sent)`; frames that do not
-    /// fit stay held.
-    pub fn take_bundle(&mut self, out: &mut [u8]) -> (usize, u32) {
+    /// Reserves the hold for frames built into a `tx`-byte buffer (M48): the emission rule holds at
+    /// most one frame left over from a bundle plus the tick's own (a hold of `tx / 2` or more is
+    /// due, and a due bundle takes every frame that fits after the first), so two records of
+    /// `tx` bytes and a length prefix each never reallocate it, at any degrade level.
+    pub fn with_hold_for(mut self, tx: usize) -> Self {
+        self.hold = Vec::with_capacity(hold_bytes(tx));
+        self
+    }
+
+    /// The pacing tail of a degraded (or holding) connection (`Host::build_frame`): holds this
+    /// tick's frame (`out[..n]`, a pure heartbeat only when nothing is held) and, when the hold is
+    /// due (`level` frames waited, the heartbeat gap reached, or `out.len() / 2` bytes held),
+    /// writes the held frames that fit into `out` ([`Pacing::take_bundle`]). `Some(bytes)` when a
+    /// message was written, `None` when nothing goes this tick.
+    pub fn hold_or_bundle(
+        &mut self,
+        tick: u32,
+        n: usize,
+        out: &mut [u8],
+        since_emit: u32,
+        heartbeat_ticks: u32,
+    ) -> Option<usize> {
+        use crate::bytes::{ByteSink, SliceSink};
+        let level = self.level as u32;
+        // A pure heartbeat rides only when nothing is held (it exists to break silence).
+        let heartbeat_only = n == 10;
+        if n > 0 && !(heartbeat_only && self.hold_frames > 0) {
+            if self.hold_frames == 0 {
+                self.held_since = tick;
+            }
+            let mut len = [0u8; 10];
+            let mut ls = SliceSink::new(&mut len);
+            ls.put_varint(n as u64);
+            let ln = ls.finish().unwrap_or(0);
+            self.hold.extend_from_slice(&len[..ln]);
+            self.hold.extend_from_slice(&out[..n]);
+            self.hold_frames += 1;
+            self.hold_high_water = self.hold_high_water.max(self.hold.len());
+        }
+        let waited = tick.wrapping_sub(self.held_since) + 1;
+        let due = self.hold_frames > 0
+            && (level == 1
+                || waited >= level
+                || since_emit >= heartbeat_ticks
+                || self.hold.len() >= out.len() / 2);
+        if !due {
+            return None;
+        }
+        // M48: a first held frame longer than `out` stays held (counted); nothing goes this tick.
+        let (emitted, frames) = self.take_bundle(out).ok()?;
+        if frames > 1 {
+            self.bundles += 1;
+        }
+        if self.hold_frames > 0 {
+            self.held_since = tick;
+        }
+        Some(emitted)
+    }
+
+    /// Moves as many whole held frames as fit into `out`: a lone frame goes out as it was built,
+    /// several as a `FrameBundle` (`wire/bundle.rs`; the hold already stores its body, `[len
+    /// varint][frame]` per frame). Returns `(bytes written, frames sent)`; frames that do not fit
+    /// stay held. M48: never panics. Precondition: `out.len()` is the connection's `Tx`, the size
+    /// the hold was reserved for (`with_hold_for`), as in production (`SIM_TX_BYTES`, fixed). A
+    /// smaller `out` whose first held frame does not fit is `Err(BundleTooLarge)`: nothing is
+    /// written, every frame stays held, `bundles_too_large` counts it and the caller emits nothing
+    /// this tick; while `out` stays that small the connection stalls and its hold grows (only a
+    /// test that varies `out` reaches this; `PacingCounters` does not carry the counter).
+    pub fn take_bundle(&mut self, out: &mut [u8]) -> Result<(usize, u32), BundleTooLarge> {
         use crate::bytes::ByteReader;
         let mut end = 0usize;
         let mut frames = 0u32;
@@ -568,6 +658,10 @@ impl Pacing {
                 break;
             }
             if frames == 0 {
+                if len as usize > out.len() {
+                    self.bundles_too_large += 1;
+                    return Err(BundleTooLarge);
+                }
                 first_len = len as usize;
                 first_start = head;
             }
@@ -577,7 +671,7 @@ impl Pacing {
         if frames == 0 {
             self.hold.clear();
             self.hold_frames = 0;
-            return (0, 0);
+            return Ok((0, 0));
         }
         let written = if frames == 1 {
             out[..first_len].copy_from_slice(&self.hold[first_start..first_start + first_len]);
@@ -595,7 +689,7 @@ impl Pacing {
         };
         self.hold.drain(..end);
         self.hold_frames -= frames;
-        (written, frames)
+        Ok((written, frames))
     }
 
     pub fn counters(&self) -> PacingCounters {
@@ -858,7 +952,7 @@ mod tests {
             p.hold_frames += 1;
         }
         let mut out = [0u8; 64];
-        let (n, sent) = p.take_bundle(&mut out);
+        let (n, sent) = p.take_bundle(&mut out).unwrap();
         assert_eq!(sent, 3);
         let mut expected = [0u8; 64];
         let mut sink = SliceSink::new(&mut expected);
@@ -885,10 +979,103 @@ mod tests {
         p.hold.extend_from_slice(frame);
         p.hold_frames += 1;
         let mut out = [0u8; 64];
-        let (n, sent) = p.take_bundle(&mut out);
+        let (n, sent) = p.take_bundle(&mut out).unwrap();
         assert_eq!((n, sent), (frame.len(), 1));
         assert_eq!(&out[..n], frame);
         assert_eq!(out[0], 0x01);
+    }
+
+    /// M48: a first held frame longer than `out` (only a caller varying its buffer reaches this:
+    /// a lossy test's 64 B frame after full-size frames were held) once panicked in
+    /// `out[..first_len].copy_from_slice`; now it is `Err`, nothing is written, every frame stays
+    /// held and is counted, and the next call with room sends them as before.
+    #[test]
+    fn pacing_bundle_first_frame_larger_than_out() {
+        use crate::bytes::{ByteSink, SliceSink};
+        let frames: [&[u8]; 2] = [&[5; 100], &[5, 1, 2]];
+        let mut p = pacing();
+        for f in frames {
+            let mut len = [0u8; 10];
+            let mut ls = SliceSink::new(&mut len);
+            ls.put_varint(f.len() as u64);
+            let ln = ls.finish().unwrap();
+            p.hold.extend_from_slice(&len[..ln]);
+            p.hold.extend_from_slice(f);
+            p.hold_frames += 1;
+        }
+        let held = p.hold.clone();
+        let mut small = [0xEEu8; 64];
+        assert_eq!(p.take_bundle(&mut small), Err(BundleTooLarge));
+        assert_eq!(small, [0xEE; 64], "nothing written");
+        assert_eq!((p.hold.as_slice(), p.hold_frames), (held.as_slice(), 2));
+        assert_eq!(p.bundles_too_large, 1);
+        let mut out = [0u8; 256];
+        let (n, sent) = p.take_bundle(&mut out).unwrap();
+        assert_eq!(sent, 2);
+        let mut r = crate::wire::BundleReader::new(&out[..n]).unwrap();
+        for f in frames {
+            assert_eq!(r.next_frame().unwrap(), Some(f));
+        }
+        assert_eq!((p.hold.len(), p.hold_frames), (0, 0));
+    }
+
+    /// M48: the hold's reservation (`hold_bytes(tx)`, two records) is never outgrown. Frames of
+    /// `tx`, `tx / 2 + 1`, `tx / 2 - 3` and 100 bytes, in the order a fixed LCG draws, go through
+    /// the real tail (`hold_or_bundle`) at levels 2 and 4 for 2,000 ticks each. `tx / 2 - 3` is
+    /// the largest frame that stays held below the half-`out` due line (its record, with a 2 B
+    /// length varint, is 2,047 B < 2,048); `tx / 2 + 1` is the smallest that is due on arrival.
+    /// The worst case is a leftover `tx` record plus a new one (a small frame then two full ones:
+    /// the bundle takes only the small one), `2 x (tx + 2)` B, and the run reaches it at both
+    /// levels. After every tick the hold's capacity is the reserved one and its length at most
+    /// `hold_bytes(tx)`; messages and bundles are pinned (fixed seed).
+    #[test]
+    fn pacing_hold_never_exceeds_two_records() {
+        const TX: usize = 4_096;
+        // A small frame too, so frames do bundle (two of the others never fit one message).
+        let sizes = [TX, TX / 2 + 1, TX / 2 - 3, 100];
+        // `(level, messages, bundles)`, pinned.
+        for (level, want_emitted, want_bundles) in [(2u8, 1_631u32, 368u64), (4, 1_587, 358)] {
+            let mut p = pacing().with_hold_for(TX);
+            let cap = p.hold.capacity();
+            assert_eq!(cap, hold_bytes(TX), "reserved exactly the bound");
+            let mut out = vec![0u8; TX];
+            let (mut last_emit, mut emitted) = (0u32, 0u32);
+            let mut seed = 0x2545_F491u32;
+            for tick in 1..=2_000u32 {
+                p.level = level;
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                let n = sizes[(seed >> 16) as usize % sizes.len()];
+                out[..n].fill(tick as u8);
+                out[0] = 0x01;
+                if p.hold_or_bundle(tick, n, &mut out, tick - last_emit, 20)
+                    .is_some()
+                {
+                    last_emit = tick;
+                    emitted += 1;
+                }
+                assert_eq!(
+                    p.hold.capacity(),
+                    cap,
+                    "level {level}, tick {tick}: the hold grew"
+                );
+                assert!(
+                    p.hold.len() <= hold_bytes(TX),
+                    "level {level}, tick {tick}: {} B held over {}",
+                    p.hold.len(),
+                    hold_bytes(TX)
+                );
+            }
+            assert_eq!(
+                p.hold_high_water,
+                2 * (TX + 2),
+                "level {level}: the largest hold (a leftover full record and a new one)"
+            );
+            assert_eq!(
+                (emitted, p.bundles),
+                (want_emitted, want_bundles),
+                "level {level}: messages and bundles"
+            );
+        }
     }
 
     #[test]

@@ -533,10 +533,10 @@ impl<G: Game> Replica<G> {
     }
 
     /// Bumps every *held* chunk under the entity's old footprint (read before applying) and its new
-    /// one, the host's own rule: it stamps every chunk in a write's scopes
-    /// (`Authority::entity_scopes`: old and new footprint chunks), so a footprint straddling a
-    /// chunk boundary bumps both halves. Anchor-only bumping left a held non-anchor chunk's version
-    /// stale, which `region_hash` and the resume diff both see (M34d.
+    /// one: a frame carries one coalesced put per entity, so a footprint straddling a chunk
+    /// boundary bumps both halves. The host's stamp rule: `docs/architecture/sync-and-netcode.md`
+    /// ("Versions, not acks"). Anchor-only bumping left a held non-anchor chunk's version
+    /// stale, which `region_hash` and the resume diff both see (M34d).
     pub(crate) fn apply_entity_put(&mut self, id: EntityId, entity: G::Entity) {
         let new_rect = self.footprint_of(&entity);
         let old_rect = self.store.entity(id).map(|e| self.footprint_of(e));

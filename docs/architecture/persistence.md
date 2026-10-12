@@ -37,6 +37,8 @@ Loss windows: after a tab close or WASM panic no admitted action is lost; after 
 3. Replay the chosen tail in two passes: `sim_replay_scan_*` collects `Skip` targets (a `Skip` points at an earlier frame), then `sim_replay_begin/push/end` applies. Replay stops at the first torn or CRC-failing frame; the log is truncated with `Storage.write(log, validPrefix)` (`Storage` has no truncate; every adapter must accept `append` after `write` on the same key).
 4. If the identity changed, `openNewSegmentAfterUpgrade` (`host/upgrade.ts`): write the new snapshot, `flush()`, write the manifest (old segment sealed, `tailReexecuted` set), append the new header.
 
+After every `sim_restore_end` and `sim_upgrade_end` (restore, direct upgrade, migrate; never genesis) the host calls `Game::declare_spawners` once, because a transport spawner's schedule is derived and not saved: the game declares each again as saved, and the forecast tracker arms them from the first restored tick ([0079](../decisions/0079-transport-core-decisions.md) §19 (a); M48).
+
 `WorldLoadError.kind` is `'corrupt' | 'container' | 'incompatible'`; `'identity'` exists in the type but nothing throws it, and `'container'` is raised for a snapshot whose container version is not this build's (reason `Container`, surfaced as `save-incompatible`, no fallback to an older snapshot or a genesis replay: [0079](../decisions/0079-transport-core-decisions.md) §6). A load failure leaves every stored byte untouched. The client sees it as `save-incompatible` rejecting `client.ready`; a busy lock is `world-busy` ([0050](../decisions/0050-engine-failure-surface.md)).
 
 ## Upgrades and migration

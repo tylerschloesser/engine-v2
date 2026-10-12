@@ -241,6 +241,10 @@ const SIM_RX_BYTES: u32 = 4096;
 /// (Non-scope, M31), and `Host::build_frame`'s own `SliceSink` silently truncates rather than
 /// panicking if a real deployment ever needs more (Deviations records this as provisional).
 const SIM_TX_BYTES: u32 = 65536;
+/// The per-frame chunk lists' reservation (`scratch_entered`, `_snapshot`, ...): a connection's
+/// held set, as `Pacing` reserves it (M48: a degraded connection's collapses re-snapshot more
+/// chunks in one frame than its warm-up ever did, a new high-water mark inside a measured window).
+const CHUNK_SCRATCH: usize = 160;
 
 /// `RegionId::Persist`'s size on the sim role (M22
 /// Seams: "sized here at 256 KiB"): log frames (`sim_seal_frame`, `sim_segment_header`) and
@@ -869,14 +873,17 @@ impl<G: Game> Host<G> {
             scratch_hash_picks: Vec::with_capacity(4),
             last_tick: Tick(0),
             scratch_roster: Vec::new(),
-            scratch_entered: Vec::new(),
-            scratch_left: Vec::new(),
-            scratch_pristine: Vec::new(),
-            scratch_snapshot: Vec::new(),
-            scratch_snap_bytes: Vec::new(),
-            scratch_snap_spans: Vec::new(),
-            scratch_new_held: Vec::new(),
-            scratch_keep: Vec::new(),
+            scratch_entered: Vec::with_capacity(CHUNK_SCRATCH),
+            scratch_left: Vec::with_capacity(CHUNK_SCRATCH),
+            scratch_pristine: Vec::with_capacity(CHUNK_SCRATCH),
+            scratch_snapshot: Vec::with_capacity(CHUNK_SCRATCH),
+            // A frame's snapshots stay under the bucket's frame cap (half of `Tx`) plus the one
+            // that did not fit: reserved at the frame size (M48: a degraded connection's collapses
+            // reached a new high-water mark inside a measured window).
+            scratch_snap_bytes: Vec::with_capacity(SIM_TX_BYTES as usize),
+            scratch_snap_spans: Vec::with_capacity(CHUNK_SCRATCH),
+            scratch_new_held: Vec::with_capacity(CHUNK_SCRATCH),
+            scratch_keep: Vec::with_capacity(CHUNK_SCRATCH),
             scratch_delta_est: Vec::with_capacity(160),
             scratch_held: Vec::with_capacity(256),
             scratch_snapshot_len: Vec::new(),
@@ -1000,6 +1007,14 @@ impl<G: Game> Host<G> {
         }
     }
 
+    /// Held chunks `conn` queued for a snapshot because a lost frame carried their deltas (M48).
+    pub fn debug_lost_resnapshots(&self, conn: ConnId) -> u64 {
+        match self.conns.get(conn as usize) {
+            Some(Some(slot)) => slot.pace.lost_resnapshots,
+            _ => 0,
+        }
+    }
+
     /// Pacing counters and gauges for `conn` (`sim_conn_counters`' tail, M31): re-enters, cap evictions, late-visible ticks, degrade level,
     /// queue depth and bucket level.
     pub fn pacing_counters(&self, conn: ConnId) -> Option<PacingCounters> {
@@ -1013,6 +1028,14 @@ impl<G: Game> Host<G> {
     /// ABI path sets it from `WorldConfig.bandwidth` at init).
     pub fn set_bandwidth(&mut self, cfg: BandwidthConfig) {
         self.bandwidth = cfg;
+    }
+
+    /// Replaces a connected connection's pacing limits (native tests: a soft cap that degrades it
+    /// mid-run, M48).
+    pub fn set_conn_bandwidth(&mut self, conn: ConnId, cfg: BandwidthConfig) {
+        if let Some(Some(slot)) = self.conns.get_mut(conn as usize) {
+            slot.pace.set_cfg(cfg);
+        }
     }
 
     /// The chunk-bucket entry point for a snapshot of a chunk `conn` already holds (M31 Provides, M31b's resync answer): queued behind the same bucket,
@@ -1196,7 +1219,8 @@ impl<G: Game> Host<G> {
             presence_relayed: BTreeMap::new(),
             last_sent_tick: self.last_tick,
             resume_pending: None,
-            pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0),
+            pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0)
+                .with_hold_for(SIM_TX_BYTES as usize),
             hashes: hashes::HashSchedule::new(self.last_tick.0, G::TICK_RATE.hz_value()),
             #[cfg(feature = "measure-diff")]
             measure_prev: Default::default(),
@@ -1260,7 +1284,8 @@ impl<G: Game> Host<G> {
             presence_relayed: BTreeMap::new(),
             last_sent_tick: self.last_tick,
             resume_pending: None,
-            pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0),
+            pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0)
+                .with_hold_for(SIM_TX_BYTES as usize),
             hashes: hashes::HashSchedule::new(self.last_tick.0, G::TICK_RATE.hz_value()),
             #[cfg(feature = "measure-diff")]
             measure_prev: Default::default(),
@@ -1513,7 +1538,8 @@ impl<G: Game> Host<G> {
             presence_relayed: BTreeMap::new(),
             last_sent_tick: self.last_tick,
             resume_pending,
-            pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0),
+            pace: Pacing::new(self.bandwidth, G::TICK_RATE, self.last_tick.0)
+                .with_hold_for(SIM_TX_BYTES as usize),
             hashes: hashes::HashSchedule::new(self.last_tick.0, G::TICK_RATE.hz_value()),
             #[cfg(feature = "measure-diff")]
             measure_prev: Default::default(),
@@ -1833,6 +1859,8 @@ impl<G: Game> Host<G> {
             }
         }
         let completed = sim.tick();
+        // M48: an entity id at or past this was born this tick (ids are never reused, 0022 §1).
+        let born_from = sim.authority().store().next_entity_id();
         // M24: `record` is the *index* of the record inside
         // `pending_records` while ticking live (the byte-offset meaning only applies to the
         // replay apply pass, `Host::sim_replay_end`) -- written before each per-record call so a
@@ -1844,10 +1872,29 @@ impl<G: Game> Host<G> {
         sim.step_with_progress(pending_records, outcomes, &mut hook);
         pending_records.clear();
         *last_tick = completed;
-        for (scopes, _delta) in sim.authority().changes() {
+        // M48: a chunk's version moves iff the tick's net effect on it is visible, the rule a
+        // replica applying the tick's deltas follows (it bumps only on an applied delta): a tile
+        // write; an entity that exists at tick end, in the chunks it now overlaps; an entity that
+        // existed at tick start, in every chunk of its writes (where it was, and where it is). An
+        // entity born and gone in one tick stamps nothing (a replica never sees it). Known
+        // over-stamp: a chunk an old entity crossed only in the middle of the tick (two moves).
+        let store = sim.authority().store();
+        for (scopes, delta) in sim.authority().changes() {
+            let born = match delta {
+                Delta::EntityPut { id, .. } | Delta::EntityGone { id } if id.0 >= born_from => {
+                    Some(*id)
+                }
+                _ => None,
+            };
             for scope in scopes.iter() {
                 if let Scope::Chunk(c) = scope {
-                    chunk_versions.insert(c, completed.0);
+                    let visible = match born {
+                        None => true,
+                        Some(id) => store.chunk_overlapping(c).binary_search(&id).is_ok(),
+                    };
+                    if visible {
+                        chunk_versions.insert(c, completed.0);
+                    }
                 }
             }
         }
@@ -1878,6 +1925,30 @@ impl<G: Game> Host<G> {
             sim.authority_mut().drain_structure_changes();
             sim.authority_mut().seal_forecasts();
         }
+    }
+
+    /// After every `Sim::from_parts` (restore, upgrade, migrate; M48): the structure prices are
+    /// another store's, and the game declares its spawner schedules again
+    /// (`Game::declare_spawners`), which the tracker arms from the first restored tick. Runs once
+    /// per restore, so the declarations' scratch `Vec` is not a hot-path allocation.
+    fn after_from_parts(&mut self) {
+        self.struct_prices.clear();
+        let Some(sim) = self.sim.as_mut() else {
+            return;
+        };
+        let mut declared: Vec<(crate::transport::LineId, crate::transport::Schedule)> = Vec::new();
+        G::declare_spawners(
+            &crate::game::RestoredCx::new(sim.authority()),
+            &mut |line, s| declared.push((line, s)),
+        );
+        if declared.is_empty() {
+            return;
+        }
+        let t = sim.authority_mut().store_mut().transport_mut();
+        for (line, s) in declared {
+            crate::transport::TransportWrite::set_spawner(t, line, Some(s));
+        }
+        t.forecast_close_restored();
     }
 
     /// Builds one connection's frame for the tick `tick()` last completed into `out`, returning
@@ -2668,6 +2739,32 @@ impl<G: Game> Host<G> {
                     slot.pace.enqueue(c, EnterKind::Resnapshot, p, tick_now);
                 }
             }
+            // M48: the lost frame's `ChunkDeltas` are gone too (`seal` clears the change log), so
+            // every held chunk it carried a delta for is re-sent whole, as the lines send `Gone`
+            // for the lines a lost frame named (0078 A8): queued as a snapshot, its deltas
+            // suppressed until then. A chunk any delta of the tick was scoped to counts (the
+            // routing's own held test), a superset of what the frame carried for entities.
+            for (scopes, delta) in changes {
+                if matches!(
+                    delta,
+                    Delta::Player { .. }
+                        | Delta::Global { .. }
+                        | Delta::Roster { .. }
+                        | Delta::Ack { .. }
+                ) {
+                    continue;
+                }
+                for scope in scopes.iter() {
+                    let Scope::Chunk(c) = scope else { continue };
+                    if held_flags(&self.scratch_held, c) != Some(0) || slot.pace.is_collapsed(c) {
+                        continue;
+                    }
+                    slot.pace.collapsed.push(c);
+                    let p = priority(&slot.subs, c);
+                    slot.pace.enqueue(c, EnterKind::Resnapshot, p, tick_now);
+                    slot.pace.lost_resnapshots += 1;
+                }
+            }
             slot.pace.overflows += 1;
             slot.pace.overflow_shift += 1;
         }
@@ -2746,37 +2843,11 @@ impl<G: Game> Host<G> {
             }
             return n;
         }
-        // A pure heartbeat rides only when nothing is held (it exists to break silence).
-        let heartbeat_only = n == 10;
-        if n > 0 && !(heartbeat_only && pace.hold_frames > 0) {
-            if pace.hold_frames == 0 {
-                pace.held_since = tick;
-            }
-            let mut len = [0u8; 10];
-            let mut ls = SliceSink::new(&mut len);
-            ls.put_varint(n as u64);
-            let ln = ls.finish().unwrap_or(0);
-            pace.hold.extend_from_slice(&len[..ln]);
-            pace.hold.extend_from_slice(&out[..n]);
-            pace.hold_frames += 1;
-        }
+        // The hold and the bundle (M48: `Pacing::hold_or_bundle`, unit-tested against its bound).
         let since_emit = tick.wrapping_sub(slot.last_sent_tick.0);
-        let waited = tick.wrapping_sub(pace.held_since) + 1;
-        let due = pace.hold_frames > 0
-            && (level == 1
-                || waited >= level
-                || since_emit >= heartbeat_ticks
-                || pace.hold.len() >= out.len() / 2);
-        if !due {
+        let Some(emitted) = pace.hold_or_bundle(tick, n, out, since_emit, heartbeat_ticks) else {
             return 0;
-        }
-        let (emitted, frames) = pace.take_bundle(out);
-        if frames > 1 {
-            pace.bundles += 1;
-        }
-        if pace.hold_frames > 0 {
-            pace.held_since = tick;
-        }
+        };
         slot.counters.bytes_down += emitted as u64;
         slot.last_sent_tick = self.last_tick;
         pace.note_emit(tick);
@@ -3036,14 +3107,17 @@ where
             scratch_hash_picks: Vec::with_capacity(4),
             last_tick: Tick(0),
             scratch_roster: Vec::new(),
-            scratch_entered: Vec::new(),
-            scratch_left: Vec::new(),
-            scratch_pristine: Vec::new(),
-            scratch_snapshot: Vec::new(),
-            scratch_snap_bytes: Vec::new(),
-            scratch_snap_spans: Vec::new(),
-            scratch_new_held: Vec::new(),
-            scratch_keep: Vec::new(),
+            scratch_entered: Vec::with_capacity(CHUNK_SCRATCH),
+            scratch_left: Vec::with_capacity(CHUNK_SCRATCH),
+            scratch_pristine: Vec::with_capacity(CHUNK_SCRATCH),
+            scratch_snapshot: Vec::with_capacity(CHUNK_SCRATCH),
+            // A frame's snapshots stay under the bucket's frame cap (half of `Tx`) plus the one
+            // that did not fit: reserved at the frame size (M48: a degraded connection's collapses
+            // reached a new high-water mark inside a measured window).
+            scratch_snap_bytes: Vec::with_capacity(SIM_TX_BYTES as usize),
+            scratch_snap_spans: Vec::with_capacity(CHUNK_SCRATCH),
+            scratch_new_held: Vec::with_capacity(CHUNK_SCRATCH),
+            scratch_keep: Vec::with_capacity(CHUNK_SCRATCH),
             scratch_delta_est: Vec::with_capacity(160),
             scratch_held: Vec::with_capacity(256),
             scratch_snapshot_len: Vec::new(),
@@ -3529,7 +3603,7 @@ where
         );
         authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
         self.sim = Some(Sim::from_parts(authority));
-        self.struct_prices.clear();
+        self.after_from_parts();
         self.last_logged_tick = Tick(info.log_ref_tick);
         let Some(out) = result.get_mut(..8) else {
             return Status::BadLength;
@@ -3611,7 +3685,7 @@ where
                 );
                 authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
                 self.sim = Some(Sim::from_parts(authority));
-                self.struct_prices.clear();
+                self.after_from_parts();
                 self.last_logged_tick = Tick(env.log_ref_tick);
                 let Some(out) = result.get_mut(..9) else {
                     return Status::BadLength;
@@ -3658,7 +3732,7 @@ where
                     Ok((mut authority, _outcome)) => {
                         authority.set_budget(max_entities, max_modified_tiles, max_action_growth);
                         self.sim = Some(Sim::from_parts(authority));
-                        self.struct_prices.clear();
+                        self.after_from_parts();
                         // decision 6: the tail is dropped whole, never replayed -- the new segment
                         // (opened by the TS host) starts with no frame logged yet.
                         self.last_logged_tick = Tick(0);

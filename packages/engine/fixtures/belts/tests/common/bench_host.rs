@@ -60,8 +60,12 @@ pub struct BenchHost {
 impl BenchHost {
     /// Genesis of `spec`'s world, eight connections with maximum-view cameras.
     pub fn new(spec: BenchSpec) -> Self {
+        Self::with_host(Host::<Belts>::genesis_for_test(params(spec)), spec, 0)
+    }
+
+    /// `host` (a genesis or a restored world of `spec`, at `tick`) with the same eight connections.
+    pub fn with_host(mut host: Host<Belts>, spec: BenchSpec, tick: u32) -> Self {
         let world = world_of(spec);
-        let mut host = Host::<Belts>::genesis_for_test(params(spec));
         // A CPU worst case beyond the bandwidth budget (0020 section 9, as M36): never hold a chunk
         // back and never degrade a connection, so every tick builds every frame in full.
         host.set_bandwidth(BandwidthConfig {
@@ -75,7 +79,7 @@ impl BenchHost {
         let (span_x, span_y) = ((w - 256).max(0), (h - 256).max(0));
         let mut me = BenchHost {
             host,
-            tick: 0,
+            tick,
             tx: vec![0; TX_BYTES],
             last_frame_bytes: 0,
         };

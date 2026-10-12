@@ -15,7 +15,7 @@ from_line, to_line }` (`Next`), `Spawner { line, item, period }`, `Sink { line }
 `Thing::Spawner` on the `"spawner"` active list: `acc += 256` per tick; at `acc >= period` (1/256
 ticks per item, `>= 256`) one `insert_back`, accepted `acc -= period`, refused `acc -= 256` (held,
 never a burst); it is written only when its state changed, and declares that rule (M47b,
-`set_spawner`) after its first step on the list. `Action::Noop` stays first; `SCHEMA_VERSION` 2. M43b adds `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`, `Remove`,
+`set_spawner`) after its first step on the list, again after a restore (M48, `declare_spawners`). `Action::Noop` stays first; `SCHEMA_VERSION` 2. M43b adds `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`, `Remove`,
 `TakeFront`, `Segments` and a `Thing::Tally` of accepted item requests; M44b `Merge`, `Fork`
 (`set_out`) and `Destroy` (counted in `Thing::Destroyed`); M46 `Speed` (`set_speed`, appended
 last so no encoded op moved). Semantics: the `src/lib.rs` module doc.
@@ -53,7 +53,8 @@ transport_budget_exceeds`; `belts_golden_bench_64` (`golden/scenario-bench-64.js
 genesis at 1/64 natively, under Node and under Bun; `pnpm test:slow rust -t slow_tick_belts_large` (gated by
 `baselines/belts-tick.json`, 5 ms median; re-runs itself in release through
 `engine::testing::bench`), `-t slow_snapshot_belts_large` (reported); the `.wasm` twin is `pnpm
-test:slow netcode -t "tick-belts-large node"`.
+test:slow netcode -t "tick-belts-large node"`. M48: `-t belts_restore_keeps`, and `Loopback` tests in
+`tests/common/replication.rs` (a module here): `-t region_hash_agrees`, `-t degraded_bundles`.
 
 **The spikes (M40, M41) are deleted (M45).** Their numbers are in 0077's and 0078's Amendments;
 their code (`tests/spike_*.rs`, `tests/common/{repr*,forecast,bench_run}.rs`) is at `864cb3a8`.

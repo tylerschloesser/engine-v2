@@ -36,6 +36,7 @@ Rules that apply: `.claude/rules/prediction.md`, `.claude/rules/hot-paths.md`. S
 - **Reconnect re-puts structures; the hint keeps chunks, not lines.** A kept chunk saves its snapshot; its lines are put again with their lists, budgeted over frames. Keeping structures across a `Welcome` would need per-line versions in the hint; not built unless the measured reconnect cost says so (then a decision for M57's phone measurement).
 - **The harness cannot lose a frame** (the conditioner turns loss into a stall), so overflow stays a Rust `Loopback` matter (M47, M48); no frame-drop knob is added unless a scenario here needs one.
 - **Every measured count is pinned exactly** (M47b's rule); a moved pin is a finding.
+- **No scenario here moves an entity twice in a tick.** 0079 §20 (b): an entity that existed at tick start and moves twice, or moves and despawns, in one tick stamps a chunk on the host the replica does not bump, so `assertConverged`'s region hash would differ; no `fx-belts` entity moves, and a scenario that needs one is a finding for the manager, not a workaround.
 - **The join cost is measured before any encoding work** (expected under 10 s: a few hundred kilobytes through 48 KB/s).
 
 ## Order of work

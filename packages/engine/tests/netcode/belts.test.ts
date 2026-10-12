@@ -12,20 +12,11 @@ import { beltsFixture } from './support.js'
 
 /** Small caps: the replica reserves what the world declares (0079 §5). */
 const WORLD = { params: { maxLines: 64, maxItems: 1024 } } as const
-/**
- * The lines lie 200 tiles from the origin (chunks (6, 6) and (7, 6)), where no client looks at
- * the origin chunk: a request entity is anchored there (`Op::anchor`: a chain's `from`, given as the
- * origin here, the origin for every other op) and is spawned by `apply` and despawned by the next
- * tick, which bumps the host's chunk version and not the replica's (it never saw the entity), so
- * `assertConverged`'s region hash would differ in a chunk the client held (older than M46; the
- * manager records it for M48). The chunk hashes agree either way (version written as 0).
- */
-const O = 200
 /** Client 0 sits over the lines; client 1 far away until it moves in. */
-const NEAR = { x: O + 24, y: O + 8, tilesAcross: 64 }
+const NEAR = { x: 24, y: 8, tilesAcross: 64 }
 const FAR = { x: 3000, y: 3000, tilesAcross: 64 }
-/** The chunk anchoring line 2 (index 1, from tile (O + 8, O + 12)). */
-const ANCHOR = Math.floor((O + 8) / 32)
+/** The chunk anchoring line 2 (index 1, from tile (8, 12)): the origin chunk. */
+const ANCHOR = 0
 
 type Pos = { x: number; y: number }
 
@@ -44,13 +35,16 @@ function straight(x0: number, row: number, tiles: number): unknown {
   }
 }
 
-/** `Segments` for line index `line`, offset by `O` (`x0`, `row` are relative to it). */
+/** `Segments` for line index `line`. */
 function segments(line: number, x0: number, row: number, tiles: number): unknown {
-  const seg = straight(O + x0, O + row, tiles)
+  const seg = straight(x0, row, tiles)
   return request({ Segments: { line, segments: [seg, 'None', 'None', 'None'] } })
 }
 
-/** A chain request, its entity at the origin (module doc of `O`). */
+/**
+ * A chain request, its entity at the origin, where the lines and client 0 are too: it is spawned by
+ * `apply` and gone by the next tick, which moves no chunk version (M48: a replica never sees it).
+ */
 function chain(tiles: number, speed: number): unknown {
   const from: Pos = { x: 0, y: 0 }
   return request({ Chain: { from, dir: 'East', tiles, speed } })
@@ -67,7 +61,7 @@ async function run(h: NetHarness, client: HeadlessClient, actions: unknown[]): P
 }
 
 /**
- * The scripted world, by chain index (`Global::lines`), offset by `O`: line 0 is 48 tiles along row 4
+ * The scripted world, by chain index (`Global::lines`): line 0 is 48 tiles along row 4
  * from tile 8 (two chunks), cut at 16 tiles (index 2: the back part, `Next(0)`) and joined back;
  * line 1 is 8 tiles along row 12, extended back and re-segmented, then slowed; line 3 is made and
  * destroyed. Lines are named by host id in `lineStructures` (1 for index 0, and so on).
@@ -96,7 +90,7 @@ async function build(h: NetHarness, client: HeadlessClient): Promise<void> {
 function expectBuilt(lines: LineStructure[]): void {
   expect(lines.map((l) => l.id)).toEqual([1, 2])
   expect(lines[0]).toMatchObject({ len: 48 * 256, speed: 24, out: { kind: 'DeadEnd' } })
-  const [x0, x1, y] = [(O + 8) * 256 + 128, (O + 56) * 256 + 128, (O + 4) * 256 + 128]
+  const [x0, x1, y] = [8 * 256 + 128, 56 * 256 + 128, 4 * 256 + 128]
   expect(lines[0]?.segments).toEqual([
     { len: 48 * 256, kind: 'Straight', from: [x0, y], to: [x1, y] },
   ])

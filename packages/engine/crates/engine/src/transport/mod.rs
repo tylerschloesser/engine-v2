@@ -265,9 +265,10 @@ pub trait TransportWrite: TransportRead {
     /// forecasts it, the game keeps inserting through `insert_back`), as it stands after this
     /// tick; `None` clears it. Returns nothing: a declaration is derived state, never part of the
     /// sim (no result the game could branch on). It is not encoded, so it is lost on restore: the
-    /// game declares again (M48 decides the hook); until then the line's inserts reach clients as
-    /// arrivals. One the tracker cannot hold (no such line, or half the line cap declared already)
-    /// is counted (`HostCounters::spawner_declarations_dropped`).
+    /// game declares again from `Game::declare_spawners` (M48), which the host calls once after
+    /// every restore, upgrade and migrate, and the declarations arm from the first restored tick.
+    /// One the tracker cannot hold (no such line, or half the line cap declared already) is
+    /// counted (`HostCounters::spawner_declarations_dropped`).
     fn set_spawner(&mut self, line: LineId, s: Option<Schedule>);
 }
 
@@ -502,6 +503,20 @@ impl Transport {
             self.fc = fc;
         }
         Ok(())
+    }
+
+    /// M48: closes the tracker's tick after the declarations of `Game::declare_spawners` on a
+    /// restored store, as the end of the saved tick would have: they were made after that tick's
+    /// step (0079 §19 (a)), so they arm at the next tick's first hook and replay it. Nothing moves;
+    /// the declared lines' models are rebuilt (their lists carry the schedule). Host only, never on
+    /// a tick path.
+    pub(crate) fn forecast_close_restored(&mut self) {
+        if self.replica {
+            return;
+        }
+        let mut fc = std::mem::take(&mut self.fc);
+        fc.end_tick(self);
+        self.fc = fc;
     }
 
     /// The bytes [`Transport::set_caps`] reserves for `max_lines` lines and `max_items` items on an

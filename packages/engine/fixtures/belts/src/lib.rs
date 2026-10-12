@@ -26,7 +26,8 @@
 //! [`Thing::Spawner`], [`CYCLE_KINDS`] for a [`Thing::Cycling`]; `next` the item of its next
 //! insert): the engine's forecast tracker replays exactly this rule (0078 A8), so the line's
 //! inserts reach clients as forecasts, not arrivals. A destroyed line drops its declaration in the
-//! engine; the fixture never destroys a spawner entity.
+//! engine; the fixture never destroys a spawner entity. A declaration is not saved: after a
+//! restore `Game::declare_spawners` (M48) declares every spawner on the list again, as saved.
 //!
 //! **Surgery, items and geometry (M43b).** `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`,
 //! `Remove`, `TakeFront` and `Segments` run M43's API the same way. `Cut` appends the new back line
@@ -56,8 +57,8 @@
 //! `fork-blocked-side`, `big-step-fork`, `forty-actions`. `CLAUDE.md` has the detail.
 
 use engine::game::{
-    EntityId, Game, Growth, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead,
-    WorldWrite,
+    EntityId, Game, Growth, PlayerEvent, PlayerId, PresenceTable, RestoredCx, TickCx, Unknown,
+    WorldRead, WorldWrite,
 };
 use engine::transport::{Geometry, Item, LineId, Output, Schedule, Segment};
 use engine::world::{
@@ -823,6 +824,22 @@ impl Game for Belts {
         _a: &Action,
     ) -> Result<(), Reject> {
         Ok(())
+    }
+
+    /// M48: after a restore every spawner on the list declares its rule again, as saved (the state
+    /// after its last step, which is what `tick` declares on the tick it joins).
+    fn declare_spawners(cx: &RestoredCx<'_, Self>, declare: &mut dyn FnMut(LineId, Schedule)) {
+        let sys = spawner_sys();
+        for i in 0..cx.active_len(sys) {
+            let Some(id) = cx.active_at(sys, i) else {
+                continue;
+            };
+            match cx.world().entity(id).ok().flatten() {
+                Some(Thing::Spawner(s)) => declare(LineId(s.line), s.schedule(false)),
+                Some(Thing::Cycling(s)) => declare(LineId(s.line), s.schedule(true)),
+                _ => {}
+            }
+        }
     }
 }
 

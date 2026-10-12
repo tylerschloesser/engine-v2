@@ -11,7 +11,10 @@
 //! - `slow_snapshot_belts_large` (reported): the whole store's snapshot encode and decode, time
 //!   and bytes, and the transport section's share, against M36's `SNAPSHOT_PROXY_MS`.
 //! - Fast: `bench_world_at_genesis_is_deterministic` (1/64 scale), `transport_phone_caps_fit_split`
-//!   (M57's phone candidates), `transport_budget_exceeds_arena_is_clean`.
+//!   (M57's phone candidates), `transport_budget_exceeds_arena_is_clean`; M48's
+//!   `belts_restore_keeps_spawner_schedules` (1/64, saved and restored through `sim_restore_*`)
+//!   and the `replication` module's `Loopback` tests (`common/replication.rs`:
+//!   `region_hash_agrees_after_same_tick_spawn_despawn`, `host_degraded_bundles_carry_forecasts`).
 //!
 //! The slow nextest profile builds the dev profile, so each slow test re-runs itself in release
 //! (`engine::testing::bench::run_in_release`, one `BENCH_SAMPLE <json>` line) and the outer run
@@ -22,6 +25,9 @@
 mod bench_host;
 #[path = "common/props.rs"]
 mod props_world;
+/// M48's `Loopback` replication tests (a module here, not a binary of its own).
+#[path = "common/replication.rs"]
+mod replication;
 
 use bench_host::{BenchHost, PLAYERS, SEED, params, world_of};
 use engine::abi::Instance;
@@ -400,6 +406,139 @@ fn belts_request_spawner_declares_schedule() {
 
 /// What the request spawners insert in 400 ticks (pinned).
 const SPAWNED_BY_REQUEST: u64 = 182;
+
+/// Every line's items `(line, [(item, pos)])` of a host's world, ascending id.
+fn items_of(host: &engine::host::Host<Belts>) -> Vec<(u32, Vec<(u16, u32)>)> {
+    let t = host.sim().expect("live").authority().store().transport();
+    (1..t.next_id())
+        .filter_map(|id| {
+            let mut v = Vec::new();
+            t.items_in(LineId(id), &mut |item, pos| v.push((item.0, pos)))
+                .ok()?;
+            Some((id, v))
+        })
+        .collect()
+}
+
+/// M48: a spawner's declaration is derived and not saved, so a restored host has none until the
+/// game declares again (`Game::declare_spawners`, called once after the restore). The 1/64 `Mixed`
+/// bench world is saved at tick 300 and restored into a fresh `Host` (the sim worker's
+/// `sim_restore_*` path), which then runs 60 ticks beside a host that never stopped: the restored
+/// tracker's declarations replay exactly (`spawner_mismatches` 0, none dropped), no spawner insert
+/// reaches clients as an arrival on any restored tick (an undeclared insert is a `ROUTE_INSERT`
+/// crossing; without the hook every insert of the window is one), and every line's items equal the
+/// never-restored host's on every tick.
+#[test]
+fn belts_restore_keeps_spawner_schedules() {
+    use engine::abi::{RegionLayout, Role, Status};
+    use engine::host::Host;
+    use engine::transport::ROUTE_INSERT;
+    const SAVED_AT: u32 = 300;
+    const RUN: u32 = 60;
+    let spec = BenchSpec {
+        seed: SEED,
+        scale: 64,
+        regime: BenchRegime::Mixed,
+    };
+    let mut never = BenchHost::new(spec);
+    for _ in 0..SAVED_AT {
+        never.step(false);
+    }
+    let mut saved = Vec::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    assert_eq!(
+        Instance::sim_snapshot_begin(&mut never.host, 0, 0),
+        Status::Ok
+    );
+    loop {
+        let n = Instance::sim_snapshot_next(&mut never.host, &mut buf).expect("next") as usize;
+        if n == 0 {
+            break;
+        }
+        saved.extend_from_slice(&buf[..n]);
+    }
+    // The same world params as `params(spec)`, through the sim worker's JSON config.
+    let p = params(spec);
+    let cfg = format!(
+        r#"{{"seed":"0x{:x}","params":{{"bench":{{"seed":{},"scale":{}}}}},"maxEntities":{},"maxModifiedTiles":{},"maxActionGrowth":{},"maxLines":{},"maxItems":{}}}"#,
+        p.seed,
+        spec.seed,
+        spec.scale,
+        p.max_entities,
+        p.max_modified_tiles,
+        p.max_action_growth,
+        p.max_lines,
+        p.max_items
+    );
+    let mut layout = RegionLayout::new();
+    let mut host = Host::<Belts>::init(Role::Sim, &cfg, &mut layout).expect("init");
+    assert_eq!(host.sim_restore_begin(saved.len() as u32), Status::Ok);
+    assert_eq!(host.sim_restore_push(&saved), Status::Ok);
+    let mut result = [0u8; 8];
+    assert_eq!(host.sim_restore_end(&mut result), Status::Ok);
+    let mut restored = BenchHost::with_host(host, spec, SAVED_AT);
+    assert_eq!(
+        restored.host.sim().unwrap().state_hash(),
+        never.host.sim().unwrap().state_hash(),
+        "the restored world is the saved one"
+    );
+    let spawned = |h: &Host<Belts>| -> u64 {
+        h.sim()
+            .unwrap()
+            .authority()
+            .store()
+            .entities()
+            .map(|(_, e)| match e {
+                Thing::Spawner(s) | Thing::Cycling(s) => u64::from(s.spawned),
+                _ => 0,
+            })
+            .sum()
+    };
+    let before = spawned(&restored.host);
+    let mut undeclared = 0u64;
+    for _ in 0..RUN {
+        never.step(false);
+        restored.step(false);
+        let t = restored.host.sim().unwrap().authority().store().transport();
+        undeclared += t
+            .forecast_crossings()
+            .iter()
+            .filter(|c| c.route() == ROUTE_INSERT)
+            .count() as u64;
+        assert_eq!(
+            items_of(&restored.host),
+            items_of(&never.host),
+            "tick {}: items differ from the never-restored host's",
+            restored.tick
+        );
+    }
+    let inserts = spawned(&restored.host) - before;
+    let c = restored
+        .host
+        .sim()
+        .unwrap()
+        .authority()
+        .store()
+        .transport()
+        .forecast_host_counters();
+    if std::env::var_os("MEASURE").is_some() {
+        println!("restored: spawned {inserts}, undeclared {undeclared}, {c:?}");
+    }
+    assert_eq!(inserts, RESTORE_SPAWNED, "inserts in the restored window");
+    assert_eq!(undeclared, 0, "undeclared inserts after the restore");
+    // One list per declared spawner, built by `forecast_close_restored` at the restore (the first
+    // restored tick clears them; no connection held a line then), and none during the window.
+    assert_eq!(c.run_lists, 22, "run_lists ({c:?})");
+    assert_eq!(c.spawner_mismatches, 0, "spawner_mismatches ({c:?})");
+    assert_eq!(
+        c.spawner_declarations_dropped, 0,
+        "spawner_declarations_dropped ({c:?})"
+    );
+}
+
+/// The inserts of the 1/64 `Mixed` world's 22 spawners over ticks 301-360 (pinned: the window's
+/// spawners do insert).
+const RESTORE_SPAWNED: u64 = 297;
 
 /// 0079 §16: the recommended caps reserve 16.5 MiB, over 0007 §8's 8 MiB slack, so they do not fit
 /// a phone's split. The largest caps of the form `(lines, 8 x lines)`, `lines` a multiple of 1,024,

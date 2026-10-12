@@ -68,6 +68,7 @@ use engine::abi::Arena;
 use engine::abi::arena::thread_high_water_bytes as high_water_bytes;
 use engine::game::{EntityId, Game, PlayerEvent, PlayerId, TickCx, Unknown, WorldRead, WorldWrite};
 use engine::host::Host;
+use engine::host::pacing::BandwidthConfig;
 use engine::sim::WorldParams;
 use engine::transport::{Geometry, Item, LineId, Output, Schedule, Segment};
 use engine::wire::{CameraReport, UplinkWriter};
@@ -460,21 +461,43 @@ struct PanState {
     gones: u64,
     /// `Forecasts` records built so far (M47: the measured windows must route forecasts).
     forecasts: u64,
+    /// `ChunkSnapshots` and `LineStructs` bytes built so far (M48: what a lost frame's
+    /// re-snapshots cost; a re-snapshot re-puts the chunk's anchored lines).
+    snaps: u64,
+    line_bytes: u64,
     /// `live_bytes()` growth inside the host's own calls so far.
     host_bytes: i64,
     /// Lose a frame every 32 ticks (M47 review 2).
     lossy: bool,
+    /// Degrade levels seen (bit `level`) and bundles sent (M48's degraded window).
+    levels: u32,
+    /// M48's degraded window: paint a 24 x 16 block around the camera every tick, so each frame
+    /// carries a few KB and a level-4 bundle outgrows the old 8 KiB hold.
+    paint_block: bool,
+    /// The largest message `build_frame` returned.
+    max_msg: usize,
 }
 
 /// Counts the `LineStructs` and `Forecasts` records of one built message (a frame or a bundle of
-/// frames), with no allocation.
-fn count_line_records(msg: &[u8], puts: &mut u64, gones: &mut u64, forecasts: &mut u64) {
+/// frames), and its `ChunkSnapshots` bytes, with no allocation.
+fn count_line_records(
+    msg: &[u8],
+    puts: &mut u64,
+    gones: &mut u64,
+    forecasts: &mut u64,
+    snaps: &mut u64,
+    line_bytes: &mut u64,
+) {
     use engine::wire::lines::{Record, read};
     use engine::wire::{BundleReader, FrameReader, MsgType, SectionId};
     let mut one = |frame: &[u8]| {
         let mut r = FrameReader::new(frame).unwrap();
         while let Some((id, body)) = r.next_section().unwrap() {
+            if id == SectionId::ChunkSnapshots {
+                *snaps += body.len() as u64;
+            }
             if id == SectionId::LineStructs {
+                *line_bytes += body.len() as u64;
                 read(&mut engine::bytes::ByteReader::new(body), |rec| match rec {
                     Record::Put(_) => *puts += 1,
                     Record::Gone(_) => *gones += 1,
@@ -574,6 +597,22 @@ fn run_panning_tick(
     }
     p.pending_despawn = Some(id);
 
+    if p.paint_block {
+        for k in 0..384i32 {
+            s.seq += 1;
+            host.queue_action_for_test(
+                player,
+                s.seq,
+                NAction::Paint {
+                    pos: NPos {
+                        x: p.pan_x - 12 + k % 24,
+                        y: -8 + k / 24,
+                    },
+                    base: ((i as i32 + k) % 250) as u8,
+                },
+            );
+        }
+    }
     if i.is_multiple_of(50) {
         s.seq += 1;
         host.queue_action_for_test(player, s.seq, NAction::SetGlobal { n: i });
@@ -597,18 +636,24 @@ fn run_panning_tick(
     let b = live();
     let n = host.build_frame(0, &mut s.frame_buf[..len]);
     p.host_bytes += live() as i64 - b as i64;
+    p.max_msg = p.max_msg.max(n);
     if n > 0 {
         count_line_records(
             &s.frame_buf[..n],
             &mut p.puts,
             &mut p.gones,
             &mut p.forecasts,
+            &mut p.snaps,
+            &mut p.line_bytes,
         );
         client.on_frame(&s.frame_buf[..n]).unwrap();
     }
     let b = live();
     host.seal();
     p.host_bytes += live() as i64 - b as i64;
+    if let Some(c) = host.pacing_counters(0) {
+        p.levels |= 1 << c.degrade_level;
+    }
     client.drain_dirty(|_| {});
     s.t_ms += 50;
     let _ = client.poll_uplink(s.t_ms, &mut s.uplink_buf);
@@ -650,6 +695,17 @@ struct PanRun {
     /// Frames lost and `unknown` lists applied inside the window (M47 review 2).
     overflows: u64,
     lists_unknown: u64,
+    /// Held chunks re-snapshotted because a lost frame carried their deltas (M48), and the
+    /// `ChunkSnapshots` bytes built inside the window.
+    lost_resnapshots: u64,
+    snap_bytes: u64,
+    /// `LineStructs` bytes built inside the window.
+    line_bytes: u64,
+    /// Degrade levels seen inside the window (bit `level`) and bundles sent (M48).
+    levels: u32,
+    bundles: u64,
+    /// The largest message built inside the window.
+    max_msg: usize,
 }
 
 /// Warm up a host + client to the panning workload's steady state, then measure `window` ticks of
@@ -673,6 +729,13 @@ fn pan_run_band(bounded: bool, band: i32, window: u32) -> PanRun {
         max_lines: engine::transport::DEFAULT_MAX_LINES,
         max_items: engine::transport::DEFAULT_MAX_ITEMS,
     });
+    if DEGRADED.with(|d| d.get()) > 0 {
+        // Undegraded until the window: the painted block alone is over the default soft cap.
+        host.set_bandwidth(BandwidthConfig {
+            soft_cap_bytes_per_s: u32::MAX / 4,
+            ..BandwidthConfig::default()
+        });
+    }
     let player = host.connect(0);
     let mut client = ClientCore::new(lined_replica(1024, player));
     let mut s = Scratch {
@@ -691,6 +754,11 @@ fn pan_run_band(bounded: bool, band: i32, window: u32) -> PanRun {
         puts: 0,
         gones: 0,
         forecasts: 0,
+        snaps: 0,
+        line_bytes: 0,
+        levels: 0,
+        paint_block: DEGRADED.with(|d| d.get()) > 0,
+        max_msg: 0,
         lossy: LOSSY.with(|l| l.get()),
         host_bytes: 0,
     };
@@ -719,11 +787,29 @@ fn pan_run_band(bounded: bool, band: i32, window: u32) -> PanRun {
         run_panning_tick(&mut host, player, &mut client, &mut s, &mut p, 1_000 + i);
     }
 
+    // M48: the degraded window's soft cap engages at its first tick, so degrade (level 2, then 4
+    // after 2 s over the cap) and the bundles it holds happen inside the measured window.
+    let soft_cap = DEGRADED.with(|d| d.get());
+    if soft_cap > 0 {
+        host.set_conn_bandwidth(
+            0,
+            BandwidthConfig {
+                soft_cap_bytes_per_s: soft_cap,
+                ..BandwidthConfig::default()
+            },
+        );
+    }
+    p.levels = 0;
+    p.max_msg = 0;
+    let bundles_before = host.pacing_counters(0).map_or(0, |c| c.bundles);
     let chunks_before = host.debug_chunk_version_count();
     let (puts_before, gones_before, forecasts_before) = (p.puts, p.gones, p.forecasts);
+    let snaps_before = p.snaps;
+    let line_bytes_before = p.line_bytes;
     let overflows_before = host.debug_overflows(0);
+    let resnaps_before = host.debug_lost_resnapshots(0);
     let unknown_before = client.replica().forecast_counters().lists_unknown;
-    let desyncs_before = client.desyncs().len();
+    let desyncs_before = client.desyncs().count();
     let before = live();
     let host_before = p.host_bytes;
     for i in 0..window {
@@ -745,8 +831,14 @@ fn pan_run_band(bounded: bool, band: i32, window: u32) -> PanRun {
         .terrain()
         .queued_cache_events();
     let lines_held = client.replica().transport().lines_len();
-    let desyncs_in_window = client.desyncs().len() - desyncs_before;
+    let desyncs_in_window = client.desyncs().count() - desyncs_before;
     let overflows = host.debug_overflows(0) - overflows_before;
+    let lost_resnapshots = host.debug_lost_resnapshots(0) - resnaps_before;
+    let bundles = host.pacing_counters(0).map_or(0, |c| c.bundles) - bundles_before;
+    let levels = p.levels;
+    let max_msg = p.max_msg;
+    let snap_bytes = p.snaps - snaps_before;
+    let line_bytes = p.line_bytes - line_bytes_before;
     let lists_unknown = client.replica().forecast_counters().lists_unknown - unknown_before;
     // The lossy windows' recovery (M47 review 3): losses stop, two round trips settle the pacing
     // state, and the next two must not move a byte.
@@ -768,7 +860,7 @@ fn pan_run_band(bounded: bool, band: i32, window: u32) -> PanRun {
         host_bytes,
         settled,
         tail_bytes,
-        desyncs: desyncs_in_window as u64,
+        desyncs: desyncs_in_window,
         new_chunks,
         host_queued_cache_events,
         lines_held,
@@ -777,6 +869,12 @@ fn pan_run_band(bounded: bool, band: i32, window: u32) -> PanRun {
         forecasts,
         overflows,
         lists_unknown,
+        lost_resnapshots,
+        snap_bytes,
+        line_bytes,
+        levels,
+        bundles,
+        max_msg,
     }
 }
 
@@ -858,6 +956,8 @@ thread_local! {
     static LOSSY: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
     /// Build the next world with no transport line (the lost-frame control).
     static NO_LINES: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    /// A soft cap (B/s) the next `pan_run_band` sets at its window's start (0: none; M48).
+    static DEGRADED: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
 }
 
 /// M47 review 2, finding 6, and review 3: the lost-frame path inside the measured windows (the
@@ -867,16 +967,17 @@ thread_local! {
 /// - the host's own calls allocate 0 B over every lossy window (the lost set, unknown lists and
 ///   routing of `host/lines.rs` included);
 /// - once losses stop, two round trips later the live bytes do not move by one byte over the next
-///   two.
+///   two;
+/// - no client desync report (M48: a lost frame re-snapshots the held chunks it changed).
 ///
 /// What the client's `on_frame` does allocate inside a lossy window is not M47's: measured by
 /// bracketing every section (Deviations, "Review fixes, round 3"), sections `LineStructs` and
 /// `Forecasts` and the follower's catch-up allocate 0 B; the residue is the replica's chunk store
 /// (`ChunkReplica::held`, a `BTreeMap` whose node layout follows its insertion history, and the
 /// overlay's per-chunk `Vec<Entry>` capacities: a re-snapshot replaces a grown vector with an
-/// exact one), which losses reshuffle in both worlds alike, plus 64 B once in `check_hashes` (the
-/// desyncs losses raise, in both worlds: Deviations): lined 112, 48, 288, 48 B; no lines 288,
-/// 528, 528, 288 B over 256, 512, 1,024 and 2,048 ticks.
+/// exact one), which losses reshuffle in both worlds alike: lined 48, 48, 288, 48 B; no lines
+/// 288, 528, 528, 288 B over 256, 512, 1,024 and 2,048 ticks (M48; before it, the desyncs the
+/// losses raised added 64 B once in `check_hashes`).
 #[test]
 fn host_and_client_lost_frames_do_not_grow() {
     LOSSY.with(|l| l.set(true));
@@ -891,12 +992,23 @@ fn host_and_client_lost_frames_do_not_grow() {
     LOSSY.with(|l| l.set(false));
     for (no_lines, w, r) in &table {
         let world = if *no_lines { "no lines" } else { "lined" };
-        println!(
-            "lossy {world} {w}: {} B ({} B host), {} lost frames, {} desyncs; settled {} B, tail {} B",
-            r.bytes, r.host_bytes, r.overflows, r.desyncs, r.settled, r.tail_bytes
-        );
+        if std::env::var_os("MEASURE").is_some() {
+            println!(
+                "lossy {world} {w}: {} B ({} B host), {} lost frames, {} desyncs, {} lost \
+                 re-snapshots, {} B of snapshots; settled {} B, tail {} B",
+                r.bytes,
+                r.host_bytes,
+                r.overflows,
+                r.desyncs,
+                r.lost_resnapshots,
+                r.snap_bytes,
+                r.settled,
+                r.tail_bytes
+            );
+        }
         assert!(r.overflows > 0, "{world} {w}: frames were lost");
         assert_eq!(r.host_bytes, 0, "{world} {w}: the host allocated");
+        assert_eq!(r.desyncs, 0, "{world} {w}: client desyncs");
         assert_eq!(
             r.tail_bytes, 0,
             "{world} {w}: the recovered run still moves"
@@ -907,6 +1019,77 @@ fn host_and_client_lost_frames_do_not_grow() {
             "{world} {w}: the world's lines"
         );
     }
+}
+
+/// M48: a lost frame never leaves a held chunk desynced. `Host::seal` clears the change log after
+/// every connection's build, so a frame that does not fit (`SliceSink::finish` `Err`) loses its
+/// `ChunkDeltas` for good; the host now queues every held chunk the lost frame carried a delta for
+/// as a snapshot (deltas suppressed until it goes), as the lines send `Gone`. The lossy wide band of
+/// `host_and_client_lost_frames_do_not_grow` (a 64 B frame every 32 ticks) over 1,024 ticks, on the
+/// lined world and the `NO_LINES` control: no client desync report (the `DesyncLog` count; before
+/// the rule 9 and 12), and the lost frames, the re-snapshots they caused and the window's
+/// `ChunkSnapshots` and `LineStructs` bytes are pinned.
+#[test]
+fn lost_frame_never_desyncs_a_held_chunk() {
+    LOSSY.with(|l| l.set(true));
+    // `(no_lines, lost frames, held chunks re-snapshotted, ChunkSnapshots B, LineStructs B)`,
+    // pinned: with the rule off the bytes read 8,528 / 28,824 (lined) and 5,344 / 0 (no lines),
+    // so the rule's cost (+673 + 1,018 B, +548 B) cannot drift unseen.
+    for (no_lines, lost, resnaps, snaps, lines) in
+        [(false, 30, 60, 9_201, 29_842), (true, 24, 48, 5_892, 0)]
+    {
+        NO_LINES.with(|n| n.set(no_lines));
+        let r = pan_run_band(true, WIDE_BAND_TILES, 1_024);
+        let world = if no_lines { "no lines" } else { "lined" };
+        if std::env::var_os("MEASURE").is_some() {
+            println!(
+                "{world}: {} lost frames, {} re-snapshots, {} B of snapshots, {} B of line structures, \
+                 {} desyncs",
+                r.overflows, r.lost_resnapshots, r.snap_bytes, r.line_bytes, r.desyncs
+            );
+        }
+        assert_eq!(
+            r.desyncs, 0,
+            "{world}: client desync reports over 1,024 ticks"
+        );
+        assert_eq!(r.overflows, lost, "{world}: lost frames");
+        assert_eq!(
+            r.lost_resnapshots, resnaps,
+            "{world}: lost-frame re-snapshots"
+        );
+        assert_eq!(
+            (r.snap_bytes, r.line_bytes),
+            (snaps, lines),
+            "{world}: ChunkSnapshots and LineStructs bytes"
+        );
+    }
+    NO_LINES.with(|n| n.set(false));
+    LOSSY.with(|l| l.set(false));
+}
+
+/// M48: bundles of held frames allocate nothing on the host. `Pacing::hold` was 8 KiB and grew
+/// the first time a degraded connection held more; it is now reserved at attach for two frames of
+/// the `Tx` buffer (`pacing::hold_bytes`), which the emission rule never exceeds. The lined wide
+/// band with a 1,000 B/s soft cap set at the window's first tick: inside the 512-tick window the
+/// connection degrades to level 2 and then 4 and sends bundles, the host's own calls allocate 0 B,
+/// and no client desync is reported.
+#[test]
+fn host_and_client_degraded_bundles_do_not_grow() {
+    DEGRADED.with(|d| d.set(1_000));
+    let r = pan_run_band(true, WIDE_BAND_TILES, 512);
+    DEGRADED.with(|d| d.set(0));
+    if std::env::var_os("MEASURE").is_some() {
+        println!(
+            "degraded 512: {} B ({} B host), levels {:#b}, {} bundles (largest {} B), {} desyncs, \
+             {} lines held",
+            r.bytes, r.host_bytes, r.levels, r.bundles, r.max_msg, r.desyncs, r.lines_held
+        );
+    }
+    assert_eq!(r.levels, 0b10100, "degrade levels seen (bit 2, bit 4)");
+    assert_eq!(r.bundles, 234, "bundles sent in the window");
+    assert_eq!(r.host_bytes, 0, "the host allocated while degraded");
+    assert_eq!(r.desyncs, 0, "client desyncs while degraded");
+    assert_eq!(r.lines_held, 21, "lines held at the window's end (routed)");
 }
 
 /// The other half: a camera panning forever *does* allocate, and legitimately so -- it reaches

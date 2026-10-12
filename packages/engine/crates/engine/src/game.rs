@@ -15,6 +15,7 @@ use ts_rs::TS;
 use crate::client::ClientSide;
 use crate::codec::Codec;
 use crate::time::TickRate;
+use crate::transport::{LineId, Schedule};
 use crate::world::{PrototypeId, Registry, TilePos};
 use crate::worldgen::Worldgen;
 
@@ -277,6 +278,41 @@ pub trait Game: Sized + 'static {
         _w: &mut dyn WorldWrite<Self>,
     ) -> Result<(), SaveIncompatible> {
         Err(SaveIncompatible)
+    }
+    /// HOST ONLY (M48). Called once after the host rebuilds its `Sim` from a saved store (restore,
+    /// upgrade, migrate; never at genesis): the spawner schedules a game declared with
+    /// `TransportWrite::set_spawner` are derived and not saved, so the game declares each again
+    /// through `declare`, as it stands in the saved state (after the saved tick's step, 0079 §19
+    /// (a)); they arm from the next tick. Reads only: no write is possible here. The default
+    /// declares nothing (a game with no spawner rule, or one that declares every tick).
+    fn declare_spawners(_cx: &RestoredCx<'_, Self>, _declare: &mut dyn FnMut(LineId, Schedule)) {}
+}
+
+/// What [`Game::declare_spawners`] reads (M48): the restored world as a [`WorldRead`], plus the
+/// active lists (a game keeps its spawners on one; `WorldRead` has no way to enumerate entities
+/// outside a rectangle).
+pub struct RestoredCx<'a, G: Game> {
+    authority: &'a crate::authority::Authority<G>,
+}
+
+impl<'a, G: Game> RestoredCx<'a, G> {
+    pub(crate) fn new(authority: &'a crate::authority::Authority<G>) -> Self {
+        RestoredCx { authority }
+    }
+
+    /// The restored world (host reads: total).
+    pub fn world(&self) -> &dyn WorldRead<G> {
+        self.authority
+    }
+
+    /// `TickCx::active_len`'s read.
+    pub fn active_len(&self, sys: crate::world::SystemId) -> usize {
+        self.authority.store().active_len(sys)
+    }
+
+    /// `TickCx::active_at`'s read (`None` for a tombstoned or out-of-range slot).
+    pub fn active_at(&self, sys: crate::world::SystemId, i: usize) -> Option<EntityId> {
+        self.authority.store().active_at(sys, i)
     }
 }
 
