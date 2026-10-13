@@ -282,6 +282,14 @@ pub const SPRITE_BELT_FRAMES: u32 = 8;
 /// drawn with `FLIP_X` (the art is symmetric between the halves).
 pub const SPRITE_SPLITTER: u16 = 22;
 
+/// Underground sprites (M55, after the splitters): the entrance east 25, south 26, north 27 and the
+/// exit east 28, south 29, north 30, 1 x 1 tile, [`SPRITE_BELT_FRAMES`] frames, pivot `[0, 0]`; west
+/// is east drawn with `FLIP_X`. An entrance draws its hood on its front half (the belt's back half
+/// visible), an exit on its back half; the gap tiles between a pair draw nothing.
+pub const SPRITE_UNDERGROUND_IN: u16 = 25;
+/// The exit's first sprite (east), M55.
+pub const SPRITE_UNDERGROUND_OUT: u16 = 28;
+
 /// Item squares (M51; M53 draws them on belts): sprite `SPRITE_ITEM_FIRST + ItemId`, one per item,
 /// half a tile, pivot at the centre, one frame. Transport reserves `Item(0)` for "none", so a belt
 /// item id is `ItemId + 1` and M53's `ItemStyle::sprite(item)` is `SPRITE_ITEM_FIRST + item - 1`.
@@ -360,7 +368,7 @@ pub fn register(r: &mut Registry) {
 /// action. Mirrored by `src/ui/build.ts`'s `LOCAL`: change both together.
 pub mod local {
     /// `a` picks the tool (M51): [`TOOL_OFF`] ends construction mode, then furnace, belt, spawner,
-    /// despawner, splitter (M54). Any other value is ignored.
+    /// despawner, splitter (M54), underground entrance and exit (M55). Any other value is ignored.
     pub const PLACE_MODE: u32 = 1;
     /// Closes the furnace panel (M33b step 3 reads it).
     pub const CLOSE_PANEL: u32 = 2;
@@ -375,4 +383,8 @@ pub mod local {
     pub const TOOL_DESPAWNER: i32 = 4;
     /// The splitter tool (M54): a 2x1 footprint anchored at the cursor tile.
     pub const TOOL_SPLITTER: i32 = 5;
+    /// The underground entrance tool (M55).
+    pub const TOOL_UNDERGROUND_IN: i32 = 6;
+    /// The underground exit tool (M55).
+    pub const TOOL_UNDERGROUND_OUT: i32 = 7;
 }

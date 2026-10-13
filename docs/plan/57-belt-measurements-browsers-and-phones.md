@@ -20,6 +20,8 @@ Skills: `device-check`, `run-tests`. Memory notes on Tyler's machine and phones 
 - Phone runs through `pnpm device:serve --tunnel`: iPhone 12 Safari (pass/fail against the 0056 bar for tick, the 0018 §9 budgets for frames with the iOS reading of 0056), Pixel 5 Chrome (evidence); a throwaway script in the scratchpad may read `__bench` through WebDriver/adb; nothing from the deleted phone-round tool is revived.
 - An ADR recording the belts budgets as measured (desktop proxies, phones, bytes), amending 0062; `device-check` rows `belts-frame-pacing` and `belts-memory` with their pages, steps and pass criteria.
 
+- (Note 2026-10-12, M55 review) On a 390 px phone the construction palette wraps to two rows and its top row runs under the refusal-reason label (`build.ts`, 36 px above the bottom edge): check it in the phone round and move the label above the palette if it reads badly.
+
 ## Seams
 **Provides:** `?bench=belts`, the device-check rows, the budgets ADR.
 **Consumes:** M45 world, M50 bench page pattern, M56 builder.

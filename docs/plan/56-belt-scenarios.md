@@ -1,38 +1,57 @@
 # M56: Belt scenarios
 
-Status: not started · After: 50, 54, 55 · Tyler-dependent: no
+Status: not started · After: 54, 55 · Tyler-dependent: T (question 11's input share is measured and restated to Tyler; the build proceeds on the recorded default)
 
-Later-phase brief: goal, exit criteria and open questions. Filled in at the start of its phase.
+Rewritten 2026-10-12 against the as-built code (`scratchpad/m56-research.md`): the reference game has no loop, balancer or items-through-a-splitter test anywhere; the fixture has conservation, spacing, throughput and lap-time properties (`fixtures/belts/tests/common/props.rs`) that the reference crate lacks; no netcode cell contains a fork, so the `Arrival` cost of forks is unmeasured; the sketch's text-map builder "200 tiles in one virtual second" cannot pass the host's rate limit (20 actions/s, burst 40) and is dropped for a paced builder.
 
 ## Goal
-(Note 2026-10-12, 0079 §11: a loop whose links include a `Fork` or a `Merge` still spreads a packed block by `speed` at its cut, because the cut leader's dry pass handles simple `Next` loops only; the loop scenarios here measure it and this milestone extends the dry pass to fork and merge links if the spread shows, recording the result in 0079. The dry pass also walks a stalled loop's runs on every pass: measure on the largest loop scenario.)
-
-Complex belt layouts are built and tested end to end: natively on `fx-belts` (mixed speeds, which the reference game lacks) and on the reference game in the browser and the netcode harness: a 4x4 balancer, closed loops, saturated splitter chains, side-loaded undergrounds, a saturated world with jams forming and clearing, edits during flow. Conservation, spacing, throughput and lap-time properties hold on every scenario, and forecasts stay under budget on each.
+Complex belt layouts are built, run and measured end to end in the reference game: a 4x4 balancer (splitters, belts, one underground crossing), closed loops with and without a splitter, a side-load chain, and edits during flow, natively in the reference crate, in the netcode harness (two clients exact on every item, the `Arrival` bytes pinned) and in the browser (items drawn across the layout). Conservation (`scheduled_inserts_total` = live + sunk + destroyed), per-output throughput and lap time are asserted exactly on every scenario. The fixture gains the one scenario the reference game cannot express (mixed speeds) as a golden, and 0078 A8's "a list a tick" figures are pinned. The measurements the earlier milestones deferred here are taken and recorded: question 11's input share on a balancer, fork and underground `Arrival` bytes against 0078 A5/A9, 0079 §11's spread on a splitter loop, 0079 §16's blocked side-load cost on a reference chain.
 
 ## Read first
-1. `docs/architecture/README.md`
-2. `games/reference/README.md` ("Belts")
-3. `/Users/tyler/repos/belts/PLAN.md` ("Rigs" table: the scenario list G01-G33 as inspiration; its goldens are Factorio-exact and are not replayed)
-4. `docs/plan/44-transport-merge-and-fork.md` Deviations (the property helpers)
-Rules that apply: `.claude/rules/determinism.md`.
+1. `games/reference/README.md` ("Belts": Scale, Splitters, Undergrounds, Numbers), `/Users/tyler/repos/belts/PLAN.md` ("Rigs" G01-G33 as inspiration; Factorio-exact goldens are not replayed)
+2. `docs/decisions/0079-transport-core-decisions.md` §11, §15, §16, §21; `docs/decisions/0078-transport-forecast-replication.md` A5, A8, A9, A11, A13
+3. `docs/plan/{52,53b,54,55}-*.md` Deviations (the topology's run model, the lane convention, `assert_topology`, the test hook, the splitter's eight lines and fork `a`, the undergrounds' three lines per lane and pairing)
+4. `games/reference/sim/tests/{common/mod.rs, splitter.rs, underground.rs, topology_items.rs}`, `packages/engine/fixtures/belts/tests/{common/props.rs, golden_scenarios.rs}`, `packages/engine/crates/engine/tests/main/forecasts.rs` (:584-716), `packages/engine/tests/netcode/support.ts` (`arbitrate`, `measure`), `games/reference/tests/{helpers/{game,net,script}.ts, netcode/belt-items.test.ts, browser/belt-items.spec.ts}`, `games/reference/sim/src/rules/belts/topology.rs` (`belts_unmapped`'s counter pattern)
+Rules: `.claude/rules/determinism.md`, `.claude/rules/hot-paths.md`. Skills: `run-tests` (slow tiers), `gc-test` only if a page is added.
 
-## Scope (sketch)
-- `fx-belts` scenarios (goldens): `balancer-4x4` (six forks, undergrounds under forks, four curves), `ring` (lap time), `mixed-speeds` (24 -> 72 -> 96 -> 24: items keep spacing, throughput follows the slowest), `sideload-chain`, `jam-waves`.
-- Reference game: a scripted builder (`tests/helpers/belts.ts`) placing layouts from a small text map (`>`, `<`, `^`, `v`, `S`, `D`, `U`, `u`, `=`), used by browser and netcode tests: `reference_balancer_4x4_balances` (output counts within 5 % after 30 s), `reference_loop_conserves`, `reference_edit_during_flow`.
-- Properties over every scenario (`prop_*` from M44) and the forecast budget row asserted on the reference scenarios in the netcode harness.
-- Each scenario's Factorio-rule deviation, if visible (no 51 buffer, geometric entries), noted in the test's doc comment with the README line it follows.
+## Scope
+- **Layout builder.** A text-map format for reference layouts, one two-character token per tile (`..` empty, `b^`/`b>`/`bv`/`b<` belt by facing, `s`/`d` spawner/despawner, `S` a splitter's anchor tile with `--` for its other tile, `u`/`x` underground entrance/exit, each with a facing character), parsed in the reference crate's test common (`sim/tests/common/layout.rs`: `Layout::parse` → placements in row-major order, `RefScenario::lay(&Layout, origin)` via `dispatch_batch`, spawners configured last) and in TS (`tests/helpers/layout.ts`: the same parse, placements dispatched through the host at its rate limit (bursts of at most 40, then 20 a tick-second) with the ticks used reported). Both parsers are pinned by one hash per layout (`LAYOUT_HASHES`, the `BELT_SCRIPT_HASH` pattern: a Rust test and a `unit` test agree). Layouts as text constants in one place each side; the balancer's map is the survey's (`scratchpad/m56-research.md` §3), flow north, four spawners, four despawners, one east-facing underground pair of gap 2 crossed by two surface belts, a second pair under the first stage.
+- **Reference properties** (`sim/tests/common/census.rs`): `Census` over the transport store (live items per line, `sunk` per line with a `sunk_seen` for dead lines, scheduled inserts total) and `Ledger::check()` asserting made = live + sunk + destroyed exactly; a destroyed-items counter in the topology (`belts_destroyed_items()`, the `belts_unmapped` pattern, counted at every item-destroying put: rotate, pick-up, re-pairing, the splitter's and underground's destroys); per-kind sink counts by a FIFO diff of a despawner line's front items against its `sunk` delta; `laps(line_ids, speed)` as the fixture's `ring_laps`.
+- **Reference scenarios** (`sim/tests/scenarios.rs`; fast tier unless named `slow_`; test-hooks inserts only where named): `balancer_4x4_balances` (four saturated spawners, 1,000 ticks: each despawner's `sunk` exact, the four equal or pinned with the asymmetry explained, conservation exact), `balancer_4x4_one_output_blocked` (question 11 on four inputs: each input's share of the three open outputs, by kind, exact over a window after steady state; the figure restated to Tyler), `ring_lap_time` (a plain ring of belts, both lanes: one item per lane by `TestInsertItem` in the test-hooks leg; lap = the lane's total length / 24 floor or ceil, the item moves exactly 24 a tick; `slow_` leg), `ring_saturated_holds` (a ring filled by a side-loading spawner on each lane's feeder until the feeders block; conservation; every item still; then the ring edited: a tile rotated, picked up and re-placed; conservation with destroys counted; the overfull fallback never squashes a pair: `short_gaps` = 0), `ring_with_splitter_spreads` (the ring through a splitter whose other output feeds a dead end until full; packed; 0079 §11's spread measured: the crossing rate at the cut over 1,000 ticks pinned against the 0.375 a saturated lane would carry; recorded in 0079 §11 as measured, not fixed here), `sideload_chain` (eight side-loading feeders into one main line of 24 tiles at saturation: the main line's `sunk` exact, every feeder blocked, conservation; a `slow_` variant timing `advance` per tick with the feeders blocked, printed and pinned within a ceiling, for 0079 §16), `edit_during_flow` (the balancer running; a splitter picked up and re-placed, an underground end rotated and rotated back, a belt rotated; conservation with destroys; `assert_topology` after each edit; host hash stable across `save_and_load`).
+- **Netcode** (`tests/netcode/belt-scenarios.test.ts`, `@slow`): `reference_balancer_two_clients_exact` (host and a late-joined replica compared item for item on every held line every tick for 400 ticks after the build, the `belt-items.test.ts` comparison; `forecastCounters` pinned: arrivals = fork crossings + underground emergences, no mismatches) and `reference_balancer_arrival_bytes` (sections 12 + 13 B/s over 20 s pinned exact and compared in a comment with 0078 A5's 16,384 and A9's 3,946; recorded as a 0078 amendment).
+- **Browser** (`tests/browser/belt-scenarios.spec.ts`, `@slow`): `reference_balancer_draws_items` (the balancer built through `placeBelt`/`setSpawner`; after 200 ticks `itemDraws` non-empty over both splitter stages and empty over the underground gap tiles, at two camera stops if the 300 px page shows too little; the layout hash pinned by the `unit` test).
+- **Fixture.** A `mixed-speeds` golden (`Op::Speed` 24 → 72 → 96 → 24 along one chain of four lines with `Next` links, a spawner at saturation, a sink: items keep `SPACING` across every speed change, throughput equals the slowest line's, `prop_conservation` and `prop_spacing_invariant` hold) recorded by `pnpm golden belts`, replayed under Node and Bun; `forecasts.rs`' "mixed speeds" world gets its `match` arm pinning lists and arrivals a tick (0078 A8's 0.9 / 0.3 as measured).
+- **Records.** 0078 amendment (fork and underground `Arrival` bytes on the balancer; the mixed-speed figures), 0079 §11 (the splitter-loop spread as measured; the dry pass over fork and merge cycles decided from it: M56b), §16 (the blocked side-load cost on the chain), question 11's four-input share in PROMPT's batch; `games/reference/CLAUDE.md` (the layout format, where scenarios live); the budget rows that move.
 
-## Seams
-**Provides:** the scenario goldens, `tests/helpers/belts.ts` (the text-map builder; M57 reuses it for the phone page).
-**Consumes:** M44 properties, M47 budget row, M54, M55.
+## Non-scope
+The engine input turn (question 11: Tyler's call), the per-merge cursor (0079 §16: decided from the chain measurement, engine work), extending the cut leader's dry pass to fork and merge cycles (0079 §11: M56b, conditional on the measured spread), a hidden-geometry variant for undergrounds (M55's fallback), a speed-override `State` (the reference game has one speed), the phone bench page (M57; it may reuse `tests/helpers/layout.ts`), a reference scenario-golden mechanism (hashes are pinned in the native tests instead), fixture balancer or jam-waves goldens (the 32-chain table fits one lane; the (20 %, 20) netcode cell is the jam measurement).
+
+## Files touched
+`games/reference/sim/tests/{common/{layout.rs, census.rs, mod.rs}, scenarios.rs (new)}`, `games/reference/sim/src/rules/belts/topology.rs` (the destroyed counter only), `games/reference/tests/{helpers/layout.ts (new), netcode/belt-scenarios.test.ts (new), browser/belt-scenarios.spec.ts (new), unit/layout.test.ts (new)}`, `games/reference/CLAUDE.md`, `packages/engine/fixtures/belts/{golden/mixed-speeds.json (new), tests/golden_scenarios.rs}`, `packages/engine/crates/engine/tests/main/forecasts.rs`, `docs/decisions/{0078,0079}-*.md` (manager), `games/reference/README.md` "Not implemented" only if it changes (manager).
+
+## Planning decisions
+- **The reference game is the scenario bed**, not the fixture: it has every entity the scenarios need, the fixture's 32-chain table cannot hold a two-lane balancer, and the deferred measurements (question 11, `Arrival` bytes, the loop spread) are about the reference game. The fixture keeps the one scenario the reference game cannot express.
+- **A paced builder, not "200 tiles a second"**: the host's rate limit is a rule (bursts of 40, 20 a second); natively `dispatch_batch` bypasses it in one tick; in the harnesses the builder paces itself and reports the ticks used. One text format, two parsers, one pinned hash per layout (the `BELT_SCRIPT_HASH` precedent).
+- **Measure, then decide**: the loop spread (0079 §11), the blocked side-load cost (§16) and the input share (question 11) are measured here and pinned; the engine changes they might justify are decisions (M56b, an ADR amendment, Tyler) and not this milestone's build.
+- **Conservation needs a destroyed-items counter** in the reference topology: today it destroys items on rotate, pick-up and re-pairing without counting; the counter follows `belts_unmapped`'s pattern and is test-only.
+
+## Order of work
+1. `layout.rs`, `census.rs`, the destroyed counter; the balancer layout; `balancer_4x4_balances`, `_one_output_blocked`, `edit_during_flow`.
+2. Rings: `ring_lap_time` (slow leg), `ring_saturated_holds`, `ring_with_splitter_spreads`; `sideload_chain` and its `slow_` timing.
+3. `layout.ts`, the `unit` hash test, the netcode cells, the browser spec.
+4. The fixture golden and the `forecasts.rs` arm; docs; Deviations with every measured figure.
 
 ## Exit criteria
-- [ ] Every scenario passes natively, under Node and Bun (fixture) and in the browser and netcode harness (reference), with the properties and the forecast budget asserted.
-- [ ] A text-map layout of 200 tiles builds in under one virtual second of actions (the rate limit is respected by the helper).
-- [ ] `pnpm test` and `pnpm lint` are green; the fast tier stays inside its budgets (large scenarios are `@slow`).
+- [ ] Every reference scenario passes natively with an inject-fail-revert each; conservation exact on each; the layout hashes agree between Rust and TS.
+- [ ] The netcode cells and browser spec pass; the `Arrival` bytes, question 11's share, the loop spread and the side-load cost are pinned in tests and recorded (0078/0079 amendments, PROMPT's batch).
+- [ ] The `mixed-speeds` golden replays under Node and Bun; the `forecasts.rs` arm pins 0078 A8's figures.
+- [ ] `pnpm test`, `pnpm lint`, `pnpm test:slow rust` (the `test-hooks` leg) and the `@slow` netcode and browser legs green; the fast tiers inside their budgets; `belts-tick` within noise of 0.2146 ms.
 
-## Open questions (answered by earlier phases)
-- M47/M48: which scenarios threaten the 16 KB/s row (the jam-waves cell), to be asserted, not just recorded.
+## Verification commands
+`cargo nextest run -E 'package(reference-sim)'` · `pnpm test rust -t scenario` · `pnpm test:slow rust -t ring` · `pnpm test:slow netcode -t reference_balancer` · `pnpm test:slow browser -t reference_balancer` · `pnpm test unit -t layout` · `pnpm golden belts` · `pnpm test rust -t mixed` · `pnpm test && pnpm lint`
+
+## Budgets
+None expected to move: the scenarios are tests. `belts-tick` 0.2146 ms (engine code untouched; `forecasts.rs` is a test).
 
 ## Deviations
 (filled in during execution)

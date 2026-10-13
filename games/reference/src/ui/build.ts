@@ -1,9 +1,9 @@
 // `createBuildUi` (M33 Scope; M51b the belt tools): the tool palette, construction mode, and the
 // two placement flows.
 //
-// The palette is one fixed row (`.build-palette`, bottom centre): the Build button (the furnace
+// The palette is one row that wraps on narrow screens, capped at the viewport width (`.build-palette`, bottom centre): the Build button (the furnace
 // tool, shown while the player holds a furnace item or is placing one), then the belt, spawner,
-// despawner and (M54) splitter tools (free, always shown), then Rotate (shown while a belt tool is
+// despawner, (M54) splitter and (M55) underground entrance and exit tools (free, always shown), then Rotate (shown while a belt tool is
 // on; the splitter tool's direction cycles all four, its footprint 1 x 2 facing east or west and 2 x 1
 // facing north or south, anchored at the tapped tile). A tool button
 // turns its tool on, or off when it is already on; Escape ends construction mode; Rotate or the
@@ -24,7 +24,7 @@
 // world cannot take another building) and the placement rule's own.
 //
 // DOM identity: `.build-palette`; `.build-button` (`data-build`, the furnace tool);
-// `.tool-button` (`data-tool="belt|spawner|despawner|splitter"`, `.is-on` while active); `.build-rotate`
+// `.tool-button` (`data-tool="belt|spawner|despawner|splitter|underground-in|underground-out"`, `.is-on` while active); `.build-rotate`
 // (`data-build-rotate`, `data-dir` = the page's copy of the direction, see `dir` below); `.build-confirm` (`data-build-confirm="x,y"`);
 // `.build-reason`.
 import type { ActionOutcome, Client } from 'engine'
@@ -43,7 +43,17 @@ export const LOCAL = {
   ROTATE_TOOL: 3,
 } as const
 /** `PLACE_MODE`'s `a` values (`content::local::TOOL_*`). */
-export const TOOL = { OFF: 0, FURNACE: 1, BELT: 2, SPAWNER: 3, DESPAWNER: 4, SPLITTER: 5 } as const
+export const TOOL = {
+  OFF: 0,
+  FURNACE: 1,
+  BELT: 2,
+  SPAWNER: 3,
+  DESPAWNER: 4,
+  SPLITTER: 5,
+  // M55: the underground entrance and exit (two tools; no auto-flip).
+  UNDERGROUND_IN: 6,
+  UNDERGROUND_OUT: 7,
+} as const
 type ToolCode = (typeof TOOL)[keyof typeof TOOL]
 
 /** The free belt tools, in palette order: `data-tool`, label, `PLACE_MODE` code, `BeltKind`. */
@@ -52,6 +62,18 @@ const BELT_TOOLS = [
   { key: 'spawner', label: 'Spawner', code: TOOL.SPAWNER, kind: 'Spawner' },
   { key: 'despawner', label: 'Despawner', code: TOOL.DESPAWNER, kind: 'Despawner' },
   { key: 'splitter', label: 'Splitter', code: TOOL.SPLITTER, kind: 'Splitter' },
+  {
+    key: 'underground-in',
+    label: 'Underground in',
+    code: TOOL.UNDERGROUND_IN,
+    kind: 'UndergroundIn',
+  },
+  {
+    key: 'underground-out',
+    label: 'Underground out',
+    code: TOOL.UNDERGROUND_OUT,
+    kind: 'UndergroundOut',
+  },
 ] as const satisfies ReadonlyArray<{ key: string; label: string; code: ToolCode; kind: BeltKind }>
 
 /** Each tool's footprint in tiles by direction (`content::FURNACE_FOOTPRINT`, `belt_footprint`:
@@ -76,6 +98,8 @@ const FOOTPRINT: Readonly<
     West: { w: 1, h: 2 },
     North: { w: 2, h: 1 },
   },
+  [TOOL.UNDERGROUND_IN]: { East: ONE, South: ONE, West: ONE, North: ONE },
+  [TOOL.UNDERGROUND_OUT]: { East: ONE, South: ONE, West: ONE, North: ONE },
 }
 
 /** `Dir::cw` (`ROTATE_TOOL`'s turn) and the arrow the Rotate button shows for each direction. */
@@ -129,6 +153,11 @@ function installBuildStyles(doc: Document): void {
     '  transform: translateX(-50%);',
     '  z-index: 5;',
     '  display: flex;',
+    // M55 fix round 1: eight tools are wider than a phone; the row wraps inside the viewport.
+    '  flex-wrap: wrap;',
+    '  justify-content: center;',
+    '  width: max-content;',
+    '  max-width: calc(100vw - 16px);',
     '  gap: 4px;',
     '}',
     '.build-button, .tool-button, .build-rotate, .build-confirm {',

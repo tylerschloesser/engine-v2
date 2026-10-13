@@ -261,7 +261,9 @@ export async function runScript(
  * run's middle tile picked up, splitting it), then (M53b) a spawner filling a dead-ended run, picked
  * up, and a despawner draining the run, picked up in turn, then (M54) a spawner splitting through a
  * splitter onto two dead-ended belts, the spawner picked up, the splitter turned 180 degrees (its
- * items destroyed) and picked up, and, since the belt tools and taps closed it, the last
+ * items destroyed) and picked up, then (M55) a spawner filling an underground pair (gap 2) and a
+ * belt, the spawner picked up and the exit picked up (the hidden line's items destroyed), and, since
+ * the belt tools and taps closed it, the last
  * furnace's panel opened again (what `reference_full_game_single` reads at the end). Ends quiescent:
  * no timer, no craft, no collect, no spawner, no item moving, so the state hash does not depend on
  * how many ticks the run took. */
@@ -359,6 +361,22 @@ export function fullGame(): Script {
       .rotateBelt(SPLITTER_AT)
       .pickUpBelt(SPLITTER_AT)
       .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1), belt: null })
+      // M55: a saturated spawner (iron, lane 0) into an underground entrance paired across a gap of
+      // two with an exit, a belt in front of the exit dead-ending. 200 ticks fill everything (the
+      // belt 4, the exit's half 2, the hidden line 12, the entrance's half 2, the spawner 4: about
+      // 64 ticks of inserts after a 64-tick trip), so the spawner's state stands still before it is
+      // picked up; then the exit is picked up, which breaks the pair and destroys the hidden line
+      // with its 12 items (question 14 (c)'s default) while the entrance keeps its 2 at the hood.
+      .panTo(UNDERGROUND_STAND)
+      .placeBelt(UNDERGROUND_FEED, 'East', 'Spawner')
+      .placeBelt(UNDERGROUND_IN_AT, 'East', 'UndergroundIn')
+      .placeBelt(UNDERGROUND_OUT_AT, 'East', 'UndergroundOut')
+      .placeBelt({ x: UNDERGROUND_OUT_AT.x + 1, y: UNDERGROUND_OUT_AT.y }, 'East')
+      .setSpawner(UNDERGROUND_FEED, 0, 'iron', 3)
+      .waitTicks(200)
+      .pickUpBelt(UNDERGROUND_FEED)
+      .pickUpBelt(UNDERGROUND_OUT_AT)
+      .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1), belt: null })
       .panTo(standBy(B))
       .openFurnace(B)
   )
@@ -382,6 +400,15 @@ export const SPAWNER_STAND: Tile = { x: 4, y: -13 }
 export const SPLITTER_FEED: Tile = { x: 3, y: -23 }
 export const SPLITTER_AT: Tile = { x: 4, y: -23 }
 export const SPLITTER_STAND: Tile = { x: 5, y: -21 }
+
+/** M55: `fullGame()`'s underground passage on row -32 (columns 0 to 5 are free land at
+ * `world.json`'s seed): the spawner at (0, -32), the entrance at (1, -32), the exit at (4, -32) (a
+ * gap of two), a belt at (5, -32); the stand (3, -30) is in view with no resource within collect
+ * range (the nearest, (6, -31) and (2, -27), are 3.16 tiles off). */
+export const UNDERGROUND_FEED: Tile = { x: 0, y: -32 }
+export const UNDERGROUND_IN_AT: Tile = { x: 1, y: -32 }
+export const UNDERGROUND_OUT_AT: Tile = { x: 4, y: -32 }
+export const UNDERGROUND_STAND: Tile = { x: 3, y: -30 }
 
 // ---------------------------------------------------------------------------------------------
 // Headless driver
@@ -642,7 +669,14 @@ export async function domDriver(page: Page): Promise<ScriptDriver> {
     async placeBelt(at, dir, kind) {
       // The palette: the tool, Rotate until the ghost faces `dir`, a mouse tap, then Escape.
       const tool = (
-        { Belt: 'belt', Spawner: 'spawner', Despawner: 'despawner', Splitter: 'splitter' } as const
+        {
+          Belt: 'belt',
+          Spawner: 'spawner',
+          Despawner: 'despawner',
+          Splitter: 'splitter',
+          UndergroundIn: 'underground-in',
+          UndergroundOut: 'underground-out',
+        } as const
       )[kind]
       let ui = await g.pickTool(page, tool)
       for (let i = 0; i < 4 && ui?.tool?.dir !== dir; i++) {

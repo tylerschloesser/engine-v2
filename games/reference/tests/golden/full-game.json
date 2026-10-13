@@ -4,7 +4,7 @@
   "maxLines": 32768,
   "maxItems": 262144,
   "players": 1,
-  "ticks": 1115,
+  "ticks": 1361,
   "checkpoints": [
     {
       "tick": 10,
@@ -451,8 +451,108 @@
       "hash": "715dfc03744451e3"
     },
     {
-      "tick": 1115,
+      "tick": 1120,
       "hash": "9a15463bf508fd60"
+    },
+    {
+      "tick": 1130,
+      "hash": "9a15463bf508fd60"
+    },
+    {
+      "tick": 1140,
+      "hash": "9a15463bf508fd60"
+    },
+    {
+      "tick": 1150,
+      "hash": "04c20d9e10cb775e"
+    },
+    {
+      "tick": 1160,
+      "hash": "d61481ea724d225e"
+    },
+    {
+      "tick": 1170,
+      "hash": "d0d0e089ca5636d7"
+    },
+    {
+      "tick": 1180,
+      "hash": "6a4cfb8708c351c0"
+    },
+    {
+      "tick": 1190,
+      "hash": "b4def9669be58a19"
+    },
+    {
+      "tick": 1200,
+      "hash": "5046e97a4654aa17"
+    },
+    {
+      "tick": 1210,
+      "hash": "54d42c48b1a55f72"
+    },
+    {
+      "tick": 1220,
+      "hash": "ddcad09f8cc94216"
+    },
+    {
+      "tick": 1230,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1240,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1250,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1260,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1270,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1280,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1290,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1300,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1310,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1320,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1330,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1340,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1350,
+      "hash": "4e205853c7d7604e"
+    },
+    {
+      "tick": 1360,
+      "hash": "a415cfa32bd2551c"
+    },
+    {
+      "tick": 1361,
+      "hash": "15bb1a051ba8a275"
     }
   ]
 }

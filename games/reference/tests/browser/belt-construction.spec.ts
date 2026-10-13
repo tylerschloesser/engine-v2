@@ -274,7 +274,14 @@ test('reference_belt_tool_palette', async ({ page }) => {
   // No furnace: the belt tools only.
   expect((await uiState(page))?.can_build).toBe(false)
   await expect(furnaceTool).toBeHidden()
-  await expect(tools).toHaveText(['Belt', 'Spawner', 'Despawner', 'Splitter'])
+  await expect(tools).toHaveText([
+    'Belt',
+    'Spawner',
+    'Despawner',
+    'Splitter',
+    'Underground in',
+    'Underground out',
+  ])
   for (const t of await tools.all()) await expect(t).toBeVisible()
 
   // A tool button turns its tool on, another switches, the same one again turns it off.

@@ -106,10 +106,19 @@ fn belt_frame(view: &FrameView<'_, RefGame>) -> f32 {
 /// The sprite and `FLIP_X` for a belt of `kind` and `shape` facing `dir` (`content::SPRITE_BELT_*`):
 /// east, south and north have their own sprites; west is east mirrored, which swaps a curve's side.
 /// Spawners and despawners draw their own straight sprite whatever the shape; a splitter (M54) its
-/// 2x1 sprite (`content::SPRITE_SPLITTER`, drawn at the footprint's min corner).
+/// 2x1 sprite (`content::SPRITE_SPLITTER`, drawn at the footprint's min corner); an underground end
+/// (M55) its hooded sprite (`content::SPRITE_UNDERGROUND_IN` / `_OUT`; the gap tiles draw nothing).
 pub fn belt_sprite(kind: BeltKind, shape: BeltShape, dir: Dir) -> (u16, bool) {
     let (east, west) = match (kind, shape) {
         (BeltKind::Splitter, _) => (content::SPRITE_SPLITTER, content::SPRITE_SPLITTER),
+        (BeltKind::UndergroundIn, _) => (
+            content::SPRITE_UNDERGROUND_IN,
+            content::SPRITE_UNDERGROUND_IN,
+        ),
+        (BeltKind::UndergroundOut, _) => (
+            content::SPRITE_UNDERGROUND_OUT,
+            content::SPRITE_UNDERGROUND_OUT,
+        ),
         (BeltKind::Spawner, _) => (content::SPRITE_BELT_SPAWNER, content::SPRITE_BELT_SPAWNER),
         (BeltKind::Despawner, _) => (
             content::SPRITE_BELT_DESPAWNER,
@@ -392,6 +401,8 @@ impl RefClient {
                 local::TOOL_SPAWNER => Some(Tool::Belt(BeltKind::Spawner)),
                 local::TOOL_DESPAWNER => Some(Tool::Belt(BeltKind::Despawner)),
                 local::TOOL_SPLITTER => Some(Tool::Belt(BeltKind::Splitter)),
+                local::TOOL_UNDERGROUND_IN => Some(Tool::Belt(BeltKind::UndergroundIn)),
+                local::TOOL_UNDERGROUND_OUT => Some(Tool::Belt(BeltKind::UndergroundOut)),
                 _ => return,
             };
             self.placing.set(tool);

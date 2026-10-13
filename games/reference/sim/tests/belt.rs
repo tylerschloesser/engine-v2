@@ -199,7 +199,8 @@ fn pickup_despawns() {
 /// deposits and smelting, every entity's anchor at the end of every tick equals its anchor at spawn,
 /// and (M52) every belt's stored shape is the one its neighbours give, curves included. M54: a
 /// splitter is placed and turned every round, and every entity's whole footprint (a furnace's 2x2, a
-/// splitter's 2x1 for its `dir`) is its own after every tick.
+/// splitter's 2x1 for its `dir`) is its own after every tick. M55: an underground pair is placed and
+/// its entrance turned every round (one end only).
 /// Fails if any rule moves an entity (a rotate that shifts the origin or turns a splitter's
 /// footprint, a furnace put elsewhere).
 #[test]
@@ -259,6 +260,13 @@ fn no_reference_entity_moves_in_a_tick() {
     s.place_belt(P1, splitter, Dir::East, BeltKind::Splitter)
         .unwrap();
     check(&s, &mut spawned, "splitter placed");
+    // M55: an underground pair (gap 2); the entrance is turned every round.
+    let (entrance, exit) = (TilePos::new(40, 47), TilePos::new(43, 47));
+    s.place_belt(P1, entrance, Dir::East, BeltKind::UndergroundIn)
+        .unwrap();
+    s.place_belt(P1, exit, Dir::East, BeltKind::UndergroundOut)
+        .unwrap();
+    check(&s, &mut spawned, "underground pair placed");
     for (i, &at) in belts.iter().enumerate() {
         s.place_belt(P1, at, Dir::East, KINDS[i % 3]).unwrap();
         check(&s, &mut spawned, "belt placed");
@@ -275,6 +283,8 @@ fn no_reference_entity_moves_in_a_tick() {
         // Addressed by its second tile on odd rounds.
         s.rotate_belt(P1, TilePos::new(42, 45 + round % 2)).unwrap();
         check(&s, &mut spawned, "rotate the splitter");
+        s.rotate_belt(P1, entrance).unwrap();
+        check(&s, &mut spawned, "rotate the entrance");
         if round == 3 {
             s.pick_up_belt(P1, belts[1]).unwrap();
             s.place_belt(P1, belts[1], Dir::North, BeltKind::Belt)
@@ -292,15 +302,21 @@ fn no_reference_entity_moves_in_a_tick() {
         s.furnace_at(furnace).unwrap().ingots_out > 0,
         "the furnace smelted"
     );
-    // M54: one splitter more than M52's 7 spawns and 6 entities.
+    // M54: one splitter more than M52's 7 spawns and 6 entities; M55: two underground ends more.
     assert_eq!(
         spawned.len(),
-        8,
-        "two furnaces, five belt spawns and a splitter"
+        10,
+        "two furnaces, five belt spawns, a splitter and two underground ends"
     );
     assert!(curves.get() > 0, "the rotations made curves (M52)");
-    assert_eq!(s.entities().len(), 7);
+    assert_eq!(s.entities().len(), 9);
     assert_eq!(s.belt_at(splitter).unwrap().dir, Dir::East, "six 180s");
+    assert_eq!(
+        s.belt_at(entrance).unwrap().dir,
+        Dir::West,
+        "six quarter turns"
+    );
+    s.assert_topology();
 }
 
 /// Belts sleep (the furnace rule's `idle_furnaces_cost_nothing`): 1,000 belts of every kind and
@@ -309,7 +325,9 @@ fn no_reference_entity_moves_in_a_tick() {
 /// runs counted), so the topology rule is what sleeps. Fails if a belt rule leaves a timer on a belt,
 /// puts one from the tick (a put from the tick wakes nothing, but a wake would revisit), or keeps
 /// re-mapping. M54: a second block two rows below mixes splitters (every facing, some turned) into
-/// belts, spawners and despawners; it is mapped (the oracle) and sleeps too.
+/// belts, spawners and despawners; it is mapped (the oracle) and sleeps too. M55: a third block mixes
+/// underground entrances and exits (some paired, some turned) into belts and despawners; its hidden
+/// lines sleep too.
 #[test]
 fn idle_belts_cost_nothing() {
     let mut s = RefScenario::new();
@@ -352,6 +370,34 @@ fn idle_belts_cost_nothing() {
         }
     }
     let block = s.entities().len() - 1_000;
+    // M55's block: rows 79-88 (row 77-78 empty), belts, despawners and both underground ends, all
+    // kinds facing east or west (pairs form along the rows) or north and south by turns.
+    s.clear_area(TilePos::new(40, 79), 40, 10);
+    let ug = [
+        BeltKind::Belt,
+        BeltKind::UndergroundIn,
+        BeltKind::Belt,
+        BeltKind::UndergroundOut,
+        BeltKind::Despawner,
+        BeltKind::UndergroundOut,
+        BeltKind::UndergroundIn,
+    ];
+    let ug_dirs = [
+        Dir::East,
+        Dir::East,
+        Dir::West,
+        Dir::South,
+        Dir::East,
+        Dir::North,
+    ];
+    for i in 0..400 {
+        let at = TilePos::new(40 + i % 40, 79 + i / 40);
+        s.place_belt(P1, at, ug_dirs[(i % 6) as usize], ug[(i % 7) as usize])
+            .expect("free ground");
+        if i % 11 == 0 {
+            s.rotate_belt(P1, at).unwrap();
+        }
+    }
     s.step_ticks(2); // the last action's wake is served and finds nothing to do.
 
     // M52: the world is mapped, with curves, side-loads and runs (every belt's lanes indexed).
@@ -360,7 +406,7 @@ fn idle_belts_cost_nothing() {
     for (_, e) in s.entities() {
         let b = e.as_belt().copied().expect("belts only");
         if b.origin.y >= 65 {
-            continue; // M54's block, counted below.
+            continue; // M54's and M55's blocks, counted below.
         }
         let tr = s.read().transport();
         let m = lanes_at(tr, b.origin.tile()).expect("every belt is mapped");
@@ -386,11 +432,30 @@ fn idle_belts_cost_nothing() {
     //   despawner joins nothing in front, so every other same-way pair (of 410) stays apart.
     // - 1,000 - 67 = 933 fronting belts, two lines each: 1,866.
     // M54's block adds its own lines (eight per splitter, two per other fronting belt).
-    let block_lines = s.read().transport().lines_len() - 1866;
+    let mut ug_lines = 0;
+    let (mut ug_ends, mut ug_paired, mut ug_runs) = (0, 0, 0);
+    for (_, e) in s.entities() {
+        let b = e.as_belt().copied().expect("belts only");
+        if b.origin.y < 79 {
+            continue;
+        }
+        let tr = s.read().transport();
+        let m = lanes_at(tr, b.origin.tile()).expect("mapped");
+        ug_ends += usize::from(b.kind.is_underground());
+        ug_runs += usize::from(m.off > 0);
+        if m.off == 0 {
+            ug_lines += 2;
+        }
+        if reference_sim::rules::belts::topology::hidden_lanes(tr, b.origin.tile()).is_some() {
+            ug_paired += 1;
+            ug_lines += 2;
+        }
+    }
+    let block_lines = s.read().transport().lines_len() - 1866 - ug_lines;
     let mut block_runs = 0;
     for (_, e) in s.entities() {
         let b = e.as_belt().copied().expect("belts only");
-        if b.origin.y >= 65 && b.kind != BeltKind::Splitter {
+        if (65..79).contains(&b.origin.y) && b.kind != BeltKind::Splitter {
             let m = lanes_at(s.read().transport(), b.origin.tile()).expect("mapped");
             block_runs += usize::from(m.off > 0);
         }
@@ -406,6 +471,19 @@ fn idle_belts_cost_nothing() {
         (curves, merges, runs),
         (119, 260, 67),
         "curves, side-loading lanes, belts inside a run"
+    );
+    // M55's block, measured once: 400 belts, 228 of them underground ends, 13 entrances paired, 1
+    // belt inside a run (399 fronting pairs): 2 x 399 + 2 x 13 = 824 lines.
+    assert_eq!(
+        (
+            s.entities().len() - 1_000 - block,
+            ug_ends,
+            ug_paired,
+            ug_runs,
+            ug_lines
+        ),
+        (400, 228, 13, 1, 824),
+        "M55 block: entities, underground ends, paired entrances, belts inside a run, lines"
     );
 
     let writes = s.writes_logged();

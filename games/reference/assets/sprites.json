@@ -177,6 +177,48 @@
       "pivot": [0, 0],
       "size": [2, 1],
       "frames": 8
+    },
+    "25": {
+      "name": "underground/in/east",
+      "rect": [2, 426, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "26": {
+      "name": "underground/in/south",
+      "rect": [2, 446, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "27": {
+      "name": "underground/in/north",
+      "rect": [2, 466, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "28": {
+      "name": "underground/out/east",
+      "rect": [2, 486, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "29": {
+      "name": "underground/out/south",
+      "rect": [2, 506, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "30": {
+      "name": "underground/out/north",
+      "rect": [2, 526, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
     }
   }
 }

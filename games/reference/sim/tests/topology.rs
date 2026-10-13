@@ -546,7 +546,8 @@ fn topology_surgery_count_per_edit() {
 
 /// The incremental mapping equals the from-scratch one (`RefScenario::assert_topology`) after every
 /// tick of 1,500 random edits on an 8 x 8 patch (a fixed LCG): placements (M54: one in four a
-/// splitter; 417 placed, 65 of them splitters), rotations and pick-ups, one to three in a tick (two
+/// splitter; M55: one in four an underground end, either kind; 415 placed, 68 of them splitters and
+/// 117 undergrounds, a paired entrance standing on 461 of the ticks), rotations and pick-ups, one to three in a tick (two
 /// edits on neighbouring tiles, or on one tile, served by the same tick). Fails if any reshape, cut or join leaves a run, a curve, an output or a shape behind what
 /// the belts say, or leaks a line.
 #[test]
@@ -560,6 +561,7 @@ fn topology_random_edits_stay_canonical() {
         ((seed >> 33) % u64::from(n)) as u32
     };
     let (mut placed, mut rotated, mut picked, mut splitters) = (0, 0, 0, 0);
+    let (mut undergrounds, mut paired) = (0, 0);
     for tick in 0..1_500 {
         let mut batch = Vec::new();
         for _ in 0..1 + next(3) {
@@ -568,14 +570,16 @@ fn topology_random_edits_stay_canonical() {
                 y: 50 + next(8) as i32,
             };
             batch.push(match next(5) {
-                // M54: one placement in four is a splitter (its footprint from `at`).
+                // M54: one placement in four is a splitter (its footprint from `at`); M55: one in
+                // eight an underground entrance and one in eight an exit (the same draws).
                 0 | 1 => reference_sim::RefAction::PlaceBelt {
                     at,
                     dir: DIRS[next(4) as usize],
-                    kind: if next(4) == 0 {
-                        BeltKind::Splitter
-                    } else {
-                        BeltKind::Belt
+                    kind: match next(8) {
+                        0 | 1 => BeltKind::Splitter,
+                        2 => BeltKind::UndergroundIn,
+                        3 => BeltKind::UndergroundOut,
+                        _ => BeltKind::Belt,
                     },
                 },
                 2 | 3 => reference_sim::RefAction::RotateBelt { at },
@@ -588,6 +592,7 @@ fn topology_random_edits_stay_canonical() {
                     reference_sim::RefAction::PlaceBelt { kind, .. } => {
                         placed += 1;
                         splitters += usize::from(*kind == BeltKind::Splitter);
+                        undergrounds += usize::from(kind.is_underground());
                     }
                     reference_sim::RefAction::RotateBelt { .. } => rotated += 1,
                     _ => picked += 1,
@@ -596,10 +601,28 @@ fn topology_random_edits_stay_canonical() {
         }
         let _ = tick;
         s.assert_topology();
+        // M55: pairs exist along the way (the oracle checked each one).
+        for (_, e) in s.entities() {
+            if let Some(b) = e.as_belt()
+                && b.kind == BeltKind::UndergroundIn
+                && reference_sim::rules::belts::topology::hidden_lanes(
+                    s.read().transport(),
+                    b.origin.tile(),
+                )
+                .is_some()
+            {
+                paired += 1;
+            }
+        }
     }
     assert!(
-        placed > 300 && rotated > 300 && picked > 100 && splitters > 0,
-        "the edits ran: {placed} placed ({splitters} splitters), {rotated} rotated, {picked} picked up"
+        placed > 300
+            && rotated > 300
+            && picked > 100
+            && splitters > 0
+            && undergrounds > 0
+            && paired > 0,
+        "the edits ran: {placed} placed ({splitters} splitters, {undergrounds} undergrounds), {rotated} rotated, {picked} picked up, {paired} paired entrance-ticks"
     );
 }
 

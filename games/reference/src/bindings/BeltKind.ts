@@ -6,5 +6,9 @@
  * M54: a splitter (README "Belts", Splitters), the one 2x1 kind: its `origin` is the footprint's
  * min corner (`content::belt_footprint`), its halves are derived from `dir`
  * (`rules::belts::topology::splitter_halves`), and its `shape` and `spawn` are unused.
+ * M55: an underground entrance and exit (README "Belts", Undergrounds), one tile each, `dir` the
+ * flow direction; an entrance pairs with the nearest same-facing exit ahead with at most four tiles
+ * between them (`rules::belts::topology::underground_partner`, derived from the layout, never
+ * stored); `shape` (always straight) and `spawn` are unused.
  */
-export type BeltKind = "Belt" | "Spawner" | "Despawner" | "Splitter";
+export type BeltKind = "Belt" | "Spawner" | "Despawner" | "Splitter" | "UndergroundIn" | "UndergroundOut";

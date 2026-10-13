@@ -131,7 +131,9 @@ pub enum RefAction {
     /// nonzero) on lane `lane` of the belt at `at`, `pos` positions behind the tile's first position
     /// on its line, on the next tick (`rules::belts::topology::test_insert`). How native tests put
     /// items on lines before M53's spawners. M54: on a splitter half's tile, `lane` 0 and 1 are its
-    /// input lines' lanes and 2 and 3 its output lines' (lane `lane - 2`).
+    /// input lines' lanes and 2 and 3 its output lines' (lane `lane - 2`). M55: on a paired
+    /// underground entrance, `lane` 2 and 3 are its hidden line's lanes (`pos` from the hidden line's
+    /// front, the exit's side).
     #[cfg(feature = "test-hooks")]
     TestInsertItem {
         at: TileXY,
@@ -330,6 +332,10 @@ impl Dir {
 /// M54: a splitter (README "Belts", Splitters), the one 2x1 kind: its `origin` is the footprint's
 /// min corner (`content::belt_footprint`), its halves are derived from `dir`
 /// (`rules::belts::topology::splitter_halves`), and its `shape` and `spawn` are unused.
+/// M55: an underground entrance and exit (README "Belts", Undergrounds), one tile each, `dir` the
+/// flow direction; an entrance pairs with the nearest same-facing exit ahead with at most four tiles
+/// between them (`rules::belts::topology::underground_partner`, derived from the layout, never
+/// stored); `shape` (always straight) and `spawn` are unused.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
 pub enum BeltKind {
@@ -338,6 +344,15 @@ pub enum BeltKind {
     Spawner,
     Despawner,
     Splitter,
+    UndergroundIn,
+    UndergroundOut,
+}
+
+impl BeltKind {
+    /// An underground entrance or exit (M55).
+    pub const fn is_underground(self) -> bool {
+        matches!(self, BeltKind::UndergroundIn | BeltKind::UndergroundOut)
+    }
 }
 
 /// A belt's shape, derived from its neighbours (README "Belts", Shape; M52 derives and writes it,
@@ -675,7 +690,7 @@ pub struct RefGame;
 impl Game for RefGame {
     // `test-hooks` (never shipped) reports one version higher: a save of the normal build is then
     // `SaveIncompatible` (M34b).
-    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 11 } else { 10 };
+    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 12 } else { 11 };
     //  3: `Furnace` entity, `PlaceFurnace`, resources `NOT_BUILDABLE` (M33).
     //  4: `FurnaceDeposit`, `FurnaceTake`, `FurnacePickUp` and their rejects (M33b).
     //  5: `RefGlobal { colours }`, written on `Joined` (M34).
@@ -690,6 +705,9 @@ impl Game for RefGame {
     //     field built during M53b never shipped). No migration: a schema 8 save is refused.
     // 10: `BeltKind::Splitter` and prototypes 2 and 3 (the splitter's two axes); a splitter's eight
     //     lines and forks (M54). No migration: a schema 9 save is refused.
+    // 11: `BeltKind::UndergroundIn`/`UndergroundOut`; an entrance's lanes run through a hidden line
+    //     of `(gap + 1) x 256` (no segments) into its paired exit's (M55). No migration: a schema 10
+    //     save is refused.
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;

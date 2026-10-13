@@ -338,7 +338,14 @@ impl RefScenario {
     /// splitter's halves each hold four straight 128-position lines running its way (`splitter_lanes`),
     /// each input lane forks onto the left and right halves' output lanes (`a` the left), each half's
     /// output lines follow `output_of` like a fronting belt's, a belt behind a half feeds its input
-    /// lanes, and the store holds eight lines per splitter.
+    /// lanes, and the store holds eight lines per splitter. M55: an underground end holds two straight
+    /// 128-position lines on its tile (the entrance's from the midline back, the exit's from the front
+    /// edge); an entrance's partner is found here by its own scan (the first underground on its axis
+    /// within five tiles ahead, an exit facing its way); a paired entrance's lanes lead `Next` into two
+    /// hidden lines of `(gap + 1) x 256` with no segments and no schedule, each `Next` into the exit's
+    /// lane of the same index; an unpaired one dead-ends; an exit's lanes follow `output_of`; a
+    /// side-load onto either end lands through its hood; the store holds two more lines per paired
+    /// entrance.
     pub fn assert_topology(&self) {
         self.assert_topology_in(TileRect::new(
             TilePos::new(-200, -200),
@@ -398,6 +405,7 @@ impl RefScenario {
             })
         };
         let mut fronts = 0u32;
+        let mut hidden = 0u32;
         let mut all = Vec::new();
         w.entities_in(rect, &mut |id, e| all.push((id, *e)))
             .expect("host reads are total");
@@ -427,11 +435,26 @@ impl RefScenario {
                     Link::SideLoad { near } => {
                         let mf = lanes_at(tr, f).expect("front mapped");
                         let line = mf.lane[usize::from(near)];
-                        let at = |lane: u8| mf.off + if lane == near { 64 } else { 192 };
-                        [
-                            Output::Merge { line, at: at(0) },
-                            Output::Merge { line, at: at(1) },
-                        ]
+                        let land = |lane: u8| if lane == near { 64 } else { 192 };
+                        // M55: onto an underground end only where the landing is on its visible
+                        // half (the entrance's back half, the exit's front half).
+                        let kind = live(f).expect("front belt").kind;
+                        let out = |lane: u8| match kind {
+                            BeltKind::UndergroundIn if land(lane) >= 128 => Output::Merge {
+                                line,
+                                at: land(lane) - 128,
+                            },
+                            BeltKind::UndergroundOut if land(lane) < 128 => Output::Merge {
+                                line,
+                                at: land(lane),
+                            },
+                            BeltKind::UndergroundIn | BeltKind::UndergroundOut => Output::DeadEnd,
+                            _ => Output::Merge {
+                                line,
+                                at: mf.off + land(lane),
+                            },
+                        };
+                        [out(0), out(1)]
                     }
                 }
             };
@@ -476,6 +499,97 @@ impl RefScenario {
                 fronts += 4;
                 continue;
             }
+            if b.kind.is_underground() {
+                assert_eq!(
+                    b.shape,
+                    BeltShape::Straight,
+                    "{t:?}: an underground is straight"
+                );
+                let m = lanes_at(tr, t).unwrap_or_else(|| panic!("{t:?} is not mapped"));
+                assert_eq!((m.off, m.len), (0, 128), "{t:?}: an underground's half");
+                let entrance = b.kind == BeltKind::UndergroundIn;
+                for l in m.lane {
+                    let mut segs = Vec::new();
+                    tr.segments(l, &mut |g| segs.push(g)).expect("line");
+                    assert_eq!(segs.len(), 1, "{t:?}: line {l:?} segments");
+                    assert_eq!(tr.len(l), Ok(128), "{t:?}: line {l:?} len");
+                    assert_eq!(store.schedule(l).expect("line"), None, "{t:?}: no schedule");
+                    // Position 0 is the midline (entrance) or the front edge (exit), the edge rule
+                    // putting it one position back on an east or south end.
+                    let p = tr.pos_to_world(l, 0).expect("line").expect("on it");
+                    let (along, front, pos) = match b.dir {
+                        reference_sim::Dir::East => (p.x, (t.x + 1) * 256, true),
+                        reference_sim::Dir::South => (p.y, (t.y + 1) * 256, true),
+                        reference_sim::Dir::West => (-p.x, -(t.x * 256), false),
+                        reference_sim::Dir::North => (-p.y, -(t.y * 256), false),
+                    };
+                    let behind = front - along - i32::from(pos);
+                    assert_eq!(
+                        behind,
+                        if entrance { 128 } else { 0 },
+                        "{t:?} {b:?}: line {l:?} starts on its half"
+                    );
+                }
+                fronts += 1;
+                if !entrance {
+                    let want = want_outs(t, output_of(w, t, b).expect("host"));
+                    assert_eq!(
+                        [tr.out(m.lane[0]), tr.out(m.lane[1])],
+                        [Ok(want[0]), Ok(want[1])],
+                        "{t:?} {b:?}: exit output"
+                    );
+                    continue;
+                }
+                // The oracle's own pairing scan (README "Belts", Undergrounds).
+                let mut partner = None;
+                for k in 1..=5 {
+                    let x = ahead(t, b.dir, k);
+                    if let Some(o) = live(x)
+                        && o.kind.is_underground()
+                        && matches!(
+                            (o.dir, b.dir),
+                            (
+                                reference_sim::Dir::East | reference_sim::Dir::West,
+                                reference_sim::Dir::East | reference_sim::Dir::West
+                            ) | (
+                                reference_sim::Dir::North | reference_sim::Dir::South,
+                                reference_sim::Dir::North | reference_sim::Dir::South
+                            )
+                        )
+                    {
+                        if o.kind == BeltKind::UndergroundOut && o.dir == b.dir {
+                            partner = Some((x, k as u32 - 1));
+                        }
+                        break;
+                    }
+                }
+                match partner {
+                    None => assert_eq!(
+                        [tr.out(m.lane[0]), tr.out(m.lane[1])],
+                        [Ok(Output::DeadEnd); 2],
+                        "{t:?}: an unpaired entrance dead-ends"
+                    ),
+                    Some((x, gap)) => {
+                        let mx = lanes_at(tr, x).expect("exit mapped");
+                        for k in 0..2 {
+                            let Ok(Output::Next(h)) = tr.out(m.lane[k]) else {
+                                panic!("{t:?} lane {k}: paired with {x:?}, no hidden line");
+                            };
+                            let mut n = 0;
+                            tr.segments(h, &mut |_| n += 1).expect("hidden line");
+                            assert_eq!(n, 0, "{t:?} lane {k}: the hidden line has no segments");
+                            assert_eq!(
+                                (tr.len(h), tr.out(h)),
+                                (Ok((gap + 1) * 256), Ok(Output::Next(mx.lane[k]))),
+                                "{t:?} lane {k}: hidden line to {x:?} across {gap}"
+                            );
+                            assert_eq!(store.schedule(h).expect("line"), None);
+                        }
+                        hidden += 1;
+                    }
+                }
+                continue;
+            }
             let m = lanes_at(tr, t).unwrap_or_else(|| panic!("{t:?} is not mapped"));
             for lane in 0..2 {
                 let want = if b.kind == BeltKind::Spawner && m.off + 256 == m.len {
@@ -513,6 +627,7 @@ impl RefScenario {
                     f.dir == b.dir
                         && b.kind == BeltKind::Belt
                         && !matches!(f.kind, BeltKind::Spawner | BeltKind::Splitter)
+                        && !f.kind.is_underground()
                 });
                 let back = live(ahead(t, b.dir, -1)).filter(|k| {
                     k.dir == b.dir
@@ -563,8 +678,8 @@ impl RefScenario {
         }
         assert_eq!(
             tr.lines_len(),
-            2 * fronts,
-            "two lines per fronting belt and eight per splitter, no leak"
+            2 * fronts + 2 * hidden,
+            "two lines per fronting belt, eight per splitter, two hidden per paired entrance, no leak"
         );
     }
 

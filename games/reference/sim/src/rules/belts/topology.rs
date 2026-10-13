@@ -37,6 +37,33 @@
 //! destroyed when it is picked up; [`splitter_lanes`] reads a half's four lines back from the tile
 //! index (input or output by where its segment starts).
 //!
+//! **Undergrounds** (M55; README "Belts", Undergrounds and Numbers). An entrance
+//! ([`BeltKind::UndergroundIn`]) and an exit ([`BeltKind::UndergroundOut`]) are one tile each, run
+//! boundaries with a line pair of their own (never joined, split or rescaled), always straight, with
+//! no inputs of their own ([`inputs_of`]). Per lane the entrance holds its visible back half (from
+//! the midline back to the back edge, [`UNDERGROUND_HALF`] = 128) and the exit its visible front half
+//! (from the front edge to the midline, 128), on the lane's usual cross position (the edge rule);
+//! [`Form::Underground`] tells the two apart by where the segment starts. **Pairing**
+//! ([`underground_partner`]): from an entrance facing `d`, the first underground on `d`'s axis within
+//! tiles 1..=5 ahead ends the search, and it is the partner iff it is an exit facing `d` (so gaps
+//! 0..=[`UNDERGROUND_MAX_GAP`]); tiles between hold anything, and undergrounds on the other axis are
+//! transparent (question 14 (b)'s default). Pairing is a pure function of the layout: no partner id
+//! is stored (0076 §4), and it runs in the tick only (`apply` never reads five tiles), so a steal, a
+//! removal and a rotation reconcile from the layout alone. A paired entrance owns a **hidden line**
+//! per lane, `(gap + 1) x 256` long with no segments (never in the tile index, never drawn, never
+//! replicated: 0079 §17), linked entrance `Next(hidden)` and hidden `Next(exit lane)`, lane for lane,
+//! so an item takes exactly the surface belt's time; it is reached from the entrance lane's `Next`.
+//! Unpaired, the entrance's lanes dead-end at the hood (its line's position 0); a pair that breaks
+//! or whose gap changes destroys the hidden line and its items (question 14 (c)'s default) and a new
+//! gap gets a new hidden line. An exit's own lines never change with pairing; a belt behind it
+//! facing the same way dead-ends (an unpaired exit accepts nothing from behind, and a paired one
+//! only from its hidden line); the exit's output feeds the tile in front like a belt's (C1-C4), and
+//! it counts as an input of that tile. A belt behind an entrance feeds it (`Next`); a belt into
+//! either end's side lands through the hood: on an entrance a landing `L` positions behind the tile's
+//! front edge is `Merge { at: L - 128 }` when `L >= 128` and a dead end otherwise, on an exit `Merge
+//! { at: L }` when `L < 128` and a dead end otherwise. Rotating an end turns that end only (`dir.cw()`,
+//! the README's assumed line; question 14 (a)): its lines are re-created and it unpairs.
+//!
 //! **Lines.** One engine line is one lane (0076 §1). Lane 0 is the lane on the belt's left seen along
 //! `dir`, lane 1 its right; lanes keep their index through `Next` (C2) and a curve. One line per lane
 //! per maximal straight run (straight tiles of one direction, each feeding the next from behind),
@@ -99,6 +126,11 @@ pub const OUTER_RADIUS: u32 = 188;
 pub const LANE_INSET: i32 = 68;
 /// A splitter's input and output lane lines (M54): half a tile each.
 pub const SPLITTER_LEN: u32 = 128;
+/// An underground end's visible lane line (M55): half a tile, the entrance's back half or the
+/// exit's front half.
+pub const UNDERGROUND_HALF: u32 = 128;
+/// The most empty tiles between a paired entrance and exit (README "Belts", Numbers: one span).
+pub const UNDERGROUND_MAX_GAP: u32 = 4;
 /// Side-load landings past the target tile's first position: the feeder lane nearer the target's
 /// back lands 64 from its back edge, the other 64 from its front edge.
 pub const SIDE_BACK: u32 = 192;
@@ -276,10 +308,13 @@ pub fn live_belt(w: &dyn WorldRead<RefGame>, at: TilePos) -> Result<Option<Belt>
     Ok(w.entity(id)?.and_then(RefEntity::as_live_belt).copied())
 }
 
-/// A live belt on `from` whose front is `into` and which hands items on (a despawner sinks them).
+/// A live belt on `from` whose front is `into` and which hands items on (a despawner sinks them;
+/// an underground entrance hands its items to its hidden line, never to the surface: M55).
 fn feeds(w: &dyn WorldRead<RefGame>, from: TilePos, into: TilePos) -> Result<bool, Unknown> {
-    Ok(live_belt(w, from)?
-        .is_some_and(|b| b.kind != BeltKind::Despawner && ahead(from, b.dir, 1) == into))
+    Ok(live_belt(w, from)?.is_some_and(|b| {
+        !matches!(b.kind, BeltKind::Despawner | BeltKind::UndergroundIn)
+            && ahead(from, b.dir, 1) == into
+    }))
 }
 
 /// The kind of the live belt on `at`, a plain belt when there is none (placement asks for the tile
@@ -288,15 +323,16 @@ fn kind_on(w: &dyn WorldRead<RefGame>, at: TilePos) -> Result<BeltKind, Unknown>
     Ok(live_belt(w, at)?.map_or(BeltKind::Belt, |b| b.kind))
 }
 
-/// [`Inputs`] of a belt of `kind` facing `dir` on `at`: none for a spawner (M53b) or a splitter (M54:
-/// its shape never changes; what feeds its halves is [`output_of`]'s).
+/// [`Inputs`] of a belt of `kind` facing `dir` on `at`: none for a spawner (M53b), a splitter (M54:
+/// its shape never changes; what feeds its halves is [`output_of`]'s) or an underground end (M55:
+/// always straight).
 pub fn inputs_of(
     w: &dyn WorldRead<RefGame>,
     at: TilePos,
     dir: Dir,
     kind: BeltKind,
 ) -> Result<Inputs, Unknown> {
-    if matches!(kind, BeltKind::Spawner | BeltKind::Splitter) {
+    if matches!(kind, BeltKind::Spawner | BeltKind::Splitter) || kind.is_underground() {
         return Ok(Inputs::default());
     }
     Ok(Inputs {
@@ -337,10 +373,15 @@ pub fn shape_of_kind(
 
 /// The output of the belt `b` standing on `at` (C1-C4, R6, R7; M53b: a despawner sinks, a spawner
 /// in front accepts nothing; M54: a splitter half on `at` outputs like a belt, and a splitter in
-/// front accepts only from behind one of its halves).
+/// front accepts only from behind one of its halves; M55: an underground entrance hands nothing to
+/// the surface (its lanes go to its hidden line: [`underground_partner`]), an exit in front accepts
+/// nothing from behind, and a side-load onto either end lands through its hood: [`outputs_into`]).
 pub fn output_of(w: &dyn WorldRead<RefGame>, at: TilePos, b: Belt) -> Result<Link, Unknown> {
     if b.kind == BeltKind::Despawner {
         return Ok(Link::Sink);
+    }
+    if b.kind == BeltKind::UndergroundIn {
+        return Ok(Link::DeadEnd);
     }
     let front = ahead(at, b.dir, 1);
     let Some(f) = live_belt(w, front)? else {
@@ -353,7 +394,12 @@ pub fn output_of(w: &dyn WorldRead<RefGame>, at: TilePos, b: Belt) -> Result<Lin
         return Ok(Link::DeadEnd); // its long side or its front (q15_splitter_long_side)
     }
     if f.dir == b.dir {
-        return Ok(Link::Next);
+        // Into an exit's back: it accepts only from its hidden line (M55).
+        return Ok(if f.kind == BeltKind::UndergroundOut {
+            Link::DeadEnd
+        } else {
+            Link::Next
+        });
     }
     if f.dir == opposite(b.dir) {
         return Ok(Link::DeadEnd); // head-on (R6)
@@ -370,17 +416,38 @@ pub fn output_of(w: &dyn WorldRead<RefGame>, at: TilePos, b: Belt) -> Result<Lin
 // ---------------------------------------------------------------------------------------------
 // Geometry
 
+/// Which end of an underground (M55).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum End {
+    /// The entrance: its back half, from the midline back.
+    In,
+    /// The exit: its front half, from the front edge to the midline.
+    Out,
+}
+
 /// A line's form, read back from its segment.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Form {
     Run(Dir),
     Curve(Dir, BeltShape),
+    /// An underground end's visible half (M55): a straight [`UNDERGROUND_HALF`] segment, the
+    /// entrance's starting on the midline, the exit's on the front edge.
+    Underground(Dir, End),
+}
+
+impl Form {
+    const fn dir(self) -> Dir {
+        match self {
+            Form::Run(d) | Form::Curve(d, _) | Form::Underground(d, _) => d,
+        }
+    }
 }
 
 /// The lane length of `form`'s lane `lane` on one tile.
 const fn lane_len(form: Form, lane: u8) -> u32 {
     match form {
         Form::Run(_) => STRAIGHT_LEN,
+        Form::Underground(..) => UNDERGROUND_HALF,
         Form::Curve(_, shape) => {
             if (lane == 0) == matches!(shape, BeltShape::CurveLeft) {
                 INNER_LEN
@@ -440,7 +507,10 @@ fn curve_segment(at: TilePos, dir: Dir, shape: BeltShape, lane: u8) -> Segment {
     }
 }
 
-/// What a segment says about the tile `at` it enters: its form and lane.
+/// What a segment says about the tile `at` it enters: its form and lane. A straight half-tile
+/// segment is an underground end's (M55; a splitter half's four lines are never classified as a
+/// tile's two: [`splitter_lanes`] reads its own direction from it), the exit's when it starts on the
+/// front edge.
 fn classify(seg: Segment, at: TilePos) -> Option<(Form, u8)> {
     match seg.geometry {
         Geometry::Straight { from, to } => {
@@ -456,6 +526,15 @@ fn classify(seg: Segment, at: TilePos) -> Option<(Form, u8)> {
                 (d, from.x - at.x * 256)
             };
             let lane = if cross == lane_cross(dir, 0) { 0 } else { 1 };
+            if seg.len == UNDERGROUND_HALF {
+                let along = if horizontal(dir) { from.x } else { from.y };
+                let end = if along == edge(at, dir) - i32::from(positive(dir)) {
+                    End::Out
+                } else {
+                    End::In
+                };
+                return Some((Form::Underground(dir, end), lane));
+            }
             Some((Form::Run(dir), lane))
         }
         Geometry::Arc {
@@ -492,7 +571,7 @@ impl Mapped {
     const fn tiles(&self) -> u32 {
         match self.form {
             Form::Run(_) => self.len / STRAIGHT_LEN,
-            Form::Curve(..) => 1,
+            Form::Curve(..) | Form::Underground(..) => 1,
         }
     }
 }
@@ -629,9 +708,8 @@ pub fn splitter_lanes(tr: &dyn TransportRead, at: TilePos) -> Option<SplitterLan
         let Geometry::Straight { from, .. } = seg.geometry else {
             return None;
         };
-        let (Form::Run(d), k) = classify(seg, at)? else {
-            return None;
-        };
+        let (form, k) = classify(seg, at)?;
+        let d = form.dir();
         let along = if horizontal(d) { from.x } else { from.y };
         let side = if along == edge(at, d) - i32::from(positive(d)) {
             &mut output
@@ -763,6 +841,20 @@ fn want(w: &dyn WorldRead<RefGame>, at: TilePos) -> Option<Want> {
     if b.kind == BeltKind::Splitter {
         return None; // its own eight lines (`reform_splitter`), never in a run.
     }
+    if b.kind.is_underground() {
+        // Its own half-tile pair, never in a run (M55).
+        let end = if b.kind == BeltKind::UndergroundIn {
+            End::In
+        } else {
+            End::Out
+        };
+        return Some(Want {
+            dir: b.dir,
+            form: Form::Underground(b.dir, end),
+            join_back: false,
+            join_front: false,
+        });
+    }
     let shape = shape_of_kind(w, at, b.dir, b.kind).ok()?;
     let straight = shape == BeltShape::Straight;
     let same = |t: TilePos| live_belt(w, t).ok().flatten().filter(|o| o.dir == b.dir);
@@ -775,15 +867,18 @@ fn want(w: &dyn WorldRead<RefGame>, at: TilePos) -> Option<Want> {
             Form::Curve(b.dir, shape)
         },
         // A spawner joins nothing, in front or behind; a despawner is no run's back part (it feeds
-        // nothing) and joins nothing in front (module doc); nothing joins a splitter (M54).
+        // nothing) and joins nothing in front (module doc); nothing joins a splitter (M54) or an
+        // underground end (M55).
         join_back: straight
             && b.kind != BeltKind::Spawner
             && same(back).is_some_and(|k| k.kind == BeltKind::Belt)
             && shape_of(w, back, b.dir).ok() == Some(BeltShape::Straight),
         join_front: straight
             && b.kind == BeltKind::Belt
-            && same(ahead(at, b.dir, 1))
-                .is_some_and(|f| !matches!(f.kind, BeltKind::Spawner | BeltKind::Splitter)),
+            && same(ahead(at, b.dir, 1)).is_some_and(|f| {
+                !matches!(f.kind, BeltKind::Spawner | BeltKind::Splitter)
+                    && !f.kind.is_underground()
+            }),
     })
 }
 
@@ -844,9 +939,14 @@ fn run_pair(tr: Tx<'_>, lane: [LineId; 2], front: TilePos, dir: Dir, tiles: u32)
     register(tr, lane, segs, tiles)
 }
 
-/// Destroys a tile's lines (pick-up and rotation destroy the tile's items: nothing to count until
-/// M53's items).
+/// Destroys a tile's lines (pick-up and rotation destroy the tile's items); an underground
+/// entrance's hidden lines first (M55: else they would leak, reached from nothing).
 fn destroy(tr: Tx<'_>, m: Mapped) {
+    if let Form::Underground(_, End::In) = m.form {
+        for h in hidden_of(tr, m.lane).into_iter().flatten() {
+            ok(tr.destroy(h, &mut |_| {}), "destroy(hidden)");
+        }
+    }
     for l in m.lane {
         ok(tr.destroy(l, &mut |_| {}), "destroy");
     }
@@ -868,6 +968,13 @@ fn create(tr: Tx<'_>, at: TilePos, form: Form) {
             curve_segment(at, dir, shape, 0),
             curve_segment(at, dir, shape, 1),
         ],
+        Form::Underground(dir, end) => {
+            let input = end == End::In;
+            [
+                splitter_segment(at, dir, 0, input),
+                splitter_segment(at, dir, 1, input),
+            ]
+        }
     };
     register(tr, [a, b], segs, 1);
 }
@@ -993,6 +1100,8 @@ pub fn on_wake(cx: &mut TickCx<'_, RefGame>, id: EntityId, belt: Belt) {
             }
         }
     }
+    // Pairing (M55), once every tile's lines exist.
+    pair_around(cx, near, p, belt.kind);
     for &t in near {
         put_shape(cx, t);
     }
@@ -1098,8 +1207,11 @@ fn reform_lines(tr: Tx<'_>, at: TilePos, w: Option<Want>) {
         (Some(w), None) => attach(tr, at, w),
         (Some(w), Some(m)) if w.form != m.form => {
             debug_assert!(m.tiles() == 1, "cut left {at:?} in a run");
+            // A reshape between a run and a curve of one direction keeps the items; an underground
+            // end is never rescaled (M55: it only changes by rotation, which destroys its items).
             let same_dir = match (w.form, m.form) {
                 (Form::Run(a) | Form::Curve(a, _), Form::Run(b) | Form::Curve(b, _)) => a == b,
+                _ => false,
             };
             if same_dir && reshape(tr, at, w.form, m) {
                 return;
@@ -1127,6 +1239,7 @@ fn reshape(tr: Tx<'_>, at: TilePos, form: Form, m: Mapped) -> bool {
             curve_segment(at, dir, shape, 0),
             curve_segment(at, dir, shape, 1),
         ],
+        Form::Underground(..) => unreachable!("an underground end is never rescaled"),
     };
     register(tr, m.lane, segs, 1);
     true
@@ -1242,6 +1355,9 @@ fn fix_output(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
     let Some(b) = live_belt(cx, at).ok().flatten() else {
         return;
     };
+    if b.kind == BeltKind::UndergroundIn {
+        return; // its lanes' outputs are the pairing's (`pair_entrance`).
+    }
     let Ok(link) = output_of(cx, at, b) else {
         return;
     };
@@ -1282,9 +1398,10 @@ fn set_out(tr: Tx<'_>, line: LineId, out: Output) {
     }
 }
 
-/// The two lanes' outputs for `link` into the tile `front`: `Next` onto a curve, the back of a run or
-/// a splitter half's input lines (M54), `Merge` onto a straight belt's near lane, `Sink`, or a dead
-/// end when the target is not mapped.
+/// The two lanes' outputs for `link` into the tile `front`: `Next` onto a curve, the back of a run, a
+/// splitter half's input lines (M54) or an underground entrance's (M55), `Merge` onto a straight
+/// belt's near lane (on an underground end only where the landing is on its visible half: the hood
+/// filter, module doc), `Sink`, or a dead end when the target is not mapped.
 fn outputs_into(tr: &dyn TransportRead, link: Link, front: TilePos) -> [Output; 2] {
     match link {
         Link::Sink => [Output::Sink; 2],
@@ -1294,7 +1411,10 @@ fn outputs_into(tr: &dyn TransportRead, link: Link, front: TilePos) -> [Output; 
                 return [Output::Next(s.input[0]), Output::Next(s.input[1])];
             }
             match mapped(tr, front) {
-                Some(t) if matches!(t.form, Form::Curve(..)) || t.off + STRAIGHT_LEN == t.len => {
+                Some(t)
+                    if matches!(t.form, Form::Curve(..) | Form::Underground(_, End::In))
+                        || (matches!(t.form, Form::Run(_)) && t.off + STRAIGHT_LEN == t.len) =>
+                {
                     [Output::Next(t.lane[0]), Output::Next(t.lane[1])]
                 }
                 _ => [Output::DeadEnd; 2],
@@ -1303,14 +1423,164 @@ fn outputs_into(tr: &dyn TransportRead, link: Link, front: TilePos) -> [Output; 
         Link::SideLoad { near } => match mapped(tr, front) {
             Some(t) => {
                 let line = t.lane[usize::from(near)];
-                let at_of = |lane: u8| t.off + if lane == near { SIDE_FRONT } else { SIDE_BACK };
-                [
-                    Output::Merge { line, at: at_of(0) },
-                    Output::Merge { line, at: at_of(1) },
-                ]
+                // Each feeder lane's landing behind the target tile's front edge.
+                let out = |lane: u8| {
+                    let l = if lane == near { SIDE_FRONT } else { SIDE_BACK };
+                    match t.form {
+                        Form::Underground(_, End::In) if l >= UNDERGROUND_HALF => Output::Merge {
+                            line,
+                            at: l - UNDERGROUND_HALF,
+                        },
+                        Form::Underground(_, End::Out) if l < UNDERGROUND_HALF => {
+                            Output::Merge { line, at: l }
+                        }
+                        Form::Underground(..) => Output::DeadEnd,
+                        _ => Output::Merge {
+                            line,
+                            at: t.off + l,
+                        },
+                    }
+                };
+                [out(0), out(1)]
             }
             None => [Output::DeadEnd; 2],
         },
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Undergrounds (M55)
+
+/// The partner of an underground entrance facing `dir` on `at`: the first underground on `dir`'s
+/// axis within [`UNDERGROUND_MAX_GAP`] + 1 tiles ahead ends the search, and it is the partner iff it
+/// is an exit facing `dir`: `Some((exit tile, gap))`. Undergrounds on the other axis and anything
+/// else between are passed over (question 14 (b)'s default). A pure function of the layout.
+pub fn underground_partner(
+    w: &dyn WorldRead<RefGame>,
+    at: TilePos,
+    dir: Dir,
+) -> Result<Option<(TilePos, u32)>, Unknown> {
+    for k in 1..=UNDERGROUND_MAX_GAP + 1 {
+        let t = ahead(at, dir, k as i32);
+        if let Some(b) = live_belt(w, t)?
+            && b.kind.is_underground()
+            && horizontal(b.dir) == horizontal(dir)
+        {
+            return Ok((b.kind == BeltKind::UndergroundOut && b.dir == dir).then_some((t, k - 1)));
+        }
+    }
+    Ok(None)
+}
+
+/// The hidden lines an entrance's lanes lead into (a `Next` to a line without segments), per lane.
+fn hidden_of(tr: &dyn TransportRead, lane: [LineId; 2]) -> [Option<LineId>; 2] {
+    lane.map(|l| match tr.out(l) {
+        Ok(Output::Next(h)) => {
+            let mut segs = 0u32;
+            let _ = tr.segments(h, &mut |_| segs += 1);
+            (segs == 0).then_some(h)
+        }
+        _ => None,
+    })
+}
+
+/// The hidden lines (lane 0, lane 1) of the paired entrance on `at`: `None` unless `at` holds an
+/// entrance whose lanes both lead into hidden lines (tests, the oracle and the item hook).
+pub fn hidden_lanes(tr: &dyn TransportRead, at: TilePos) -> Option<[LineId; 2]> {
+    let m = mapped(tr, at)?;
+    let Form::Underground(_, End::In) = m.form else {
+        return None;
+    };
+    match hidden_of(tr, m.lane) {
+        [Some(a), Some(b)] => Some([a, b]),
+        _ => None,
+    }
+}
+
+/// Reconciles the entrance facing `dir` on `at` with its partner ([`underground_partner`]).
+/// Unpaired: its hidden lines are destroyed (their items with them; the redirect dead-ends its lanes)
+/// and its lanes dead-end at the hood. Paired across `gap`: its lanes lead into hidden lines of
+/// `(gap + 1) x 256` (kept when both already have that length, else destroyed and created afresh,
+/// their items lost) whose outputs are the exit's lanes, lane for lane. Writes only what differs, so
+/// a second call changes nothing. At a full line cap neither hidden line is made (counted by
+/// [`belts_unmapped`]) and the entrance dead-ends.
+fn pair_entrance(cx: &mut TickCx<'_, RefGame>, at: TilePos, dir: Dir) {
+    let Ok(partner) = underground_partner(cx, at, dir) else {
+        return;
+    };
+    let Some(tr) = tx(cx) else { return };
+    let Some(me) = mapped(tr, at).filter(|m| m.form == Form::Underground(dir, End::In)) else {
+        return; // unmapped (a full cap): nothing to pair.
+    };
+    let exit = partner.and_then(|(t, gap)| {
+        mapped(tr, t)
+            .filter(|m| m.form == Form::Underground(dir, End::Out))
+            .map(|m| (m.lane, gap))
+    });
+    let hidden = hidden_of(tr, me.lane);
+    let Some((x, gap)) = exit else {
+        for (h, lane) in hidden.into_iter().zip(me.lane) {
+            match h {
+                Some(h) => {
+                    ok(tr.destroy(h, &mut |_| {}), "destroy(hidden)");
+                }
+                None => set_out(tr, lane, Output::DeadEnd),
+            }
+        }
+        return;
+    };
+    let len = (gap + 1) * STRAIGHT_LEN;
+    let h = match hidden {
+        [Some(a), Some(b)] if tr.len(a) == Ok(len) && tr.len(b) == Ok(len) => [a, b],
+        _ => {
+            for h in hidden.into_iter().flatten() {
+                ok(tr.destroy(h, &mut |_| {}), "destroy(hidden)");
+            }
+            let Some(a) = ok(tr.create(len, SPEED), "create(hidden)") else {
+                unmapped(gap + 1);
+                return;
+            };
+            let Some(b) = ok(tr.create(len, SPEED), "create(hidden)") else {
+                drop_pair(tr, &[a], gap + 1);
+                return;
+            };
+            [a, b]
+        }
+    };
+    for k in 0..2 {
+        set_out(tr, h[k], Output::Next(x[k]));
+        set_out(tr, me.lane[k], Output::Next(h[k]));
+    }
+}
+
+/// The pairing phase of a wake (M55), after every tile's lines exist: for each tile of `near` that
+/// is the woken underground (`kind` on `woken`, also when it is being picked up) or holds a live one
+/// (its lines may have been re-created after a full cap), every entrance on it or up to five tiles
+/// behind it along a direction, facing that direction (both axes: a rotation changes the axis), is
+/// reconciled ([`pair_entrance`]). An edit anywhere else changes no pairing (tiles between an
+/// entrance and its exit may hold anything).
+fn pair_around(cx: &mut TickCx<'_, RefGame>, near: &[TilePos], woken: TilePos, kind: BeltKind) {
+    const DIRS: [Dir; 4] = [Dir::East, Dir::South, Dir::West, Dir::North];
+    for &t in near {
+        let here = (t == woken && kind.is_underground())
+            || live_belt(cx, t)
+                .ok()
+                .flatten()
+                .is_some_and(|b| b.kind.is_underground());
+        if !here {
+            continue;
+        }
+        for d in DIRS {
+            for k in 0..=(UNDERGROUND_MAX_GAP + 1) as i32 {
+                let e = ahead(t, d, -k);
+                if let Some(b) = live_belt(cx, e).ok().flatten()
+                    && b.kind == BeltKind::UndergroundIn
+                    && b.dir == d
+                {
+                    pair_entrance(cx, e, d);
+                }
+            }
+        }
     }
 }
 
@@ -1348,6 +1618,11 @@ pub fn test_insert(cx: &mut TickCx<'_, RefGame>, id: EntityId, r: crate::TestIns
             [s.input[0], s.input[1], s.output[0], s.output[1]]
                 .get(usize::from(r.lane))
                 .map(|&l| (l, 0))
+        } else if r.lane >= 2 {
+            // M55: a paired entrance's hidden lanes, from their front.
+            hidden_lanes(tr, at)
+                .and_then(|h| h.get(usize::from(r.lane - 2)).copied())
+                .map(|l| (l, 0))
         } else {
             mapped(tr, at).and_then(|m| m.lane.get(usize::from(r.lane)).map(|&l| (l, m.off)))
         };

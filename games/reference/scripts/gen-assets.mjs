@@ -85,7 +85,9 @@ const RESOURCES = [
 // frame. Ids 16-21 (M51), the item squares (`ItemId` order), half a tile, centred. Ids 22-24 (M54),
 // the splitter facing east (1 x 2 tiles), south and north (2 x 1): two straight belt halves under a
 // housing across the midline, 8 frames, pivot at the footprint's min corner; symmetric between the
-// halves, so west is east mirrored. All art is fully
+// halves, so west is east mirrored. Ids 25-30 (M55), the underground entrance (25-27) and exit (28-30)
+// facing east, south and north, 1 x 1 tile, 8 frames: a straight belt half and a hood over the other
+// half (the entrance's front half, the exit's back half), west the east mirrored. All art is fully
 // opaque (the sprite pipeline's blend is straight alpha over a premultiplied atlas, which is only
 // exact for alpha 255: M17b Deviations).
 const SPRITE_PAD_PX = 2
@@ -101,6 +103,9 @@ const SPRITE_BELT_FIRST = 1
 const SPRITE_ITEM_FIRST = 16
 const SPRITE_SPLITTER_FIRST = 22
 const SPLITTER_FACINGS = ['east', 'south', 'north']
+const SPRITE_UNDERGROUND_FIRST = 25
+const UNDERGROUND_ENDS = ['in', 'out']
+const UNDERGROUND_FACINGS = ['east', 'south', 'north']
 // Item names and square colours in `ItemId` order.
 const ITEM_NAMES = ['stone', 'iron', 'wood', 'coal', 'furnace', 'ingot']
 const ITEM_COLORS = [
@@ -143,6 +148,9 @@ const SPAWNER_MARK = [70, 200, 90]
 const DESPAWNER_MARK = [220, 70, 60]
 const SPLITTER_HOUSING = [64, 92, 140]
 const SPLITTER_EDGE = [36, 52, 84]
+const HOOD = [120, 84, 48]
+const HOOD_EDGE = [70, 46, 26]
+const HOOD_MOUTH = [24, 20, 18]
 
 // A belt pixel in the belt's own travel frame: `along` (0..16, the back edge to the front edge) and
 // `across` (0..16, the left side of travel to the right), or `null` outside a curve's arc.
@@ -214,6 +222,32 @@ function splitterPixel(facing, frame, x, y) {
   return beltPixel('straight', 'east', frame, Math.floor(u), Math.floor(across))
 }
 
+// One underground pixel of end `end` ('in' or 'out') facing `facing` (frame `frame`), in the
+// east-facing frame `(u, v)` (`u` along travel, back edge 0 to front edge 16). The entrance's hood
+// covers its front half (`u >= 8`), the exit's its back half (`u < 8`); the other half is a straight
+// belt. The hood's mouth (a dark band) faces the visible half.
+function undergroundPixel(end, facing, frame, x, y) {
+  const px = x + 0.5
+  const py = y + 0.5
+  let u = px
+  let v = py
+  if (facing === 'south') {
+    u = py
+    v = BELT_PX - px
+  } else if (facing === 'north') {
+    u = BELT_PX - py
+    v = px
+  }
+  const half = BELT_PX / 2
+  const hooded = end === 'in' ? u >= half : u < half
+  if (!hooded) return beltPixel('straight', 'east', frame, Math.floor(u), Math.floor(v))
+  // Distance into the hood from its mouth (0 at the midline).
+  const depth = end === 'in' ? u - half : half - u
+  if (v < 1 || v >= BELT_PX - 1 || depth >= half - 1) return HOOD_EDGE
+  if (depth < 1.5) return HOOD_MOUTH
+  return HOOD
+}
+
 /** A bordered flat item square, `ITEM_PX` on a side. */
 function itemPixel(color, x, y) {
   const edge = x === 0 || y === 0 || x === ITEM_PX - 1 || y === ITEM_PX - 1
@@ -221,7 +255,7 @@ function itemPixel(color, x, y) {
 }
 
 /** Every sprite as `{ id, name, frameW, frameH, frames, pixel(frame, x, y), pivot, size }`. The
- * `name` (`furnace`, `belt/<family>/<facing>`, `item/<item>`) goes into `sprites.json`, which the
+ * `name` (`furnace`, `belt/<family>/<facing>`, `item/<item>`, `splitter/<facing>`, `underground/<end>/<facing>`) goes into `sprites.json`, which the
  * engine's loader ignores, so `sprites_manifest.rs` can check each `content.rs` id's art. */
 function spriteDefs() {
   const defs = [
@@ -280,6 +314,21 @@ function spriteDefs() {
       // The footprint's min corner (`Belt::origin`).
       pivot: [0, 0],
       size: across ? [1, 2] : [2, 1],
+    })
+  })
+  UNDERGROUND_ENDS.forEach((end, ei) => {
+    UNDERGROUND_FACINGS.forEach((facing, di) => {
+      defs.push({
+        id: SPRITE_UNDERGROUND_FIRST + ei * UNDERGROUND_FACINGS.length + di,
+        name: `underground/${end}/${facing}`,
+        frameW: BELT_PX,
+        frameH: BELT_PX,
+        frames: BELT_FRAMES,
+        pixel: (f, x, y) => undergroundPixel(end, facing, f, x, y),
+        // The end's own tile.
+        pivot: [0, 0],
+        size: [1, 1],
+      })
     })
   })
   return defs
