@@ -4,19 +4,19 @@
     "cpu": "Apple M3 Max",
     "arch": "arm64"
   },
-  "measuredAt": "2026-10-12T12:16:24.469Z",
-  "conditions": "Tyler's Mac (Apple M3 Max), native release (cargo test --release), fx-belts' standard belt world at genesis (M40's Mixed regime, seed 7: 3,810 lines, 50,000 belt tiles, 1,090 spawners, each declaring its schedule to the forecast tracker since M47b; caps 32,768 lines and 393,216 items, so the item cap never binds) through packages/engine/fixtures/belts/tests/bench_belts.rs: Host<Belts> with 8 connections holding maximum views (256 x 256 tiles, stacked over the 220 x 545-tile world), unpaced, production hashing, no actions; 200 warm-up ticks then 1,200 measured; a tick is admit + seal + tick + build_frame x 8 (sections 12 LineStructs and 13 Forecasts included, 54,153 B of frames a tick), frames discarded. Promoted with pnpm bench:baseline from the manager's median gate run of M47b (pnpm test:slow rust -t slow_tick_belts_large) at 2026-10-12 12:16 UTC, 1-min/5-min load 3.10/4.82; the manager's four runs of the same tree read 1.241, 1.274, 1.264 and 1.298 ms (1-min load 1.9-3.3), the implementer's three 1.256-1.280: all seven span 1.241-1.298 (4.6 %), so no 0047 minDeltaMs is set. Up from M45's 0.8815 (promoted 2026-10-12 05:14 UTC, fourteen runs 0.8445-0.8815): +0.38 ms, the reviewed cost of replicating line structures (M46, section 12: about 0.3 ms, most of it build_frame pricing every chunk's anchored structures every tick, cached per chunk by structure_version since M47b, -0.10 ms) and forecasts (M47, the host tracker and section 13: about 0.1 ms); 0079 \u00a719 (d). Working tree on top of 592b94e2 (M47).",
+  "measuredAt": "2026-10-13T02:35:01.262Z",
+  "conditions": "Tyler's Mac (Apple M3 Max), native release (cargo test --release), fx-belts' standard belt world at genesis (M40's Mixed regime, seed 7: 3,810 lines, 50,000 belt tiles, 1,090 spawners; since M53 (0079 \u00a721) each spawner sets its line's schedule once and the engine performs the inserts in advance, so the spawner entities are never written and the eight frames a tick carry only structure changes and section 13: 107 B of frames a tick, where M47b-M52 measured 53,501-54,153 B of entity deltas; caps 32,768 lines and 393,216 items, so the item cap never binds) through packages/engine/fixtures/belts/tests/bench_belts.rs: Host<Belts> with 8 connections holding maximum views (256 x 256 tiles, stacked over the 220 x 545-tile world), unpaced, production hashing, no actions; 200 warm-up ticks then 1,200 measured; a tick is admit + seal + tick + build_frame x 8, frames discarded. The tick phase holds 1,090 no-op visits of the spawner entities on the \"spawner\" list (a known cost, brief 53's Deviations). Promoted with pnpm bench:baseline from the manager's median gate run of M53 (pnpm test:slow rust -t slow_tick_belts_large) on 2026-10-12, three runs at 1-min load under 4: 0.2203 / 0.2125 / 0.2146 ms (tick 0.120-0.123, advance 0.063-0.065, frames 0.095-0.098) at 1-min/5-min load 1.73-3.35 / 4.94-4.99 (19:33-19:35 PDT), the median run 3 promoted; an earlier set on the same tree read 0.2129 / 0.2130 / 0.2308; down from M47b's 1.2638 ms because the frames phase measured the fixture's entity deltas (about 1.0 ms of the 1.26) and the tick phase their writes; the gate's 25 % rule and the 5 ms limit stand.",
   "gated": ["medianMs"],
   "limits": {
     "medianMs": 5
   },
   "metrics": {
-    "medianMs": 1.2638,
-    "p99Ms": 2.3495,
-    "maxMs": 2.693,
-    "tickMedianMs": 0.2312,
-    "advanceMedianMs": 0.0602,
-    "framesMedianMs": 1.0397,
-    "frameBytesPerTick": 54153
+    "medianMs": 0.2146,
+    "p99Ms": 0.473,
+    "maxMs": 0.5096,
+    "tickMedianMs": 0.1215,
+    "advanceMedianMs": 0.0638,
+    "framesMedianMs": 0.0963,
+    "frameBytesPerTick": 107
   }
 }

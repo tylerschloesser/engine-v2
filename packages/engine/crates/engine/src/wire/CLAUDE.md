@@ -39,7 +39,7 @@ varint, Codec action) · CameraReport (16 B) · presence (len varint + bytes)`. 
 `LineId` strictly ascending across it; record = `tag u8` then `0 Put`: `id varint · len u32 · speed u16 ·
 out · seg_count u8 · seg_count x segment`; `1 Gone`: `id varint`. `out` and `segment` are the transport
 codec's own bytes (`transport/codec.rs`: `out` = tag `0 DeadEnd`, `1 Next + id u32`, `2 Sink`, `3 Merge +
-line u32 + at u32`, `4 Fork + a u32 + b u32`, with no flag bit and no fork toggle; `segment` = `len u32 · tag
+line u32 + at u32`, `4 Fork + a u32 + b u32`, with no flag bit (the canonical record's bits 7 and 6, segments and M53's schedule, which the `RunList` carries) and no fork toggle; `segment` = `len u32 · tag
 u8 · 0 Straight from/to 4 x i32 | 1 Arc centre 2 x i32 · radius_q8 u32 · start_turn_q8 u16 · sweep_q8 i16`).
 Malformed: an unknown tag, truncation, ids not ascending, a `Put` with `len` or `speed` 0, flag bits in `out`'s
 tag, or `seg_count` 0 or past 16 (`MAX_SEGMENTS`). A line without segments is never sent. The structures

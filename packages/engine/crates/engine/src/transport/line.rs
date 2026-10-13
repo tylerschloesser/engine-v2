@@ -17,7 +17,7 @@
 //! ever costs a re-walk. It is encoded (`codec.rs`), because a re-walk can merge a pair the cached
 //! skip would leave, and a restored world must advance exactly like the live one.
 
-use super::{LineId, Output, Transport};
+use super::{LineId, Output, Schedule, Transport};
 
 pub(super) const NIL: u32 = u32::MAX;
 /// `Line::fresh_cap` with no landing across a cut this tick.
@@ -75,8 +75,8 @@ pub(super) struct Line {
     /// Runs landed by a `Merge` across a cycle cut in the middle of this line before it advanced
     /// (M44): each is a single item marked by `count == 0` (only inside `advance`), which this
     /// line's walk restores to 1 (it moves at most `fresh_cap`). Zero outside `advance`. A `u16`
-    /// (the record stays 88 B): at `u16::MAX` such landings in one tick a further one is refused
-    /// and waits (unreachable in practice: it needs 65,535 side-loads onto one line in a tick).
+    /// (it kept M44's record at 88 B): at `u16::MAX` such landings in one tick a further one is
+    /// refused and waits (unreachable in practice: it needs 65,535 side-loads onto one line in a tick).
     pub fresh_mid: u16,
     /// How far this tick's cut landings may still move when this line advances (0079 §11 as
     /// amended in M44: an item moves at most `speed` in one tick): `speed - moved`, `moved` being
@@ -94,8 +94,22 @@ pub(super) struct Line {
     pub seg_count: u8,
     /// The line is in the store's structure-change list (`Transport::structure_changes`, M46),
     /// cleared by the drain: one entry per line per drain. Not state; it fills the record's one
-    /// byte of padding (the record stays 88 B).
+    /// byte of padding.
     pub struct_queued: bool,
+    /// The line's spawner schedule (M53, 0079 §21): sim state, encoded behind the `out` tag's
+    /// `SCHEDULE` bit (`codec.rs`) and hashed with the store; `advance` runs it first thing
+    /// (`Transport::step_schedules`). `None` on a line without one and always on a replica (the
+    /// forecast's `RunList` carries it there).
+    pub sched: Option<LineSched>,
+}
+
+/// A line's schedule as state (M53, 0079 §21): the game's [`Schedule`] as it stands after the last
+/// step and `paused` while the item cap refuses it (the next success clears it). 13 B; the `paused`
+/// flag gives the `Option` its niche, so the field is 16 B and the record grows by 16 B to 104 B.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct LineSched {
+    pub s: Schedule,
+    pub paused: bool,
 }
 
 impl Line {
@@ -126,6 +140,7 @@ impl Line {
             seg_start: NIL,
             seg_count: 0,
             struct_queued: false,
+            sched: None,
         }
     }
 

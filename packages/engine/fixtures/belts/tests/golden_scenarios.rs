@@ -157,12 +157,8 @@ fn census_without(sim: &Sim<Belts>, dead: LineId) -> (u64, u64, u64) {
         live += u64::from(a.transport().count(l).expect("line exists"));
         sunk += a.transport().sunk(l).expect("line exists");
     }
-    let mut spawned = 0;
-    for (_, e) in a.store().entities() {
-        if let Thing::Spawner(s) = e {
-            spawned += u64::from(s.spawned);
-        }
-    }
+    // M53: the engine makes the spawners' inserts and counts them (not state).
+    let spawned = a.store().transport().scheduled_inserts_total();
     (live, sunk, spawned)
 }
 
@@ -1013,17 +1009,12 @@ fn belts_op_fork() {
     );
 }
 
-/// Items the spawner(s) on `l` have put on it.
-fn spawned_on(sim: &Sim<Belts>, l: LineId) -> u64 {
-    let mut n = 0;
-    for (_, e) in sim.authority().store().entities() {
-        if let Thing::Spawner(s) = e
-            && s.line == l.0
-        {
-            n += u64::from(s.spawned);
-        }
-    }
-    n
+/// Items every schedule has inserted (M53: the engine's store-wide count, not state).
+fn spawned_total(sim: &Sim<Belts>) -> u64 {
+    sim.authority()
+        .store()
+        .transport()
+        .scheduled_inserts_total()
 }
 
 fn sunk(sim: &Sim<Belts>, l: LineId) -> u64 {
@@ -1051,13 +1042,16 @@ fn belts_golden_sideload_saturated() {
     let halves = [(1u32, 0u32, 64u32), (3, 2, 192)];
     let mut prev: Vec<(Vec<u32>, Vec<u32>)> = vec![(Vec::new(), Vec::new()); 2];
     let mut landed = [0u32; 2];
+    // Each feeder's inserts, counted where the check below sees one land (M53: the engine keeps
+    // no per-line count).
+    let mut fed = [0u64; 2];
     let mut at_100 = [(0u64, 0u64); 2];
     let hash = run("scenario-sideload-saturated.json", &mut |sim| {
         let t = sim.tick().0;
         let (live, sunk_all, spawned) = census(sim);
         assert_eq!(spawned, live + sunk_all, "tick {t}: conservation");
         for (h, &(f, tg, at)) in halves.iter().enumerate() {
-            let (fl, tl) = (line(sim, f), line(sim, tg));
+            let tl = line(sim, tg);
             let (fp, tp) = (positions(sim, f), positions(sim, tg));
             let (pf, pt) = &prev[h];
             let mut want_f = moved_on(pf, 24);
@@ -1065,6 +1059,7 @@ fn belts_golden_sideload_saturated() {
                 // `insert_back` lands at `max(len - speed, tail + SPACING)`, then moves 24.
                 let tail = pf.last().map_or(0, |&p| p + SPACING);
                 want_f.push((512 - 24).max(tail) - 24);
+                fed[h] += 1;
             }
             assert_eq!(fp, want_f, "tick {t}: half {h}: the feeder never waits");
             let mut want_t = moved_on(pt, 24);
@@ -1090,10 +1085,10 @@ fn belts_golden_sideload_saturated() {
                 "tick {t}: half {h}: ahead of the entry"
             );
             if t == 100 {
-                at_100[h] = (spawned_on(sim, fl), sunk(sim, tl));
+                at_100[h] = (fed[h], sunk(sim, tl));
             }
             if t == 200 {
-                let ins = spawned_on(sim, fl) - at_100[h].0;
+                let ins = fed[h] - at_100[h].0;
                 let out = sunk(sim, tl) - at_100[h].1;
                 assert!(
                     ins > 30,
@@ -1138,27 +1133,30 @@ fn of_kind(sim: &Sim<Belts>, l: LineId, kind: u16) -> Vec<u32> {
 #[test]
 fn belts_golden_sideload_contested() {
     let mut prev1: Vec<u32> = Vec::new();
+    // The target's inserts, counted where the check below sees one land (M53: the engine keeps
+    // no per-line count); the feeder's are the rest of the store-wide count.
+    let mut spawned1 = 0u64;
     let mut sunk_200 = 0;
     let mut last = (0, 0);
     let hash = run("scenario-sideload-contested.json", &mut |sim| {
         let t = sim.tick().0;
         let (tl, fl) = (line(sim, 0), line(sim, 1));
         let now1 = of_kind(sim, tl, 1);
-        let spawned1 = spawned_on(sim, tl);
+        let mut want = moved_on(&prev1, 24);
+        if want.len() + 1 == now1.len() {
+            want.push(1024 - 48);
+            spawned1 += 1;
+        }
         assert_eq!(
             spawned1,
             u64::from(t / 8),
             "tick {t}: the target's spawner is never held"
         );
-        let mut want = moved_on(&prev1, 24);
-        if want.len() + 1 == now1.len() {
-            want.push(1024 - 48);
-        }
         assert_eq!(now1, want, "tick {t}: item 1 never waits");
         let live1 = now1.len() as u64;
         let live2 = (of_kind(sim, tl, 2).len() + of_kind(sim, fl, 2).len()) as u64;
         let sunk1 = spawned1 - live1;
-        let spawned2 = spawned_on(sim, fl);
+        let spawned2 = spawned_total(sim) - spawned1;
         let sunk_t = sunk(sim, tl);
         assert_eq!(
             sunk_t - sunk1,
@@ -1401,13 +1399,13 @@ fn belts_golden_bench_64() {
             s_sunk += tr.sunk(LineId(id)).expect("line");
         }
         let mut n = 0;
-        let mut s_spawned = 0u64;
         for (_, e) in a.store().entities() {
-            if let Thing::Spawner(s) | Thing::Cycling(s) = e {
+            if let Thing::Spawner(_) | Thing::Cycling(_) = e {
                 n += 1;
-                s_spawned += u64::from(s.spawned);
             }
         }
+        // M53: the engine makes and counts the inserts.
+        let s_spawned = a.store().transport().scheduled_inserts_total();
         assert_eq!(n, world.spawners.len(), "tick {t}: spawners");
         assert_eq!(
             world.items() + s_spawned,

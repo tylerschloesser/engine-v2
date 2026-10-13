@@ -119,7 +119,8 @@ test(
       const before = forecastCounters(client)
       const script = new Map(SCRIPT)
       // Mid-script checks, before the tick is advanced: the cut's back half (57) is held between
-      // the cut and the join (seven ticks apart: the back half drains into A), B (56) until it is destroyed; and the host's items on the line each
+      // the cut and the join (seven ticks apart: the back half, which holds A's schedule since the
+      // cut (M53), feeds A), B (56) until it is destroyed; and the host's items on the line each
       // edit acts on, at the tick it is dispatched (every edit meets moving items).
       const held: Record<number, number[]> = {}
       const edited: Record<number, number[]> = {}
@@ -211,11 +212,12 @@ test(
 
 /** `edit_during_flow_converges`' counts, pinned (seed 4801): a moved pin is a finding. */
 // M49 (0078 A12 revised): `caughtUp` was 10 (ticks no frame came for); a line holder now gets a
-// frame every tick.
+// frame every tick. M53 (0079 §21): `items` was 1,279,680; the cut's back half holds A's schedule
+// until the join and carries more items between them (`EDITED_ITEMS`' tick 107).
 const EDIT_PINS = {
   caughtUp: 0,
   compared: 17_313,
-  items: 1_279_680,
+  items: 1_279_985,
   maxHeld: 57,
   held: 55,
   lines: 55,
@@ -263,9 +265,12 @@ const STRUCTS = {
 /** B's item gaps (pinned): 128 at speed 128, 96 after the change to 96. */
 const GAPS = { 249: [128], 279: [96] }
 /** Host items on the edited line at each edit's dispatch tick (pinned). */
+// M53 (0079 §21): the cut moves A's schedule to its back half (57), which keeps taking the inserts
+// until the join moves it back: 57 holds 15 at the join (10 before, when the spawner kept inserting
+// at the front half's back and 57 only drained).
 const EDITED_ITEMS: Record<number, number[]> = {
   100: [31],
-  107: [16, 10],
+  107: [16, 15],
   160: [16],
   190: [21],
   220: [31],

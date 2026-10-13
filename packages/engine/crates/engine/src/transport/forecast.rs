@@ -41,11 +41,16 @@
 //! does not hold, across a `Fork`, from a line replaced this tick) is an `Arrival` carrying the
 //! model's stop, and a `Merge` landing invalidates its target (its list is resent).
 //!
-//! **Spawners.** `set_spawner` declares the schedule the game's tick rule follows ([`Schedule`]:
-//! each tick `acc += 256`; at `acc >= period` an insert is attempted, a success takes `period` off
-//! and steps the item, a refusal takes 256 off); the client replays it. A refusal the schedule did
-//! not predict pauses it (a `State` with `paused`), the next success resumes it (`resumed`), any
-//! other difference is a mismatch (counted, the line's list resent).
+//! **Spawners.** A line's schedule ([`Schedule`]: each tick `acc += 256`; at `acc >= period` an
+//! insert is attempted, a success takes `period` off and steps the item, a refusal takes 256 off)
+//! is either state the engine runs itself (M53, `set_spawner`: `advance`'s first step, 0079 §21)
+//! or a derived declaration of a game's own tick rule (M47, `declare_spawner`); the tracker keeps
+//! a copy of each and replays it against the outcome of the tick's insert, and the client replays
+//! it too. A refusal the schedule did not predict pauses it (a `State` with `paused`), the next
+//! success resumes it (`resumed`), any other difference is a mismatch (counted, the line's list
+//! resent): never on a scheduled line, whose insert is made by this same rule. A schedule set
+//! during a tick is not replayed that tick: its copy is taken from the store's state at the end
+//! of it (the line's list, resent that tick, carries it).
 
 use super::line::NIL;
 use super::{Item, LineId, Output, SPACING, Transport, TransportError};
@@ -59,13 +64,15 @@ const NEVER: u32 = u32::MAX;
 pub const MAX_DEPTH: u32 = 8;
 const SP: i64 = SPACING as i64;
 
-/// A spawner's schedule as the game's tick rule follows it (module doc): the accumulator `acc`
-/// gains 256 a tick; at `acc >= period` the game attempts `insert_back(next)`; a success takes
-/// `period` off and steps `next` (`kinds == 0`: always the same item; else `next % kinds + 1`), a
-/// refusal takes 256 off (the accumulator holds). Declared as it stands after this tick's step:
-/// the tracker replays it from the next tick. The client's replay attempts the insert by
-/// `insert_back`'s own landing rule against the tail it holds, so a refusal for room is predicted;
-/// one for any other reason (the item cap) pauses the replay until the next success.
+/// A spawner's schedule (module doc): the accumulator `acc` gains 256 a tick; at `acc >= period`
+/// one `insert_back(next)` is attempted; a success takes `period` off and steps `next` (`kinds ==
+/// 0`: always the same item; else `next % kinds + 1`), a refusal takes 256 off (the accumulator
+/// holds). As state (`TransportWrite::set_spawner`, M53) the engine makes the attempt at the start
+/// of `advance`; as a declaration (`declare_spawner`, M47) the game makes it and declares the
+/// schedule as it stands after this tick's step. The tracker replays it from the next tick. The
+/// client's replay attempts the insert by `insert_back`'s own landing rule against the tail it
+/// holds, so a refusal for room is predicted; one for any other reason (the item cap) pauses the
+/// replay until the next success.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Schedule {
     pub period: u32,
@@ -285,6 +292,9 @@ pub(crate) struct Tracker {
     cross_cap: usize,
     scheds: Vec<Sched>,
     pub counters: HostCounters,
+    /// `Transport::forecast_close_restored` is closing the saved tick: decoded schedules are not
+    /// stepped (they already hold that tick's step).
+    pub closing: bool,
     /// Debug builds: `Host::seal` ran since the last end of tick (`Tracker::sealed`).
     #[cfg(debug_assertions)]
     sealed: bool,
@@ -380,6 +390,23 @@ impl Tracker {
             if n > 0 {
                 let s0 = self.walk(t, slot);
                 self.push_seg(slot, n, s0, NEVER);
+            }
+            // M53: a decoded schedule is armed from its state (it replays from the first tick).
+            if let Some(ls) = t.lines[slot as usize].sched {
+                if self.scheds.len() == self.scheds.capacity() {
+                    self.counters.spawner_declarations_dropped += 1;
+                    continue;
+                }
+                self.scheds.push(Sched {
+                    slot,
+                    s: ls.s,
+                    paused: ls.paused,
+                    armed: true,
+                    outcome: OUT_NONE,
+                    out_item: 0,
+                    out_stamp: NEVER,
+                });
+                self.tr[slot as usize].sched = self.scheds.len() as u32 - 1;
             }
         }
     }
@@ -909,6 +936,14 @@ impl Tracker {
         self.invalidate(slot);
     }
 
+    /// Whether a schedule on `slot` fits the tracker's pool (half the line cap): a line already
+    /// declared reuses its entry. `false` with the tracker off.
+    pub fn sched_room(&self, slot: u32) -> bool {
+        self.on
+            && (self.tr.get(slot as usize).is_some_and(|t| t.sched != NIL)
+                || self.scheds.len() < self.scheds.capacity())
+    }
+
     fn remove_sched(&mut self, k: u32) {
         let slot = self.scheds[k as usize].slot;
         self.tr[slot as usize].sched = NIL;
@@ -1030,7 +1065,7 @@ impl Tracker {
         }
         // Spawners.
         for k in 0..self.scheds.len() {
-            self.step_spawner(k);
+            self.step_spawner(t, k);
         }
         // An undeclared insert that already crossed its line's front again this tick cannot arrive
         // there: its line's list is resent instead.
@@ -1279,10 +1314,23 @@ impl Tracker {
         (MSG_STATE, fs)
     }
 
-    fn step_spawner(&mut self, k: usize) {
+    /// One of three copies of the schedule rule that must agree: `advance.rs`'s `step_schedules`
+    /// (the engine's insert on a scheduled line) and `follow.rs`'s `Follower::replay` (the client).
+    fn step_spawner(&mut self, t: &Transport, k: usize) {
         let now = self.tick;
         let e = self.scheds[k];
+        if self.closing && t.lines[e.slot as usize].sched.is_some() {
+            // M53 fix round 1: `forecast_close_restored` closes the saved tick, whose step the
+            // decoded schedule already holds; replaying it here would run the copy a tick ahead.
+            return;
+        }
         if !e.armed {
+            // Set this tick (module doc): a scheduled line's copy is its state after the step.
+            if let Some(ls) = t.lines[e.slot as usize].sched {
+                let e = &mut self.scheds[k];
+                e.s = ls.s;
+                e.paused = ls.paused;
+            }
             return;
         }
         let out = if e.out_stamp == now {

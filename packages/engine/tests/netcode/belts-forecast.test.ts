@@ -1,6 +1,7 @@
 // `belts/forecast_*` (M47b, docs/decisions/0078 A3, A8): transport forecasts through real frames.
 // The `fx-belts` bench world is built at genesis (`BeltsParams.bench`, its regime in the worldgen
-// marker); its spawners declare their schedule (`set_spawner`), the `SaturatedView` world's sinks
+// marker); its spawners give their lines the engine schedule once (`set_spawner`, M53: line state,
+// the engine inserts at the start of `advance`), the `SaturatedView` world's sinks
 // toggle on M41's jam schedule and the `InserterLike` world edits its lines, all inside the game's
 // tick. A client holds the lines whose chunk set meets its view and follows their items from the
 // host's `LineStructs` and `Forecasts` sections alone. The arbiter compares, every tick, the items
@@ -105,18 +106,22 @@ const WORLDS: {
     label: 'inserter-like',
     regime: 'InserterLike',
     view: { ...FULL, y: 8 },
+    // M53 (0079 §21): the spawners' inserts now come at the start of `advance`, after the
+    // inserter's `insert_at`/`remove_at` of the same tick (they ran in active-list order inside the
+    // game's tick before), so the world's items differ from tick 25 on: `items` 1,031,354,
+    // `arrivals` 412 and `lists` 3,440 before. The other regimes' items are unchanged.
     pins: {
       lagging: 3,
       partial: 1,
       caughtUp: 0,
       compared: 23_138,
-      items: 1_031_354,
+      items: 1_032_324,
       maxHeld: 78,
       held: 78,
       lines: 78,
-      arrivals: 412,
+      arrivals: 407,
       states: 4,
-      lists: 3_440,
+      lists: 3_444,
     },
   },
   {

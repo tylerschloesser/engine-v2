@@ -302,7 +302,9 @@ impl Follower {
         }
     }
 
-    /// The spawner replay for one tick (`transport::Schedule`'s rule; the host pauses it).
+    /// The spawner replay for one tick (`transport::Schedule`'s rule; the host pauses it). One of
+    /// three copies of the rule that must agree: `advance.rs`'s `step_schedules` (the engine's
+    /// insert) and `forecast.rs`'s `Tracker::step_spawner` (the host's check).
     fn replay(&mut self, t: &Transport, slot: u32, tick: u32) {
         let l = self.fl[slot as usize];
         if !l.sp.on || l.replaced == tick {

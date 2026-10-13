@@ -94,16 +94,61 @@ fn sinks_by_line(sim: &Sim<Belts>) -> Vec<bool> {
         .collect()
 }
 
-/// Every spawner by id (both kinds), for the stationarity readout.
-fn spawners_of(sim: &Sim<Belts>) -> Vec<fx_belts::Spawner> {
+/// A spawner's line schedule as the engine holds it (M53): line, `acc`, `period`, and `spawned`,
+/// the items on its chain plus the chain's sunk count ([`chain_items`]): it grows by one per insert.
+#[derive(Clone, Copy)]
+struct SpawnerState {
+    line: u32,
+    acc: u32,
+    period: u32,
+    spawned: u64,
+}
+
+/// The items on `line` and every line downstream along `Next`, plus the sunk count of the chain's
+/// `Sink`: in the bench world a chain has one spawner at its back and nothing else feeds it, so
+/// between two readings this grows by exactly that spawner's inserts (the engine counts no insert
+/// per line: M53 fix round 1).
+fn chain_items(t: &Transport, line: LineId) -> u64 {
+    use engine::transport::Output;
+    let mut l = line;
+    let mut n = 0u64;
+    loop {
+        n += u64::from(t.count(l).unwrap_or(0));
+        match t.out(l) {
+            Ok(Output::Next(next)) => l = next,
+            Ok(Output::Sink) => return n + t.sunk(l).unwrap_or(0),
+            _ => return n,
+        }
+    }
+}
+
+/// Every spawner by id (both kinds), its line's schedule, for the stationarity readout.
+fn spawners_of(sim: &Sim<Belts>) -> Vec<SpawnerState> {
+    let t = sim.authority().store().transport();
     sim.authority()
         .store()
         .entities()
         .filter_map(|(_, e)| match e {
-            Thing::Spawner(s) | Thing::Cycling(s) => Some(*s),
+            Thing::Spawner(s) | Thing::Cycling(s) => {
+                let (sch, _) = t.schedule(LineId(s.line)).ok().flatten()?;
+                Some(SpawnerState {
+                    line: s.line,
+                    acc: sch.acc,
+                    period: sch.period,
+                    spawned: chain_items(t, LineId(s.line)),
+                })
+            }
             _ => None,
         })
         .collect()
+}
+
+/// The inserts every schedule made (M53: the engine counts them; not state).
+fn spawned_total(sim: &Sim<Belts>) -> u64 {
+    sim.authority()
+        .store()
+        .transport()
+        .scheduled_inserts_total()
 }
 
 /// `(items on sink lanes, items on dead-end lanes)`.
@@ -122,12 +167,8 @@ fn lane_items(sim: &Sim<Belts>, sink: &[bool]) -> (u64, u64) {
 }
 
 /// Refused `insert_back` attempts between two readings of the spawners (an attempt is due when
-/// `acc + 256 >= period`; it was accepted iff `spawned` grew), `(sink lanes, dead-end lanes)`.
-fn refusals(
-    before: &[fx_belts::Spawner],
-    after: &[fx_belts::Spawner],
-    sink: &[bool],
-) -> (u32, u32) {
+/// `acc + 256 >= period`; it was accepted iff its chain's `spawned` grew), `(sink lanes, dead-end lanes)`.
+fn refusals(before: &[SpawnerState], after: &[SpawnerState], sink: &[bool]) -> (u32, u32) {
     let (mut a, mut b) = (0, 0);
     for (x, y) in before.iter().zip(after) {
         if x.acc + 256 >= x.period && y.spawned == x.spawned {
@@ -182,15 +223,7 @@ fn bench_world_at_genesis_is_deterministic() {
     for _ in 0..40 {
         a.step(&[], &mut out);
     }
-    let spawned: u32 = a
-        .authority()
-        .store()
-        .entities()
-        .map(|(_, e)| match e {
-            Thing::Spawner(s) | Thing::Cycling(s) => s.spawned,
-            _ => 0,
-        })
-        .sum();
+    let spawned = spawned_total(&a);
     let t = a.authority().store().transport();
     let sunk: u64 = (1..t.next_id())
         .map(|id| t.sunk(LineId(id)).unwrap_or(0))
@@ -243,13 +276,13 @@ fn bench_cycling_spawners_cycle_kinds() {
     assert!(lines > 0, "no cycling sink lane at 1/64 scale");
 }
 
-/// M47b (0078 A8): every bench spawner declares the rule it runs (`set_spawner` on the tick it
-/// joins the list), and the host's forecast tracker replays it exactly: over 600 ticks on each
-/// 1/64 regime the netcode scenarios use, no outcome differs from the declared schedule
-/// (`spawner_mismatches` 0), no declaration is dropped, and after tick 1 no spawner insert reaches
-/// clients as an arrival (an undeclared insert is a `ROUTE_INSERT` crossing; M47 measured about 330
-/// a tick on the full world before the fixture declared). The spawners do insert, and the
-/// saturated view's toggles and the inserter's edits do happen.
+/// M47b (0078 A8), M53 (0079 §21): every bench spawner gives its line the engine schedule
+/// (`set_spawner` on the tick it joins the list), which the engine runs and the host's forecast
+/// tracker replays exactly: over 600 ticks on each 1/64 regime the netcode scenarios use, no
+/// outcome differs from the schedule (`spawner_mismatches` 0), none is dropped, and after tick 1
+/// no spawner insert reaches clients as an arrival (an undeclared insert is a `ROUTE_INSERT`
+/// crossing; M47 measured about 330 a tick on the full world before the fixture declared). The
+/// spawners do insert, and the saturated view's toggles and the inserter's edits do happen.
 #[test]
 fn belts_spawner_declares_schedule() {
     use engine::transport::ROUTE_INSERT;
@@ -300,15 +333,7 @@ fn belts_spawner_declares_schedule() {
         }
         let sim = bench.host.sim().unwrap();
         let c = sim.authority().store().transport().forecast_host_counters();
-        let spawned: u64 = sim
-            .authority()
-            .store()
-            .entities()
-            .map(|(_, e)| match e {
-                Thing::Spawner(s) | Thing::Cycling(s) => u64::from(s.spawned),
-                _ => 0,
-            })
-            .sum();
+        let spawned = spawned_total(sim);
         if std::env::var_os("MEASURE").is_some() {
             println!("{regime:?}: spawned {spawned}, {c:?}");
         }
@@ -327,8 +352,8 @@ fn belts_spawner_declares_schedule() {
     }
 }
 
-/// M47b: a spawner made by a request mid-game (`Op::Spawner`: `execute` turns the request into the
-/// spawner and activates it, so it joins the list on its request's tick) declares too. A native
+/// M47b, M53: a spawner made by a request mid-game (`Op::Spawner`: `execute` turns the request into
+/// the spawner and activates it, so it joins the list on its request's tick) sets its schedule too. A native
 /// `Sim<Belts>` (the store tracks forecasts without a host): a sink lane and a dead-end lane, each
 /// fed from tick 20 by a request spawner (the dead end fills, so later attempts are refused for
 /// room, which the schedule predicts); over 400 ticks no outcome differs from the declared schedule,
@@ -379,16 +404,7 @@ fn belts_request_spawner_declares_schedule() {
         .store()
         .transport()
         .forecast_host_counters();
-    let spawned: u64 = w
-        .sim
-        .authority()
-        .store()
-        .entities()
-        .map(|(_, e)| match e {
-            Thing::Spawner(s) => u64::from(s.spawned),
-            _ => 0,
-        })
-        .sum();
+    let spawned = spawned_total(&w.sim);
     if std::env::var_os("MEASURE").is_some() {
         println!("request spawners: spawned {spawned}, {c:?}");
     }
@@ -420,14 +436,14 @@ fn items_of(host: &engine::host::Host<Belts>) -> Vec<(u32, Vec<(u16, u32)>)> {
         .collect()
 }
 
-/// M48: a spawner's declaration is derived and not saved, so a restored host has none until the
-/// game declares again (`Game::declare_spawners`, called once after the restore). The 1/64 `Mixed`
-/// bench world is saved at tick 300 and restored into a fresh `Host` (the sim worker's
-/// `sim_restore_*` path), which then runs 60 ticks beside a host that never stopped: the restored
-/// tracker's declarations replay exactly (`spawner_mismatches` 0, none dropped), no spawner insert
-/// reaches clients as an arrival on any restored tick (an undeclared insert is a `ROUTE_INSERT`
-/// crossing; without the hook every insert of the window is one), and every line's items equal the
-/// never-restored host's on every tick.
+/// M48, re-pointed by M53 (0079 §20 (a), §21): the spawners' schedules are line state, saved and
+/// restored with the store, and `fx-belts` keeps `Game::declare_spawners` the default (nothing).
+/// The 1/64 `Mixed` bench world is saved at tick 300 and restored into a fresh `Host` (the sim
+/// worker's `sim_restore_*` path), which then runs 60 ticks beside a host that never stopped: the
+/// tracker, armed from the restored schedules, replays them exactly (`spawner_mismatches` 0, none
+/// dropped), no spawner insert reaches clients as an arrival on any restored tick (an undeclared
+/// insert is a `ROUTE_INSERT` crossing; with no schedule armed every insert of the window is one),
+/// and every line's items equal the never-restored host's on every tick.
 #[test]
 fn belts_restore_keeps_spawner_schedules() {
     use engine::abi::{RegionLayout, Role, Status};
@@ -482,18 +498,7 @@ fn belts_restore_keeps_spawner_schedules() {
         never.host.sim().unwrap().state_hash(),
         "the restored world is the saved one"
     );
-    let spawned = |h: &Host<Belts>| -> u64 {
-        h.sim()
-            .unwrap()
-            .authority()
-            .store()
-            .entities()
-            .map(|(_, e)| match e {
-                Thing::Spawner(s) | Thing::Cycling(s) => u64::from(s.spawned),
-                _ => 0,
-            })
-            .sum()
-    };
+    let spawned = |h: &Host<Belts>| -> u64 { spawned_total(h.sim().unwrap()) };
     let before = spawned(&restored.host);
     let mut undeclared = 0u64;
     for _ in 0..RUN {
@@ -526,9 +531,10 @@ fn belts_restore_keeps_spawner_schedules() {
     }
     assert_eq!(inserts, RESTORE_SPAWNED, "inserts in the restored window");
     assert_eq!(undeclared, 0, "undeclared inserts after the restore");
-    // One list per declared spawner, built by `forecast_close_restored` at the restore (the first
-    // restored tick clears them; no connection held a line then), and none during the window.
-    assert_eq!(c.run_lists, 22, "run_lists ({c:?})");
+    // M53: no list at all. The schedules are armed from state when the restored store reserves
+    // its caps, so nothing is declared and `forecast_close_restored` does not run (it built one
+    // list per declared spawner, 22, before), and none is resent during the window.
+    assert_eq!(c.run_lists, 0, "run_lists ({c:?})");
     assert_eq!(c.spawner_mismatches, 0, "spawner_mismatches ({c:?})");
     assert_eq!(
         c.spawner_declarations_dropped, 0,
@@ -545,15 +551,17 @@ const RESTORE_SPAWNED: u64 = 297;
 /// whose arena fits the slack in the larger of a host's and a replica's reserve (a phone may host
 /// or join) are pinned here as literals with their bytes (a record growth moves them): milestone
 /// 57's phone candidates, and an upper bound, not a usable cap: 0007 §8's 8 MiB line is "lists,
-/// timers, players, and slack", which this pair leaves 409,568 B of (the host's 7,979,040; a
-/// replica reserves 6,602,768). M47's forecast tracker (106 B a line and 4 B an item at these
+/// timers, players, and slack", which this pair leaves 188,384 B of (the host's 8,200,224; a
+/// replica reserves 6,799,376). M47's forecast tracker (106 B a line and 4 B an item at these
 /// caps) moved the pair from (16,384, 131,072), which reserved 8,355,856 B before it and would now
-/// reserve 10,616,864 B on a host and 8,781,840 B on a replica.
+/// reserve 10,911,776 B on a host and 9,043,984 B on a replica. M53's schedule (0079 §21: 16 B on
+/// the line record, 2 B a line of scheduled-slot list on a host) kept the pair and took 221,184 B
+/// of its slack (409,568 B before).
 #[test]
 fn transport_phone_caps_fit_split() {
     const SLACK: u64 = 8 * MIB;
     const LINES: u32 = 12_288;
-    const BYTES: u64 = 7_979_040;
+    const BYTES: u64 = 8_200_224;
     let mut found = None;
     let mut lines = engine::transport::DEFAULT_MAX_LINES;
     while lines > 0 {
@@ -578,7 +586,7 @@ fn transport_phone_caps_fit_split() {
     );
     assert_eq!(
         Transport::replica_reserved_bytes(LINES, 8 * LINES),
-        6_602_768
+        6_799_376
     );
     assert!(Transport::max_role_bytes(LINES + 1_024, 8 * (LINES + 1_024)) > SLACK);
     assert_eq!(
@@ -586,17 +594,18 @@ fn transport_phone_caps_fit_split() {
             engine::transport::DEFAULT_MAX_LINES,
             engine::transport::DEFAULT_MAX_ITEMS
         ),
-        21_168_160,
-        "0079 §16's figure at the recommended caps, plus M46's 5 B a line and M47's tracker"
+        21_757_984,
+        "0079 §16's figure at the recommended caps, plus M46's 5 B a line, M47's tracker and \
+         M53's schedule"
     );
     assert_eq!(
         Transport::reserved_bytes(16_384, 131_072),
-        10_616_864,
+        10_911_776,
         "M46's phone pair"
     );
     assert_eq!(
         Transport::replica_reserved_bytes(16_384, 131_072),
-        8_781_840
+        9_043_984
     );
 }
 
@@ -888,50 +897,69 @@ fn slow_snapshot_belts_large() {
     }
 }
 
-/// M48c (0079 §19 (e)): the `MixedFeeders` regime's feeders keep no state. Over 600 ticks at 1/64
-/// the change log carries no entity delta at all (every entity of the world is a feeder, never
-/// written after genesis), where `Mixed` writes its spawners' accumulators; every feeder declares
-/// `period 256, acc 0, kinds 0` and the tracker replays it exactly (`spawner_mismatches` 0, none
-/// dropped, no insert routed as an arrival after tick 1). Same lines and items at rest as `Mixed`,
-/// one feeder per spawner; the items on the lines at the end are pinned.
+/// M48c (0079 §19 (e)), extended by M53 (§21) to every regime: the bench world's spawners and
+/// feeders keep no state of their own, so over 600 ticks at 1/64 the change log carries no entity
+/// delta at all on any regime (each spawner sets its line's engine schedule once, on the tick it
+/// joins, and is never written; the jams and the inserter never were). `Mixed` wrote 9,075 deltas
+/// before M53 (its spawners' accumulators). Every schedule replays exactly in the tracker
+/// (`spawner_mismatches` 0, none dropped, no insert routed as an arrival after tick 1). The
+/// `Mixed`-derived regimes keep `Mixed`'s lines and items at rest; the entities and the items on
+/// the lines at the end are pinned.
 #[test]
 fn belts_feeders_write_no_delta() {
     use engine::delta::Delta;
     use engine::transport::ROUTE_INSERT;
-    // `(regime, entities, entity deltas, items at the end)`: pinned exactly (seed 7).
-    let pins: [(BenchRegime, usize, u64, u64); 2] = [
-        (BenchRegime::Mixed, 22, 9_075, 4_522),
-        (BenchRegime::MixedFeeders, 22, 0, 5_843),
+    // `(regime, entities, items at the end)`: pinned exactly (seed 7).
+    let pins: [(BenchRegime, usize, u64); 6] = [
+        (BenchRegime::Mixed, 22, 4_522),
+        (BenchRegime::MixedEmpty, 22, 2_801),
+        (BenchRegime::InserterLike, 23, 3_060),
+        (
+            BenchRegime::SaturatedView {
+                jam_pct: 20,
+                period: 20,
+                speed: 0,
+            },
+            19,
+            4_094,
+        ),
+        (
+            BenchRegime::SaturatedView {
+                jam_pct: 50,
+                period: 30,
+                speed: 72,
+            },
+            24,
+            3_851,
+        ),
+        (BenchRegime::MixedFeeders, 22, 5_843),
     ];
     let mixed = world_of(BenchSpec {
         seed: SEED,
         scale: 64,
         regime: BenchRegime::Mixed,
     });
-    for (regime, want_entities, want_deltas, want_items) in pins {
+    for (regime, want_entities, want_items) in pins {
         let spec = BenchSpec {
             seed: SEED,
             scale: 64,
             regime,
         };
         let w = world_of(spec);
-        assert_eq!(
-            w.lines, mixed.lines,
-            "{regime:?}: the Mixed lines and items"
-        );
+        if matches!(regime, BenchRegime::Mixed | BenchRegime::MixedFeeders) {
+            assert_eq!(
+                w.lines, mixed.lines,
+                "{regime:?}: the Mixed lines and items"
+            );
+        }
         let mut bench = BenchHost::new(spec);
-        let (mut deltas, mut feeder_deltas, mut undeclared) = (0u64, 0u64, 0u64);
+        let (mut deltas, mut undeclared) = (0u64, 0u64);
         for _ in 0..600 {
             bench.step(false);
             let a = bench.host.sim().unwrap().authority();
             for (_, d) in a.changes() {
-                match d {
-                    Delta::EntityPut { entity, .. } => {
-                        deltas += 1;
-                        feeder_deltas += u64::from(matches!(entity, Thing::Feeder(_)));
-                    }
-                    Delta::EntityGone { .. } => deltas += 1,
-                    _ => {}
+                if matches!(d, Delta::EntityPut { .. } | Delta::EntityGone { .. }) {
+                    deltas += 1;
                 }
             }
             if bench.tick > 1 {
@@ -965,12 +993,12 @@ fn belts_feeders_write_no_delta() {
         }
         if regime == BenchRegime::MixedFeeders {
             assert_eq!(feeders, w.spawners.len(), "one feeder per spawner");
-            assert_eq!(feeder_deltas, 0, "a feeder wrote");
         }
+        assert_eq!(deltas, 0, "{regime:?}: entity deltas");
         assert_eq!(
-            (entities, deltas, items),
-            (want_entities, want_deltas, want_items),
-            "{regime:?}: (entities, entity deltas, items at the end)"
+            (entities, items),
+            (want_entities, want_items),
+            "{regime:?}: (entities, items at the end)"
         );
         assert_eq!(c.spawner_mismatches, 0, "{regime:?}: spawner_mismatches");
         assert_eq!(

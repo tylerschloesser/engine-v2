@@ -150,46 +150,51 @@ test(
 
 /** `join_at_scale`'s `Mixed` figures (seed 4821), pinned: a moved pin is a finding. M48b read 377
  * ticks (18.85 s) and 2,915,247 B with 2,724 lists for 1,850 lines; M48c's snapshot re-puts only
- * what the client lacks (and the bucket prices only that): 139 ticks (6.95 s), one list per line.
- * The spawners' chunk deltas are still a third of the bytes (`MixedFeeders` below has none). */
+ * what the client lacks (and the bucket prices only that): 139 ticks (6.95 s), one list per line,
+ * 1,467,333 B, a third of them the spawners' chunk deltas (474,328 B, 64 collapses, 13,743 B of
+ * snapshots). M53 (0079 §21): the spawners' schedules are line state, so their entities write no
+ * delta: no `ChunkDeltas`, no collapse, 137 ticks and 986,734 B, close to `MixedFeeders` below;
+ * the bucket's timing moves sections 12 and 13 by a few bytes (64,761 and 912,145 before) and the
+ * frames, bundles and checks with it. */
 const JOIN_PINS = {
-  joinTicks: 139,
+  joinTicks: 137,
   held: 1_850,
   lists: 1_850,
   listsUnknown: 0,
   recordsUnheld: 0,
   unknownHeld: 0,
-  bytesDown: 1_467_333,
+  bytesDown: 986_734,
   sections: {
     Global: 39,
     OwnPlayer: 3,
-    ChunkSnapshots: 13_743,
-    LineStructs: 64_761,
-    Forecasts: 912_145,
-    ChunkDeltas: 474_328,
-    Hashes: 428,
+    ChunkSnapshots: 7_544,
+    LineStructs: 64_762,
+    Forecasts: 912_211,
+    Hashes: 430,
     ChunkEnterPristine: 76,
   },
-  header: 1_370,
-  other: 440,
-  frames: 137,
+  header: 1_320,
+  other: 349,
+  frames: 132,
   heldChunks: 88,
-  collapses: 64,
-  bundles: 44,
+  collapses: 0,
+  bundles: 42,
   level: 4,
 }
 /** Each second of the paced join: lines held, enters queued, degrade level. */
 const JOIN_CHECKS = [
-  { tick: 20, held: 445, queued: 72, level: 2 },
+  { tick: 20, held: 445, queued: 71, level: 2 },
   { tick: 40, held: 906, queued: 62, level: 2 },
   { tick: 60, held: 1_076, queued: 56, level: 4 },
-  { tick: 80, held: 1_228, queued: 52, level: 4 },
-  { tick: 100, held: 1_453, queued: 33, level: 4 },
+  { tick: 80, held: 1_228, queued: 50, level: 4 },
+  { tick: 100, held: 1_446, queued: 31, level: 4 },
   { tick: 120, held: 1_664, queued: 26, level: 4 },
   { tick: 140, held: 1_850, queued: 0, level: 4 },
   { tick: 160, held: 1_850, queued: 0, level: 4 },
 ]
-/** The lifted join (the reference set's run, hash-all), pinned too. */
+/** The lifted join (the reference set's run, hash-all), pinned too. M53 (0079 §21): no
+ * `ChunkDeltas` (257,741 B before) and 7,518 B of snapshots (7,765); sections 12 and 13 unchanged;
+ * 982,553 B (1,240,541). */
 const LIFTED_PINS = {
   joinTicks: 63,
   held: 1_850,
@@ -197,15 +202,14 @@ const LIFTED_PINS = {
   listsUnknown: 0,
   recordsUnheld: 0,
   unknownHeld: 0,
-  bytesDown: 1_240_541,
+  bytesDown: 982_553,
   sections: {
     Global: 39,
     OwnPlayer: 3,
     Hashes: 2_189,
-    ChunkSnapshots: 7_765,
+    ChunkSnapshots: 7_518,
     LineStructs: 64_732,
     Forecasts: 907_346,
-    ChunkDeltas: 257_741,
     ChunkEnterPristine: 74,
   },
   header: 610,
@@ -309,25 +313,30 @@ test(
 
 /** `saturated_view_paced_bytes`' window (seed 4721), pinned: a moved pin is a finding. M48c: the
  * join settles at 456 ticks (790 under M48b's forced re-put of every anchored line); the bytes
- * are the same, items and runs are a later 20 s of world time (294,877 and 150,950 before). */
+ * are the same, items and runs are a later 20 s of world time (294,877 and 150,950 before). M53
+ * (0079 §21): the spawners' entities write no delta, so the connection stays under the soft cap
+ * (degrade level 1 at the window's end, 48 bundles; level 4 and 100 bundles before) and the
+ * window, counted on the delivery clock, holds 399 frames: 3,952 B/s = 51,006 +
+ * 28,026 B, 4,569 States, 228.45 corrections a second (400 frames, 3,958 B/s = 51,072 + 28,084,
+ * 4,576 and 228.8 before). */
 const PACED_PINS = {
   joinTicks: 456,
   held: 2_974,
   items: 294_869,
   runs: 150_959,
-  transportDownBytesPerSec: 3_958,
-  structsBytes: 51_072,
-  forecastsBytes: 28_084,
-  frames: 400,
-  states: 4_576,
+  transportDownBytesPerSec: 3_952,
+  structsBytes: 51_006,
+  forecastsBytes: 28_026,
+  frames: 399,
+  states: 4_569,
   lists: 0,
   lateLists: 0,
   arrivals: 0,
   forecastSeenLate: 0,
-  correctionsPerRunPerSec: 4_576 / 150_959 / 20,
-  correctionsPerSec: 228.8,
+  correctionsPerRunPerSec: 4_569 / 150_959 / 20,
+  correctionsPerSec: 228.45,
   unknown: 0,
-  degradeLevel: 4,
+  degradeLevel: 1,
   collapses: 0,
-  bundles: 100,
+  bundles: 48,
 }

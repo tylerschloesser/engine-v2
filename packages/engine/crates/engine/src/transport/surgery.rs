@@ -25,6 +25,12 @@
 //! adds `by`, `shrink_front` subtracts it (an entry point that falls off the front, `at < by`,
 //! becomes `DeadEnd`, like a destroyed target), `rescale` maps it to `floor(at x new / old)`;
 //! `extend_back`/`shrink_back` leave it (positions from the front do not change).
+//!
+//! Schedules (M53, 0079 §21) follow the line's back, where a spawner inserts: `split` moves the
+//! line's schedule to the new back part; `join` moves `back`'s to `front` (the joined line's back is
+//! `back`'s) and is `Unsupported` when `front` holds one (it would sit mid-line); `destroy` drops
+//! it; `extend_*`, `shrink_*` and `rescale` keep it. A moved schedule is declared to the forecast tracker on its new line (the
+//! surgery resends both lines' lists anyway).
 
 use super::line::{Line, NIL, Run};
 use super::{Item, LineId, MAX_LEN, Output, SPACING, Transport, TransportError};
@@ -261,6 +267,10 @@ impl Transport {
             .binary_search_by(|(i, _)| i.cmp(&line))
             .expect("a live line is indexed");
         self.index.remove(k);
+        // M53: a destroyed line's schedule goes with it (`join` moved `back`'s first).
+        if self.lines[slot as usize].sched.is_some() {
+            self.unlist_sched(slot);
+        }
         self.lines[slot as usize] = Line::free(self.free_line);
         self.free_line = slot;
         self.graph_dirty = true;
@@ -389,6 +399,14 @@ impl Transport {
         );
         self.lines[back_slot as usize].out = Output::Next(line);
         self.lines[back_slot as usize].next_slot = slot;
+        // M53: the schedule inserts at the back, now the new part's.
+        if let Some(ls) = self.lines[slot as usize].sched.take() {
+            self.unlist_sched(slot);
+            self.lines[back_slot as usize].sched = Some(ls);
+            self.list_sched(back_slot);
+            self.fc.set_spawner(slot, None);
+            self.fc.set_spawner(back_slot, Some(ls.s));
+        }
         self.finish(slot);
         self.finish(back_slot);
         Ok(id)
@@ -408,7 +426,9 @@ impl Transport {
             Output::Fork { a, b } => a == back || b == back,
             Output::DeadEnd | Output::Sink => false,
         };
-        if feeds_back {
+        // M53 (0079 §21): a schedule on `front` would sit mid-line on the joined line, whose back is
+        // `back`'s (and two would meet if `back` has one too).
+        if feeds_back || self.lines[fs as usize].sched.is_some() {
             return Err(TransportError::Unsupported);
         }
         let (f, b) = (self.lines[fs as usize], self.lines[bs as usize]);
@@ -465,6 +485,15 @@ impl Transport {
         self.lines[fs as usize].squashed = self.has_negative_gap(fs);
         self.clear_geometry(fs);
         self.clear_geometry(bs);
+        // M53: `back`'s schedule goes with its back edge (refused above if `front` has one).
+        if let Some(ls) = self.lines[bs as usize].sched.take() {
+            self.unlist_sched(bs);
+            self.lines[fs as usize].sched = Some(ls);
+            self.list_sched(fs);
+            // Free `back`'s tracker entry first, as `split` does: at a full pool the new one fits.
+            self.fc.set_spawner(bs, None);
+            self.fc.set_spawner(fs, Some(ls.s));
+        }
         self.free_slot(back, bs);
         self.redirect_feeders(
             back,

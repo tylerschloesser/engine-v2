@@ -9,6 +9,12 @@
 //!   it, a `Next` lands it at `target.len + p` (the squash is already in `p`). Its `p` is the next
 //!   item's leader, so several items cross in one tick when `speed >= SPACING`.
 //! - `insert_back` lands at `max(len - speed, tail + SPACING)`, refused past `len - 1`.
+//! - Schedules (M53, 0079 §21) run first, before any line moves, every scheduled line in ascending
+//!   `LineId` (the item cap makes the order observable): `acc += 256`; at `acc >= period` one
+//!   `insert_back(next)`: accepted, `acc -= period`, `next` steps and `paused` clears; refused for
+//!   room, `acc -= 256` (the credit held, never grown: no burst); refused by the item cap, the
+//!   same and `paused` set. The follower's replay (`follow.rs`) and the tracker's check
+//!   (`forecast.rs`) are this rule.
 //! - `insert_at(pos)`: `SPACING` clear on both sides on this line, `pos <= len - 1`.
 //!   `remove_at(pos)`: the nearest item within `SPACING / 2`, the front one on a tie.
 //!
@@ -75,15 +81,19 @@ pub fn dry_visits() -> u64 {
 }
 
 impl Transport {
-    /// One tick of every line, in update order (recomputed first if the graph changed). Runs in
-    /// `Sim::step` after `G::tick` and before `end_tick`. Allocates nothing. Returns whether
-    /// anything changed: an item moved, crossed (landed or sank) or a run merged (the host marks
-    /// the world dirty from it, M42 review).
+    /// One tick of every line, in update order (recomputed first if the graph changed), after
+    /// every schedule's step (M53). Runs in `Sim::step` after `G::tick` and before `end_tick`.
+    /// Allocates nothing. Returns whether anything changed: a schedule stepped, an item moved,
+    /// crossed (landed or sank) or a run merged (the host marks the world dirty from it, M42
+    /// review).
     pub fn advance(&mut self) -> bool {
         if self.graph_dirty {
             self.recompute_order();
         }
         let before = std::mem::take(&mut self.changed);
+        if !self.sched_slots.is_empty() {
+            self.step_schedules();
+        }
         for i in 0..self.order.len() {
             let l = self.order[i];
             let cut_leader = match self.cut_leader(i) {
@@ -727,6 +737,53 @@ impl Transport {
         rec.mark = epoch;
         self.changed = true;
         true
+    }
+
+    /// Every schedule's step (module doc), in ascending `LineId`, over the scheduled slots only
+    /// (`Transport::sched_slots`, M53 fix round 1); host only (a replica's lines hold none).
+    ///
+    /// The schedule rule has three copies that must agree: this one (the insert), the tracker's
+    /// check (`forecast.rs`, `Tracker::step_spawner`) and the replica's replay (`follow.rs`,
+    /// `Follower::replay`); the arbiter tests pin them equal (`spawner_mismatches` 0).
+    fn step_schedules(&mut self) {
+        for k in 0..self.sched_slots.len() {
+            let slot = self.sched_slots[k];
+            self.sched_visits = self.sched_visits.wrapping_add(1);
+            let Some(mut ls) = self.lines[slot as usize].sched else {
+                debug_assert!(false, "a listed slot without a schedule");
+                continue;
+            };
+            ls.s.acc = ls.s.acc.saturating_add(256);
+            if ls.s.acc >= ls.s.period {
+                let item = ls.s.next;
+                let r = if self.items >= self.max_items {
+                    Err(TransportError::Full)
+                } else {
+                    self.insert_back_slot(slot, item.0)
+                };
+                let rec = &self.lines[slot as usize];
+                // The tracker sees the outcome as it saw a game's `insert_back` (M47).
+                self.fc.insert_back(slot, r, item, rec.tail_pos, rec.speed);
+                match r {
+                    Ok(()) => {
+                        ls.s.acc -= ls.s.period;
+                        ls.s.next = ls.s.cycle(item);
+                        ls.paused = false;
+                        self.sched_inserts = self.sched_inserts.wrapping_add(1);
+                    }
+                    Err(TransportError::NoRoom) => ls.s.acc -= 256,
+                    Err(_) => {
+                        ls.s.acc -= 256;
+                        ls.paused = true;
+                    }
+                }
+            }
+            let rec = &mut self.lines[slot as usize];
+            if rec.sched != Some(ls) {
+                rec.sched = Some(ls);
+                self.changed = true;
+            }
+        }
     }
 
     pub(super) fn insert_back_slot(&mut self, l: u32, item: u16) -> Result<(), TransportError> {

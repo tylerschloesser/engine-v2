@@ -47,7 +47,8 @@ allocate nothing; readers borrow and never panic.
   `Arrival` for an item that entered a held line by a route the client does not follow (from a line it does not hold, across a `Fork`).
   `States` and `Arrivals` are unbudgeted; puts and run lists share the put budget, and a held line whose correction does not fit is dropped
   and put again, so no client ever steps a stale model. The client runs no belt rule: `transport/follow.rs` moves each item to
-  `max(pos - speed, stop)` per tick, follows `Next` links it holds, replays declared spawners, and applies each frame's records around
+  `max(pos - speed, stop)` per tick, follows `Next` links it holds, replays each line's spawner schedule (the rule the host's `advance` runs
+  on a scheduled line, so its inserts cannot mismatch; or a game's declared rule), and applies each frame's records around
   that step; its items are never hashed (0078 §6). They are drawn at the item clock `clamp(host_now, T, T + 4)` (0078 A12 revised, M49; 4 because a degrade-level-4 bundle, which ends at the current tick, steps `T` by 4): `T` the follower's
   tick, `host_now` the host-clock estimate (it follows the earliest arrivals, so at a steady frame rate the clock sits in `[T, T + 1)`), not at
   the render time; items lead entities by the interpolation delay.

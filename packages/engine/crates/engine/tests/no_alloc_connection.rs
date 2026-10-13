@@ -221,7 +221,8 @@ impl Game for NGame {
                     kinds: 0,
                     next: Item(1),
                 }),
-            );
+            )
+            .unwrap();
         }
     }
     fn on_player(w: &mut dyn WorldWrite<Self>, who: PlayerId, ev: PlayerEvent) {
@@ -265,10 +266,7 @@ impl Game for NGame {
             return;
         }
         let t = cx.transport_mut().expect("tick: transport_mut is Ok");
-        // M47: the declared spawners' rule (period 256: an attempt every tick).
-        for k in (8..=LINES).step_by(8) {
-            let _ = t.insert_back(LineId(k), Item(1));
-        }
+        // M53: the spawners are scheduled lines (genesis); the engine inserts every tick.
         if !now.is_multiple_of(7) {
             return;
         }

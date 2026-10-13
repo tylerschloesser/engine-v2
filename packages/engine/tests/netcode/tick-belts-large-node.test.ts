@@ -9,7 +9,7 @@
 // sends), as `tick-large-save node`. Hashing is `production`, as the native `BenchHost`'s. The
 // native bench is unpaced; here the bandwidth caps are lifted out of reach instead, so neither
 // side holds a chunk back (`tick-large-save node` keeps the default caps: its ratio is not
-// measured the same way). It fails if the world is not there: the frames carry under a floor of
+// measured the same way). It fails if the world is not there: the frames do not carry their pinned
 // bytes per tick, or a snapshot's transport section (the last in the store, ending with `next_id`
 // before the state hash and the CRC) does not hold 3,810 lines.
 import { performance } from 'node:perf_hooks'
@@ -35,9 +35,12 @@ const HEIGHT = 545
 const LIFTED = 1_000_000_000
 /// The world's lines (`bench_world(7, Mixed)`).
 const LINES = 3_810
-/// Frame bytes per tick, all eight connections: the native bench sends 53,501; an empty world
-/// sends heartbeats only.
-const FRAME_FLOOR = 20_000
+/// Frame bytes per tick, all eight connections, pinned exactly (seed 4501, the virtual clock): a
+/// header-only frame each every tick (80 B: every connection holds lines, M49) plus the window's
+/// corrections and hashes. M53 (0079 §21): the spawners' schedules are line state and their
+/// entities write no delta, so the `Mixed` world sends 111 B a tick here; before, the floor was
+/// 20,000 B (the native bench sent 53,501, almost all spawner deltas). A moved pin is a finding.
+const FRAME_BYTES = 111
 
 const percentile = (sorted: number[], p: number): number =>
   sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))] as number
@@ -100,7 +103,7 @@ test('tick-belts-large node @slow', async () => {
     expect(times.length).toBe(MEASURED)
     const down = harness.clients.reduce((n, _, i) => n + harness.counters(i).bytesDown, 0)
     const bytesPerTick = Math.round((down - down0) / MEASURED)
-    expect(bytesPerTick).toBeGreaterThan(FRAME_FLOOR)
+    expect(bytesPerTick, 'frame bytes per tick, all connections').toBe(FRAME_BYTES)
     expect(transportLines(harness.server)).toBe(LINES)
     const sorted = [...times].sort((a, b) => a - b)
     const median = percentile(sorted, 0.5)

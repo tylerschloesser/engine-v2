@@ -308,13 +308,16 @@ test(
 )
 
 /** `reconnect_reputs_structures`' figures, pinned (seed 4812): a moved pin is a finding. */
+// M53 (0079 §21): `keeps` 82 and `snapshotBytes` 251 before. The spawners' schedules are line state,
+// so their entities no longer write during the drop: the chunks holding them are unchanged, the
+// resume hint keeps them too (six more) and nothing is snapshotted.
 const RECONNECT_PINS = {
   ticks: 4,
   kTicks: 4,
   frames: 2,
-  keeps: 82,
+  keeps: 88,
   kAnchorKept: true,
-  snapshotBytes: 251,
+  snapshotBytes: 0,
   structsBytes: 1_894,
   forecastsBytes: 27_371,
   lists: 55,

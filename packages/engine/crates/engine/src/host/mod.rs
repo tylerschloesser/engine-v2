@@ -1944,9 +1944,12 @@ impl<G: Game> Host<G> {
     }
 
     /// After every `Sim::from_parts` (restore, upgrade, migrate; M48): the structure prices are
-    /// another store's, and the game declares its spawner schedules again
-    /// (`Game::declare_spawners`), which the tracker arms from the first restored tick. Runs once
-    /// per restore, so the declarations' scratch `Vec` is not a hot-path allocation.
+    /// another store's, and a game that inserts itself declares its spawner rules again
+    /// (`Game::declare_spawners`, `TransportWrite::declare_spawner`), which the tracker arms from
+    /// the first restored tick. Scheduled lines need nothing here (M53, 0079 §21): their schedules
+    /// are state, decoded with the store, and the tracker armed them from it when the restored
+    /// store reserved its caps (`Tracker::reserve`). Runs once per restore, so the declarations'
+    /// scratch `Vec` is not a hot-path allocation.
     fn after_from_parts(&mut self) {
         self.struct_prices.clear();
         let Some(sim) = self.sim.as_mut() else {
@@ -1962,7 +1965,7 @@ impl<G: Game> Host<G> {
         }
         let t = sim.authority_mut().store_mut().transport_mut();
         for (line, s) in declared {
-            crate::transport::TransportWrite::set_spawner(t, line, Some(s));
+            crate::transport::TransportWrite::declare_spawner(t, line, Some(s));
         }
         t.forecast_close_restored();
     }

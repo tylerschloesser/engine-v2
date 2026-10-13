@@ -21,8 +21,8 @@
 //! (0: 24), with one [`crate::Thing::Jam`] per toggled sink (M41's jam schedule). `MixedFeeders`
 //! (M48c) is `Mixed` with a stateless [`crate::Thing::Feeder`] in place of every spawner (same
 //! lines, same items at rest; the item the world gives the chain, a cycling chain's first kind):
-//! one `insert_back` attempt a tick, never written, the shape the reference game's spawners must
-//! take (0079 §19 (e)).
+//! one `insert_back` attempt a tick (`period` 256), never written. Since M53 every spawner is that
+//! shape: its line's schedule is engine state, set once when it joins (0079 §19 (e), §21).
 //!
 //! **What is built.** Per line, in the world's order: `create(len, 24)`; then every `set_out`
 //! (`Next`, `Sink`, `DeadEnd`); every item at rest by `insert_at`, front to back; one straight
@@ -31,7 +31,7 @@
 //! Then one [`crate::Thing::Spawner`] (or [`crate::Thing::Cycling`] where M40's spawner cycles its
 //! item) per world spawner at its line's back tile, on the
 //! `"spawner"` list from tick 1 (a genesis spawn is woken; `Belts::tick` activates a woken
-//! spawner). Rates: `period = round(65,536 / rate256)` (M40's `rate256` per 256 ticks; 24 becomes
+//! spawner, which sets its line's schedule that tick). Rates: `period = round(65,536 / rate256)` (M40's `rate256` per 256 ticks; 24 becomes
 //! 2,731, 0.01 % slower than the spike's).
 //! A refused write panics, naming the step and the line (M47b: a fixture-only genesis, and a world
 //! cut short by small caps once passed silently; `bench_world_at_genesis_is_deterministic` asserts

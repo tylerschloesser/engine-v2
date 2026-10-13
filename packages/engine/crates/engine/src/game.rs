@@ -280,11 +280,13 @@ pub trait Game: Sized + 'static {
         Err(SaveIncompatible)
     }
     /// HOST ONLY (M48). Called once after the host rebuilds its `Sim` from a saved store (restore,
-    /// upgrade, migrate; never at genesis): the spawner schedules a game declared with
-    /// `TransportWrite::set_spawner` are derived and not saved, so the game declares each again
-    /// through `declare`, as it stands in the saved state (after the saved tick's step, 0079 §19
-    /// (a)); they arm from the next tick. Reads only: no write is possible here. The default
-    /// declares nothing (a game with no spawner rule, or one that declares every tick).
+    /// upgrade, migrate; never at genesis), for a game that runs its own spawner rule: the rules it
+    /// declared with `TransportWrite::declare_spawner` are derived and not saved, so the game
+    /// declares each again through `declare`, as it stands in the saved state (after the saved
+    /// tick's step, 0079 §19 (a)); they arm from the next tick. Reads only: no write is possible
+    /// here. The default declares nothing: a game with no spawner rule, one that declares every
+    /// tick, or one whose spawners are scheduled lines (`TransportWrite::set_spawner`, M53, 0079
+    /// §21), whose schedules are state restored with the store.
     fn declare_spawners(_cx: &RestoredCx<'_, Self>, _declare: &mut dyn FnMut(LineId, Schedule)) {}
 }
 

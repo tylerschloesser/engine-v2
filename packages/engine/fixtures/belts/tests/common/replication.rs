@@ -121,7 +121,9 @@ fn region_hash_agrees_after_same_tick_spawn_despawn() {
     }
     let t = lb.host.sim().unwrap().authority().store().transport();
     assert_eq!(t.lines_len(), 2, "the requests built their lines");
-    assert_eq!(moved, 17, "ticks the origin chunk's version moved");
+    // M53: 2 (the spawner request turned spawner, the first `Insert`'s tally); 17 before, when the
+    // spawner entity wrote its accumulator on every insert (its line's schedule is engine state).
+    assert_eq!(moved, 2, "ticks the origin chunk's version moved");
 }
 
 type Items = Vec<(u16, u32)>;
@@ -290,15 +292,17 @@ fn host_degraded_bundles_carry_forecasts() {
     // M49 (0078 A12 revised): a line holder gets a frame every tick (header-only when nothing
     // changed), so more ticks bring a frame to hold and compare: (72, 204) and (24,341, 1,844,315)
     // before; and a hold keeps the latest header-only frame instead of dropping it (fix round 2), (82,
-    // 244) and (30,875, 2,338,827) before that.
+    // 244) and (30,875, 2,338,827) before that. M53 (0079 §21): the spawners' schedules are line
+    // state, so their entities write no delta per insert and the run sends 46,184 B (88,752 before):
+    // fewer frames are held, (90, 280) and (32,387, 2,453,298) before.
     assert_eq!(
         (bundles, frames_in_bundles),
-        (90, 280),
+        (82, 244),
         "bundles and their frames"
     );
     assert_eq!(
         (compared, items),
-        (32_387, 2_453_298),
+        (30_875, 2_338_792),
         "line-ticks and items compared"
     );
     assert_eq!(unknown, 0, "line-ticks skipped as `forecast_unknown`");

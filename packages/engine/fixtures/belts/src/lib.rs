@@ -16,18 +16,20 @@
 //! `Chain` request creates nothing.
 //!
 //! **Spawners.** `Op::Spawner` turns its request entity, in place, into a [`Thing::Spawner`] on
-//! the `"spawner"` active list. Every tick each spawner adds 256 to its accumulator; when the
-//! accumulator reaches `period` (ticks per item in 1/256 tick, at least 256) it makes exactly one
-//! `insert_back` attempt: accepted, `acc -= period` and `spawned += 1`; refused (`NoRoom`, `Full`),
-//! `acc -= 256`, so the credit is held and the next tick is due again, never a burst. `period = 256`
-//! tries every tick (a saturating feed). **Declared (M47b):** on the tick a spawner joins the list
-//! (a request's tick, or tick 1 for a genesis spawner) it declares that rule to the engine after its
-//! first step, `set_spawner(line, Schedule { period, acc, kinds, next })` (`kinds` 0 for a
-//! [`Thing::Spawner`], [`CYCLE_KINDS`] for a [`Thing::Cycling`]; `next` the item of its next
-//! insert): the engine's forecast tracker replays exactly this rule (0078 A8), so the line's
-//! inserts reach clients as forecasts, not arrivals. A destroyed line drops its declaration in the
-//! engine; the fixture never destroys a spawner entity. A declaration is not saved: after a
-//! restore `Game::declare_spawners` (M48) declares every spawner on the list again, as saved.
+//! the `"spawner"` active list. **The engine's schedule (M53, 0079 §21):** on the tick a spawner
+//! joins the list (a request's tick, or tick 1 for a genesis spawner) it gives its line the
+//! schedule `set_spawner(line, Schedule { period, acc, kinds, next })` (`kinds` 0 for a
+//! [`Thing::Spawner`], [`CYCLE_KINDS`] for a [`Thing::Cycling`]; `next` its item), once, and from
+//! then on neither inserts nor writes: the engine runs the rule at the start of every `advance`
+//! (that same tick first). Every tick the schedule adds 256 to its accumulator; when the
+//! accumulator reaches `period` (ticks per item in 1/256 tick, at least 256) the engine makes
+//! exactly one `insert_back` attempt: accepted, `acc -= period`; refused (`NoRoom`, `Full`), `acc
+//! -= 256`, so the credit is held and the next tick is due again, never a burst. `period = 256`
+//! tries every tick (a saturating feed). The schedule is the line's state (saved, restored, carried
+//! to the back piece by surgery, dropped with the line), the forecast tracker and the client
+//! replay the same rule, so the line's inserts reach clients as forecasts, not arrivals, and no
+//! `Game::declare_spawners` is needed. The entity's `acc` and `spawned` stay as it joined (shape
+//! only); the engine counts the inserts (`Transport::scheduled_inserts_total`, store-wide, tests and tools).
 //!
 //! **Surgery, items and geometry (M43b).** `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`,
 //! `Remove`, `TakeFront` and `Segments` run M43's API the same way. `Cut` appends the new back line
@@ -58,11 +60,11 @@
 //! start, or (M48c) `MixedFeeders`, `Mixed` with a [`Thing::Feeder`] in place of every spawner;
 //! these schedule entities ride the `"spawner"` list and are made only by the bench genesis.
 //!
-//! **Feeders (M48c).** A [`Thing::Feeder`] keeps no state and is never written: every tick it makes
-//! one `insert_back` attempt of its item, a refusal dropped, and on the tick it joins the list it
-//! declares `Schedule { period: 256, acc: 0, kinds: 0, next: item }` (again after a restore), the
-//! rule that attempt is. So it costs no chunk delta, unlike a [`Thing::Spawner`], whose accumulator
-//! is written on every insert (0079 §19 (e): the shape the reference game's spawners must take).
+//! **Feeders (M48c).** A [`Thing::Feeder`] keeps no state and is never written: on the tick it
+//! joins the list it gives its line `Schedule { period: 256, acc: 0, kinds: 0, next: item }`, one
+//! `insert_back` attempt of its item a tick, a refusal dropped. Since M53 a [`Thing::Spawner`] is
+//! the same shape (the schedule is the line's state), so neither costs a chunk delta (0079 §19
+//! (e)).
 //!
 //! **The client (M49, [`client`]).** `extract` draws every visible item through the engine's
 //! `draw_items` with a fixture style (sprite = kind mod 3, half a tile, colour by kind, layer 2).
@@ -73,10 +75,10 @@
 //! `fork-blocked-side`, `big-step-fork`, `forty-actions`. `CLAUDE.md` has the detail.
 
 use engine::game::{
-    EntityId, Game, Growth, PlayerEvent, PlayerId, PresenceTable, RestoredCx, TickCx, Unknown,
-    WorldRead, WorldWrite,
+    EntityId, Game, Growth, PlayerEvent, PlayerId, PresenceTable, TickCx, Unknown, WorldRead,
+    WorldWrite,
 };
-use engine::transport::{Geometry, Item, LineId, Output, Schedule, Segment};
+use engine::transport::{Geometry, Item, LineId, Output, Schedule, Segment, TransportError};
 use engine::world::{
     ChunkCoord, Footprint, PrototypeId, Registry, SystemId, Tile, TilePos, TraitSet, WorldPos,
 };
@@ -376,7 +378,9 @@ pub struct Request {
     pub op: Op,
 }
 
-/// A spawner on the `"spawner"` active list (module doc for the rule).
+/// A spawner on the `"spawner"` active list (module doc for the rule). Since M53 its line's
+/// schedule runs it; `acc` and `spawned` keep the values it joined with (the engine counts the
+/// inserts store-wide: `Transport::scheduled_inserts_total`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Spawner {
     pub at: Pos,
@@ -384,29 +388,19 @@ pub struct Spawner {
     pub item: u16,
     pub period: u32,
     pub acc: u32,
-    /// Items this spawner has put on its line (accepted `insert_back`s).
+    /// Always 0 since M53 (shape only).
     pub spawned: u32,
 }
 
 impl Spawner {
-    /// The item of this spawner's next insert (a cycling one's `k`-th accepted insert is kind
-    /// `(item - 1 + k) % CYCLE_KINDS + 1`).
-    fn next_item(&self, cycling: bool) -> u16 {
-        if cycling {
-            let k = self.spawned % u32::from(CYCLE_KINDS);
-            ((u32::from(self.item.max(1)) - 1 + k) % u32::from(CYCLE_KINDS) + 1) as u16
-        } else {
-            self.item
-        }
-    }
-
-    /// The rule this spawner follows, as `set_spawner` declares it (module doc).
+    /// The schedule this spawner gives its line when it joins the list (module doc): a cycling
+    /// one's `k`-th accepted insert is kind `(item - 1 + k) % CYCLE_KINDS + 1`.
     fn schedule(&self, cycling: bool) -> Schedule {
         Schedule {
             period: self.period,
             acc: self.acc,
             kinds: if cycling { CYCLE_KINDS } else { 0 },
-            next: Item(self.next_item(cycling)),
+            next: Item(if cycling { self.item.max(1) } else { self.item }),
         }
     }
 }
@@ -444,7 +438,7 @@ pub struct Feeder {
 }
 
 impl Feeder {
-    /// The rule a feeder is, as `set_spawner` declares it: an attempt every tick.
+    /// The schedule a feeder gives its line: an attempt every tick.
     fn schedule(&self) -> Schedule {
         Schedule {
             period: 256,
@@ -874,12 +868,12 @@ impl Game for Belts {
         }
     }
 
-    /// Requests woken this tick execute in spawn order; then every spawner makes at most one
-    /// `insert_back` attempt (module doc), and a spawner new on the list declares its schedule.
+    /// Requests woken this tick execute in spawn order; then a spawner or feeder new on the list
+    /// gives its line the engine schedule (module doc), and the jams and inserters run.
     fn tick(cx: &mut TickCx<'_, Self>) {
         let sys = spawner_sys();
         // The list only appends between compactions (0007 §7), so the members at or past this
-        // index joined it this tick: they declare their schedule after their first step.
+        // index joined it this tick: they set their line's schedule, once.
         let joined_from = cx.active_len(sys);
         while let Some(id) = cx.next_woken() {
             match cx.entity(id).ok().flatten().copied() {
@@ -903,9 +897,10 @@ impl Game for Belts {
             let Some(id) = cx.active_at(sys, i) else {
                 continue; // a tombstoned slot (0007 §7).
             };
-            let (was, cycling) = match cx.entity(id).ok().flatten().copied() {
-                Some(Thing::Spawner(s)) => (s, false),
-                Some(Thing::Cycling(s)) => (s, true),
+            let (line, schedule) = match cx.entity(id).ok().flatten().copied() {
+                Some(Thing::Spawner(s)) => (s.line, s.schedule(false)),
+                Some(Thing::Cycling(s)) => (s.line, s.schedule(true)),
+                Some(Thing::Feeder(f)) => (f.line, f.schedule()),
                 Some(Thing::Jam(j)) => {
                     Self::jam(cx, j, now);
                     continue;
@@ -914,49 +909,23 @@ impl Game for Belts {
                     Self::insert(cx, ins, now);
                     continue;
                 }
-                Some(Thing::Feeder(f)) => {
-                    if let Ok(t) = cx.transport_mut() {
-                        // A refusal is dropped: no state, no write (module doc).
-                        let _ = t.insert_back(LineId(f.line), Item(f.item));
-                        if i >= joined_from {
-                            t.set_spawner(LineId(f.line), Some(f.schedule()));
-                        }
-                    }
-                    continue;
-                }
                 _ => continue,
             };
-            let mut s = was;
-            s.acc += 256;
-            if s.acc >= s.period {
-                let item = s.next_item(cycling);
-                let ok = match cx.transport_mut() {
-                    Ok(t) => t.insert_back(LineId(s.line), Item(item)).is_ok(),
-                    Err(Unknown) => false,
-                };
-                if ok {
-                    s.acc -= s.period;
-                    s.spawned += 1;
-                } else {
-                    s.acc -= 256;
-                }
-            }
+            // Once, on the tick it joins; the engine inserts from then on and nothing is written
+            // (module doc). A line destroyed since (an op naming a dead table slot) is `NoLine`,
+            // dropped like any refused op; any other refusal is a fixture bug: `Op::valid` checked
+            // `period >= 256` and `item != 0`, and the bench genesis builds valid schedules within
+            // the tracker's room (half the line cap).
             if i >= joined_from
                 && let Ok(t) = cx.transport_mut()
             {
-                t.set_spawner(LineId(s.line), Some(s.schedule(cycling)));
-            }
-            // A held refusal leaves the state as it was: no write, so a backed-up spawner costs
-            // no delta (the idle-cost rule of `fx-machines`' `idle-world-costs-zero`).
-            if s != was {
-                cx.put_entity(
-                    id,
-                    if cycling {
-                        Thing::Cycling(s)
-                    } else {
-                        Thing::Spawner(s)
-                    },
-                );
+                match t.set_spawner(LineId(line), Some(schedule)) {
+                    Ok(()) | Err(TransportError::NoLine) => {}
+                    Err(e) => panic!(
+                        "set_spawner({line}) refused {e:?}: Op::valid checks period >= 256 and \
+                         item != 0, and a world's spawners fit half its line cap"
+                    ),
+                }
             }
         }
     }
@@ -977,22 +946,8 @@ impl Game for Belts {
         Ok(())
     }
 
-    /// M48: after a restore every spawner on the list declares its rule again, as saved (the state
-    /// after its last step, which is what `tick` declares on the tick it joins).
-    fn declare_spawners(cx: &RestoredCx<'_, Self>, declare: &mut dyn FnMut(LineId, Schedule)) {
-        let sys = spawner_sys();
-        for i in 0..cx.active_len(sys) {
-            let Some(id) = cx.active_at(sys, i) else {
-                continue;
-            };
-            match cx.world().entity(id).ok().flatten() {
-                Some(Thing::Spawner(s)) => declare(LineId(s.line), s.schedule(false)),
-                Some(Thing::Cycling(s)) => declare(LineId(s.line), s.schedule(true)),
-                Some(Thing::Feeder(f)) => declare(LineId(f.line), f.schedule()),
-                _ => {}
-            }
-        }
-    }
+    // `declare_spawners` keeps the default (nothing, M53): the schedules are line state, restored
+    // with the store.
 }
 
 /// Flat grass everywhere: belt tests want a world with nothing in the way. With a bench spec it

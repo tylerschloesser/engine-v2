@@ -32,6 +32,8 @@ mod integrity;
 mod line_replication;
 #[path = "main/module_layering.rs"]
 mod module_layering;
+#[path = "main/schedule.rs"]
+mod schedule;
 #[path = "main/state_budget.rs"]
 mod state_budget;
 #[path = "main/state_budget_tick.rs"]

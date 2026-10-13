@@ -172,21 +172,8 @@ impl World {
         self.sim.authority().transport().toggle(l).expect("line")
     }
 
-    /// Items accepted onto `l` by its spawner(s).
-    pub fn spawned_on(&self, l: LineId) -> u64 {
-        let mut n = 0;
-        for (_, e) in self.sim.authority().store().entities() {
-            if let Thing::Spawner(s) = e
-                && s.line == l.0
-            {
-                n += u64::from(s.spawned);
-            }
-        }
-        n
-    }
-
     /// The whole world's ledger: live and sunk over every line alive now, plus the final sunk
-    /// counts of the lines that died; the spawners, the tally and the destroyed counter.
+    /// counts of the lines that died; the schedules' inserts, the tally and the destroyed counter.
     pub fn ledger(&self) -> Ledger {
         let mut g = Ledger::default();
         let tr = self.sim.authority().transport();
@@ -196,17 +183,27 @@ impl World {
         for i in self.live_chains() {
             g.live += u64::from(tr.count(self.line(i)).expect("line"));
         }
+        g.spawned = self
+            .sim
+            .authority()
+            .store()
+            .transport()
+            .scheduled_inserts_total();
         for (_, e) in self.sim.authority().store().entities() {
             match e {
-                Thing::Spawner(s) | Thing::Cycling(s) => g.spawned += u64::from(s.spawned),
                 Thing::Tally(t) => {
                     g.inserted += u64::from(t.inserted);
                     g.removed += u64::from(t.removed);
                     g.taken += u64::from(t.taken);
                 }
                 Thing::Destroyed(n) => g.destroyed += u64::from(*n),
-                // A feeder (M48c) counts nothing: only the bench genesis makes one.
-                Thing::Request(_) | Thing::Jam(_) | Thing::Inserter(_) | Thing::Feeder(_) => {}
+                // M53: the engine counts the spawners' inserts (below).
+                Thing::Spawner(_)
+                | Thing::Cycling(_)
+                | Thing::Request(_)
+                | Thing::Jam(_)
+                | Thing::Inserter(_)
+                | Thing::Feeder(_) => {}
             }
         }
         g

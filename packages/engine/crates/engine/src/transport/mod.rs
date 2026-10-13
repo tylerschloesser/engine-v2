@@ -49,6 +49,14 @@
 //!
 //! M49 (0078 A12): `draw.rs` is the client role's item drawing (`draw::draw_items`, called from a
 //! game's `extract`): every visible item of every held line at the item clock, `T + frac`.
+//!
+//! M53 (0079 §21): a line's spawner [`Schedule`] is sim state on its record
+//! ([`TransportWrite::set_spawner`]): encoded behind a tag bit (`codec.rs`), hashed with the store,
+//! restored with it, carried by surgery to the piece that holds the line's back. `advance` runs
+//! every schedule first thing (`advance.rs`, `step_schedules`), the rule the replica's follower
+//! replays, so a scheduled line's inserts are the engine's (a game's `insert_back` there is
+//! `Err(Scheduled)`) and cannot mismatch the forecast. A game that inserts itself declares its rule
+//! instead ([`TransportWrite::declare_spawner`], derived, M47).
 
 mod advance;
 mod codec;
@@ -84,6 +92,10 @@ pub const MAX_LEN: u32 = i32::MAX as u32;
 /// 0076 §1: the minimum distance between two items on one line and across a plain hand-off (4
 /// items per tile per lane). An engine constant; the run representation relies on it.
 pub const SPACING: u32 = 64;
+
+/// The shortest schedule period (M53): 256 (1/256 tick) is one insert a tick, the most a schedule
+/// makes. `set_spawner` below it is `BadPeriod`; decode rejects it.
+pub const MIN_PERIOD: u32 = 256;
 
 /// 0076 §8: the default line cap (`WorldParams::max_lines`, `WorldConfig.params.maxLines`).
 pub const DEFAULT_MAX_LINES: u32 = 32_768;
@@ -161,6 +173,11 @@ pub enum TransportError {
     BadSegments,
     /// A length past [`MAX_LEN`] (`create`, `extend_*`, `join`, `rescale`).
     TooLong,
+    /// `set_spawner` with a `period` below [`MIN_PERIOD`] (M53).
+    BadPeriod,
+    /// `insert_back` on a line whose schedule is state (M53, 0079 §21): the engine makes that
+    /// line's inserts.
+    Scheduled,
 }
 
 pub use TransportError::{BadSpeed, Full, NoRoom, NotEmpty};
@@ -213,18 +230,20 @@ pub trait TransportWrite: TransportRead {
     /// `Err(BadSpeed)` unless `1 <= speed < len`.
     fn create(&mut self, len: u32, speed: u16) -> Result<LineId, TransportError>;
     /// Removes the line, handing its items to `f` front to back and returning how many; lines
-    /// that fed it become `DeadEnd`; its runs, slot, segments and tile-index entries are freed (its
-    /// id is never reused).
+    /// that fed it become `DeadEnd`; its runs, slot, segments, tile-index entries and schedule are
+    /// freed (its id is never reused).
     fn destroy(&mut self, line: LineId, f: &mut dyn FnMut(Item)) -> Result<u32, TransportError>;
     /// Cuts the line at `at` (`surgery.rs`): the line keeps `[0, at)` and its output; the new line
     /// (returned) is `[at, len)`, items at `pos >= at` moved to `pos - at`, its output `Next(line)`;
-    /// every `Next(line)` now feeds the new line. `BadSpeed` unless `speed < at` and
+    /// every `Next(line)` now feeds the new line, and the line's schedule moves to it (M53: it
+    /// inserts at the back). `BadSpeed` unless `speed < at` and
     /// `speed < len - at` and every feeder's speed is at most `len - at`; `Full` at `max_lines`.
     fn split(&mut self, line: LineId, at: u32) -> Result<LineId, TransportError>;
     /// Appends `back` (whose output must be `Next(front)`, else `NotLinked`) to `front`: its items
     /// at `pos + front.len`, gaps kept, a packed same-kind boundary pair merged; `back` is
     /// destroyed and its feeders feed `front`. `front` keeps its speed and output. `Unsupported` if
-    /// `front` feeds `back` (the joined line would feed itself). Any other line feeding `front`
+    /// `front` feeds `back` (the joined line would feed itself) or `front` holds a schedule (M53:
+    /// it would sit mid-line); `back`'s schedule moves to `front`, whose back it now is. Any other line feeding `front`
     /// (`Next(front)`) now lands at the joined line's back, `back.len` further upstream than
     /// before: topology is the game's (0076 §3), and a second plain feeder into one back edge has
     /// no geometric meaning in a belt game, so `join` does not refuse it.
@@ -256,6 +275,8 @@ pub trait TransportWrite: TransportRead {
     fn set_speed(&mut self, line: LineId, speed: u16) -> Result<(), TransportError>;
     /// A spawner's primitive: lands at `max(len - speed, tail + SPACING)`, refused (`NoRoom`) past
     /// `len - 1`; `Err(Full)` at `max_items`. Checks spacing on this line only (0077 A6b (i)).
+    /// `Err(Scheduled)` on a line with a schedule (M53: the engine makes its inserts; a debug
+    /// build panics, naming the line).
     /// Called from `G::tick`, it lands *before* that tick's `advance`, which then moves the item:
     /// at the end of the tick an item inserted this tick sits at `len - 2 x speed` (it entered one
     /// tick's travel inside the back edge and then moved), and on a `Sink` line with
@@ -265,15 +286,27 @@ pub trait TransportWrite: TransportRead {
     fn insert_at(&mut self, line: LineId, pos: u32, item: Item) -> Result<(), TransportError>;
     /// The nearest item within `SPACING / 2` of `pos` (the front one on a tie), if any.
     fn remove_at(&mut self, line: LineId, pos: u32) -> Result<Option<Item>, TransportError>;
-    /// Declares the spawner the game's tick rule runs on this line (M47, [`Schedule`]: the engine
-    /// forecasts it, the game keeps inserting through `insert_back`), as it stands after this
-    /// tick; `None` clears it. Returns nothing: a declaration is derived state, never part of the
-    /// sim (no result the game could branch on). It is not encoded, so it is lost on restore: the
-    /// game declares again from `Game::declare_spawners` (M48), which the host calls once after
-    /// every restore, upgrade and migrate, and the declarations arm from the first restored tick.
-    /// One the tracker cannot hold (no such line, or half the line cap declared already) is
-    /// counted (`HostCounters::spawner_declarations_dropped`).
-    fn set_spawner(&mut self, line: LineId, s: Option<Schedule>);
+    /// Gives the line a spawner schedule (M53, 0079 §21; [`Schedule`]'s rule), or clears it with
+    /// `None`. Sim state: encoded, hashed and restored with the store, so the game writes it once,
+    /// at configuration. From this tick's `advance` on, the engine runs it first thing every tick
+    /// (at most one insert at the line's back, the credit held on a refusal and never grown,
+    /// paused by the item cap) and a game's `insert_back` on the line is `Err(Scheduled)`. The
+    /// line's forecast list is resent (it carries the schedule). `BadPeriod` below
+    /// [`MIN_PERIOD`], `BadItem` for `next == Item(0)`, `NoLine`, and `Full` when the line has no
+    /// schedule or declaration yet and the forecast tracker's pool (half the line cap, shared with
+    /// `declare_spawner`) is full: past it the line's inserts could only reach clients as
+    /// arrivals. Clearing (`None`) a line without a schedule changes nothing (a declaration stays).
+    fn set_spawner(&mut self, line: LineId, s: Option<Schedule>) -> Result<(), TransportError>;
+    /// Declares the spawner the game's own tick rule runs on this line (M47, [`Schedule`]: the
+    /// engine forecasts it, the game keeps inserting through `insert_back`), as it stands after
+    /// this tick; `None` clears it. For a game that inserts itself; a scheduled line
+    /// ([`TransportWrite::set_spawner`]) needs none. Returns nothing: a declaration is derived
+    /// state, never part of the sim (no result the game could branch on). It is not encoded, so it
+    /// is lost on restore: the game declares again from `Game::declare_spawners` (M48), which the
+    /// host calls once after every restore, upgrade and migrate, and the declarations arm from the
+    /// first restored tick. One the tracker cannot hold (no such line, a scheduled line, or half
+    /// the line cap declared already) is counted (`HostCounters::spawner_declarations_dropped`).
+    fn declare_spawner(&mut self, line: LineId, s: Option<Schedule>);
 }
 
 /// The read side of a context that holds no transport state (a `WorldRead` implementor that does
@@ -403,6 +436,15 @@ pub struct Transport {
     fc: forecast::Tracker,
     /// M47: the replica's forecast follower (`follow.rs`), reserved by `set_caps` on a replica.
     fl: follow::Follower,
+    /// M53: the slots of the lines holding a schedule (`Line::sched`), ascending by `LineId`:
+    /// what `advance` steps. Derived from the records (decode lists them), edited by `set_spawner`
+    /// and surgery only, reserved at `set_caps` for half the line cap (the tracker's room, which
+    /// `set_spawner` checks); not state.
+    sched_slots: Vec<u32>,
+    /// M53: items every schedule inserted since this store was built or decoded, and slots the
+    /// schedule step visited (tests and tools; not state).
+    sched_inserts: u64,
+    sched_visits: u64,
 }
 
 impl Transport {
@@ -444,6 +486,9 @@ impl Transport {
             replica: false,
             fc: forecast::Tracker::default(),
             fl: follow::Follower::default(),
+            sched_slots: Vec::new(),
+            sched_inserts: 0,
+            sched_visits: 0,
         }
     }
 
@@ -481,6 +526,8 @@ impl Transport {
         // in the follower, so it reserves no update order, Tarjan scratch, change list or run
         // nodes.
         if !self.replica {
+            let n = (sched_cap(max_lines) as usize).max(self.sched_slots.len());
+            reserve_to(&mut self.sched_slots, n);
             self.struct_cap = struct_cap(max_lines);
             reserve_to(&mut self.struct_changes, self.struct_cap as usize);
             reserve_to(&mut self.order, lines);
@@ -519,8 +566,45 @@ impl Transport {
             return;
         }
         let mut fc = std::mem::take(&mut self.fc);
+        fc.closing = true;
         fc.end_tick(self);
+        fc.closing = false;
         self.fc = fc;
+    }
+
+    /// The line's schedule as it stands after the last tick's step and whether the item cap paused
+    /// it (M53; `None` without one). Tests and tools.
+    pub fn schedule(&self, line: LineId) -> Result<Option<(Schedule, bool)>, Unknown> {
+        Ok(self.read_line(line)?.sched.map(|ls| (ls.s, ls.paused)))
+    }
+
+    /// Scheduled slots the schedule step visited since this store was built or decoded (M53 fix
+    /// round 1: the step walks the scheduled lines only). Tests and tools.
+    pub fn schedule_visits(&self) -> u64 {
+        self.sched_visits
+    }
+
+    /// Lists `slot` (a line that just got a schedule) in `sched_slots` at its id's place, within
+    /// the reserved room (`set_spawner` checked the tracker's pool, the same size).
+    fn list_sched(&mut self, slot: u32) {
+        let id = self.lines[slot as usize].id;
+        let lines = &self.lines;
+        let k = self
+            .sched_slots
+            .partition_point(|&s| lines[s as usize].id < id);
+        self.sched_slots.insert(k, slot);
+    }
+
+    /// Drops `slot` from `sched_slots` (its schedule cleared or moved, or the line destroyed).
+    fn unlist_sched(&mut self, slot: u32) {
+        if let Some(k) = self.sched_slots.iter().position(|&s| s == slot) {
+            self.sched_slots.remove(k);
+        }
+    }
+
+    /// Items every schedule inserted since this store was built or decoded (M53). Tests and tools.
+    pub fn scheduled_inserts_total(&self) -> u64 {
+        self.sched_inserts
     }
 
     /// The bytes [`Transport::set_caps`] reserves for `max_lines` lines and `max_items` items on an
@@ -568,6 +652,7 @@ impl Transport {
         let (segs, tiles, headroom) = geometry::caps(max_lines);
         u64::from(max_lines) * per_line as u64
             + u64::from(struct_cap(max_lines)) * size_of::<LineId>() as u64
+            + u64::from(sched_cap(max_lines)) * size_of::<u32>() as u64
             + nodes * size_of::<Node>() as u64
             + u64::from(segs) * size_of::<SegRec>() as u64
             + (u64::from(tiles) + u64::from(headroom)) * size_of::<TileEntry>() as u64
@@ -581,6 +666,7 @@ impl Transport {
         (self.lines.capacity() * size_of::<Line>()
             + self.struct_ver.capacity() * size_of::<u32>()
             + self.struct_changes.capacity() * size_of::<LineId>()
+            + self.sched_slots.capacity() * size_of::<u32>()
             + self.index.capacity() * size_of::<(LineId, u32)>()
             + self.order.capacity() * size_of::<u32>()
             + self.scratch.capacity_bytes()
@@ -766,6 +852,11 @@ impl Transport {
             .map(|s| &self.lines[s as usize])
             .ok_or(Unknown)
     }
+}
+
+/// The scheduled-slot list's room (M53): half the line cap, the forecast tracker's schedule pool.
+fn sched_cap(max_lines: u32) -> u32 {
+    max_lines.div_ceil(2)
 }
 
 /// The change list's room for `max_lines` (module doc): a quarter, rounded up.
@@ -1040,6 +1131,13 @@ impl TransportWrite for Transport {
 
     fn insert_back(&mut self, line: LineId, item: Item) -> Result<(), TransportError> {
         let slot = self.slot(line).ok_or(TransportError::NoLine)?;
+        if self.lines[slot as usize].sched.is_some() {
+            debug_assert!(
+                false,
+                "insert_back on {line:?}, whose schedule is state: the engine inserts there (0079 §21)"
+            );
+            return Err(TransportError::Scheduled);
+        }
         if item.0 == 0 {
             return Err(TransportError::BadItem);
         }
@@ -1080,10 +1178,43 @@ impl TransportWrite for Transport {
         Ok(r)
     }
 
-    fn set_spawner(&mut self, line: LineId, s: Option<Schedule>) {
+    fn set_spawner(&mut self, line: LineId, s: Option<Schedule>) -> Result<(), TransportError> {
+        let slot = self.slot(line).ok_or(TransportError::NoLine)?;
+        if let Some(s) = s {
+            if s.period < MIN_PERIOD {
+                return Err(TransportError::BadPeriod);
+            }
+            if s.next.0 == 0 {
+                return Err(TransportError::BadItem);
+            }
+        }
+        let had = self.lines[slot as usize].sched.is_some();
+        if !had && s.is_none() {
+            // Nothing to clear; a `declare_spawner` declaration on the line stays.
+            return Ok(());
+        }
+        if !had && !self.fc.sched_room(slot) {
+            return Err(TransportError::Full);
+        }
+        self.lines[slot as usize].sched = s.map(|s| line::LineSched { s, paused: false });
+        match (had, s.is_some()) {
+            (false, true) => self.list_sched(slot),
+            (true, false) => self.unlist_sched(slot),
+            _ => {}
+        }
+        self.changed = true;
+        // The tracker replays it from the next tick and resends the line's list now (it carries
+        // the schedule as this tick's step leaves it).
+        self.fc.set_spawner(slot, s);
+        Ok(())
+    }
+
+    fn declare_spawner(&mut self, line: LineId, s: Option<Schedule>) {
         let valid = s.is_none_or(|s| s.period != 0 && s.next.0 != 0);
         match self.slot(line) {
-            Some(slot) if valid => self.fc.set_spawner(slot, s),
+            Some(slot) if valid && self.lines[slot as usize].sched.is_none() => {
+                self.fc.set_spawner(slot, s)
+            }
             _ => self.fc.counters.spawner_declarations_dropped += 1,
         }
     }

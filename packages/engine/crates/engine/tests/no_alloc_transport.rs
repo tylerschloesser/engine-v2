@@ -442,10 +442,11 @@ fn transport_surgery_no_alloc() {
 }
 
 /// M47: the forecast tracker inside the window (it is on in every reserved store): the full-rate
-/// spawners are declared (`set_spawner`, the schedule their rule follows), a sink lane toggles
-/// every 20 ticks, the inserter-like edits and the churn line stay. Its halts, releases, states,
-/// run lists, due ticks and hand-off log all run measured, allocating nothing, and the declared
-/// schedules hold.
+/// spawners are scheduled lines (M53: `set_spawner`, so the engine's schedule step inserts for
+/// them inside `advance`, measured too; the slow spawners stay the test's own `insert_back`), a
+/// sink lane toggles every 20 ticks, the inserter-like edits and the churn line stay. Its halts,
+/// releases, states, run lists, due ticks and hand-off log all run measured, allocating nothing,
+/// and the schedules hold.
 #[test]
 fn transport_forecast_tracker_no_alloc() {
     use engine::transport::Schedule;
@@ -460,12 +461,15 @@ fn transport_forecast_tracker_no_alloc() {
                 kinds: if s.cycle { KINDS } else { 0 },
                 next: Item(s.next),
             };
-            w.t.set_spawner(s.line, Some(sch));
+            w.t.set_spawner(s.line, Some(sch)).unwrap();
         }
     }
-    // One tick outside the window: the declarations' lists.
+    // The engine inserts for the scheduled lines (a game's `insert_back` there is refused).
+    w.spawners.retain(|s| s.rate256 != 256);
+    // One tick outside the window: the schedules' lists.
     tick(&mut w, None);
     let before = w.t.forecast_host_counters();
+    let inserts0 = w.t.scheduled_inserts_total();
     let pad = (thread_high_water_bytes() - thread_live_bytes()).max(0) as usize + 1;
     let _pad = vec![0u8; pad];
     let (live0, high0) = (thread_live_bytes(), thread_high_water_bytes());
@@ -484,9 +488,10 @@ fn transport_forecast_tracker_no_alloc() {
     );
     assert!(c.states > before.states + 50, "{c:?}");
     assert!(c.run_lists > before.run_lists + 100, "{c:?}");
-    assert_eq!(
-        c.spawner_mismatches, 0,
-        "the declared schedules hold: {c:?}"
+    assert_eq!(c.spawner_mismatches, 0, "the schedules hold: {c:?}");
+    assert!(
+        w.t.scheduled_inserts_total() > inserts0 + 1_000,
+        "the engine's schedule step inserted inside the window"
     );
     assert_eq!(
         (live, high),

@@ -4,16 +4,18 @@
 //! ```text
 //! line_count u32
 //! per line: id u32 | len u32 | speed u16 | out | sunk u64 | jam u32 | run_count u32 | runs
-//!           [| seg_count u8 | segments]
+//!           [| seg_count u8 | segments] [| schedule]
 //!   out: tag u8 (0 DeadEnd, 1 Next + id u32, 2 Sink, 3 Merge + line u32 + at u32,
 //!     4 Fork + a u32 + b u32 + toggle u8), bit 7 (`SEGMENTS`) set when segments follow the runs
-//!     (M43); the toggle (M44, 0 or 1) is encoded only with a fork, the one output that has one
+//!     (M43), bit 6 (`SCHEDULE`) when the schedule ends the record (M53); the toggle (M44, 0 or
+//!     1) is encoded only with a fork, the one output that has one
 //!   jam: the cursor's run index from the front (>= 1), 0 = unknown, u32::MAX = "all packed"
 //!   run: item u16 | count u16 | dist u32
 //!     dist: the front run's first item position; for a later run, the distance from the item
 //!     ahead to its first item (`gap + SPACING`)
 //!   segment (M43): len u32 | tag u8, then 0 Straight: from.x i32 | from.y i32 | to.x i32 | to.y i32,
 //!     1 Arc: centre.x i32 | centre.y i32 | radius_q8 u32 | start_turn_q8 u16 | sweep_q8 i16 (u16)
+//!   schedule (M53, 0079 §21): period u32 | acc u32 | kinds u16 | next u16 | paused u8 (13 B)
 //! next_id u32
 //! ```
 //!
@@ -25,20 +27,23 @@
 //! than 0 or 1, a `jam` index past the runs or one with
 //! a gapped run between it and the front run (the cursor's invariant), and segments `set_segments`
 //! would refuse (`seg_count` 0 with the bit set, more than `MAX_SEGMENTS`, lengths not summing to
-//! `len`, an arc field out of range, a path entering more than `MAX_LINE_TILES` tiles). A `dist`
+//! `len`, an arc field out of range, a path entering more than `MAX_LINE_TILES` tiles), and a
+//! schedule `set_spawner` would refuse (`period` below 256, `next` 0) or a `paused` byte other than
+//! 0 or 1. A `dist`
 //! in `[1, SPACING)` is a squashed pair (M43: `rescale` and `join` keep them, `line.rs`), legal
 //! state. Spacing across a hand-off is never checked (0077 A6b (i)). Run merging is not
 //! re-checked: an unmerged same-item pair is legal state (a `u16` merge guard, or a pair the `jam`
 //! skip has not revisited) and decodes as it was.
 //!
 //! The segments bit keeps a line without segments byte-identical to its M42 record, so every
-//! pre-M43 golden (no world registered segments before M43) keeps its hash.
+//! pre-M43 golden (no world registered segments before M43) keeps its hash; the schedule bit does
+//! the same for a line without a schedule (M53: no schedule-free golden moves).
 
 use super::geometry::{
     Geometry, MAX_LINE_TILES, MAX_SEGMENTS, Segment, check_segments, count_tiles,
 };
-use super::line::{Line, NIL, Run};
-use super::{LineId, MAX_LEN, Output, SPACING, Transport};
+use super::line::{Line, LineSched, NIL, Run};
+use super::{Item, LineId, MAX_LEN, MIN_PERIOD, Output, SPACING, Schedule, Transport};
 use crate::bytes::{ByteReader, ByteSink};
 use crate::codec::CodecError;
 use crate::world::WorldPos;
@@ -47,6 +52,10 @@ const JAM_UNKNOWN: u32 = 0;
 const JAM_END: u32 = u32::MAX;
 /// The `out` tag bit announcing segments after the runs (module doc).
 const SEGMENTS: u8 = 0x80;
+/// The `out` tag bit announcing the schedule at the record's end (M53, module doc).
+const SCHEDULE: u8 = 0x40;
+/// Every flag bit of the `out` tag.
+const FLAGS: u8 = SEGMENTS | SCHEDULE;
 
 /// The `out` field (0079 §15): `tag u8` with `flags` ORed in (bit 7 is `SEGMENTS` in the
 /// canonical record, never set in a `LineStructs` put), then the variant's fields; a `Fork`'s
@@ -73,11 +82,11 @@ pub(crate) fn write_out(sink: &mut (impl ByteSink + ?Sized), out: Output, flags:
     }
 }
 
-/// Reads [`write_out`]'s bytes: the output and the tag's flag bits (`SEGMENTS`); an unknown tag
-/// is `Malformed`.
+/// Reads [`write_out`]'s bytes: the output and the tag's flag bits (`SEGMENTS`, `SCHEDULE`); an
+/// unknown tag is `Malformed`.
 pub(crate) fn read_out(reader: &mut ByteReader) -> Result<(Output, u8), CodecError> {
     let tag = reader.u8()?;
-    let out = match tag & !SEGMENTS {
+    let out = match tag & !FLAGS {
         0 => Output::DeadEnd,
         1 => Output::Next(LineId(reader.u32()?)),
         2 => Output::Sink,
@@ -91,7 +100,7 @@ pub(crate) fn read_out(reader: &mut ByteReader) -> Result<(Output, u8), CodecErr
         },
         _ => return Err(CodecError::Malformed),
     };
-    Ok((out, tag & SEGMENTS))
+    Ok((out, tag & FLAGS))
 }
 
 /// One segment (module doc's layout), shared with `wire::lines`.
@@ -157,7 +166,10 @@ impl Transport {
             sink.put_u32(id.0);
             sink.put_u32(line.len);
             sink.put_u16(line.speed);
-            let flag = if line.seg_count > 0 { SEGMENTS } else { 0 };
+            let mut flag = if line.seg_count > 0 { SEGMENTS } else { 0 };
+            if line.sched.is_some() {
+                flag |= SCHEDULE;
+            }
             write_out(sink, line.out, flag);
             if let Output::Fork { .. } = line.out {
                 sink.put_u8(u8::from(line.toggle));
@@ -184,6 +196,13 @@ impl Transport {
                 for r in self.seg_slice(slot) {
                     write_segment(sink, &r.seg);
                 }
+            }
+            if let Some(ls) = line.sched {
+                sink.put_u32(ls.s.period);
+                sink.put_u32(ls.s.acc);
+                sink.put_u16(ls.s.kinds);
+                sink.put_u16(ls.s.next.0);
+                sink.put_u8(u8::from(ls.paused));
             }
         }
         sink.put_u32(self.next_id);
@@ -350,6 +369,25 @@ impl Transport {
                     return Err(bad);
                 }
                 t.decode_segments(slot, &segs[..n]);
+            }
+            if flags & SCHEDULE != 0 {
+                let s = Schedule {
+                    period: reader.u32()?,
+                    acc: reader.u32()?,
+                    kinds: reader.u16()?,
+                    next: Item(reader.u16()?),
+                };
+                let paused = match reader.u8()? {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(bad),
+                };
+                if s.period < MIN_PERIOD || s.next.0 == 0 {
+                    return Err(bad);
+                }
+                t.lines[slot as usize].sched = Some(LineSched { s, paused });
+                // Slots decode in ascending id: the list stays sorted.
+                t.sched_slots.push(slot);
             }
         }
         let next_id = reader.u32()?;

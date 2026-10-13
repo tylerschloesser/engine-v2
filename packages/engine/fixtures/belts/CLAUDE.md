@@ -12,10 +12,7 @@ its line by the end of T). Ops: `Chain { from, dir, tiles, speed, items_at_rest 
 from_line, to_line }` (`Next`), `Spawner { line, item, period }`, `Sink { line }`, `DeadEnd { line
 }`. Ops name lines by chain order: `Global::lines[i]` is the `i`-th chain's `LineId` (32 slots, `0`
 = refused by `create`; a `Chain` past 32 creates nothing). A `Spawner` request becomes, in place, a
-`Thing::Spawner` on the `"spawner"` active list: `acc += 256` per tick; at `acc >= period` (1/256
-ticks per item, `>= 256`) one `insert_back`, accepted `acc -= period`, refused `acc -= 256` (held,
-never a burst); it is written only when its state changed, and declares that rule (M47b,
-`set_spawner`) after its first step on the list, again after a restore (M48, `declare_spawners`). `Action::Noop` stays first; `SCHEMA_VERSION` 2. M43b adds `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`, `Remove`,
+`Thing::Spawner` on the `"spawner"` active list, which on the tick it joins gives its line the engine schedule once (M53, 0079 §21: `set_spawner(line, Schedule { period, acc, kinds, next })`) and is never written again: the engine runs the rule at the start of every `advance` (`acc += 256` a tick; at `acc >= period`, 1/256 ticks per item, `>= 256`, one `insert_back`, accepted `acc -= period`, refused `acc -= 256`: held, never a burst); the schedule is line state (saved, restored, carried to the back piece by surgery), `declare_spawners` stays the default, and the tests' conservation reads the engine's store-wide insert count (`Transport::scheduled_inserts_total`, not state). `Action::Noop` stays first; `SCHEMA_VERSION` 2. M43b adds `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`, `Remove`,
 `TakeFront`, `Segments` and a `Thing::Tally` of accepted item requests; M44b `Merge`, `Fork`
 (`set_out`) and `Destroy` (counted in `Thing::Destroyed`); M46 `Speed` (`set_speed`, appended
 last so no encoded op moved); M48b `Belt` and `Action::Probe { tile }` (reads `lines_at` in `apply`, so `NotPredictable` on a client). Semantics: the `src/lib.rs` module doc.
@@ -46,7 +43,7 @@ line, and 1,090 genesis-spawned spawners (activated on tick 1; `Thing::Cycling` 
 mixed-kind chains). The worldgen carries the spec in the `aux` of four plain tiles at `y = -1`,
 `x = -1..=-4`; M47b's `BenchSpec.regime` (`BenchRegime`, `bench.rs` doc) three more at `x =
 -5..=-7`, plain for `Mixed` (`golden-bench-64.json` holds): `SaturatedView` is built at genesis with
-`Thing::Jam` sink toggles, `InserterLike` with a `Thing::Inserter`; `MixedFeeders` (M48c) is `Mixed` with a stateless `Thing::Feeder` per spawner (one `insert_back` a tick, never written, declared `period 256, acc 0, kinds 0`: no chunk delta, `-t belts_feeders_write_no_delta`). The benchmark's item cap is 393,216 (`BENCH_MAX_ITEMS`), so it never binds. The dev-dependency on `engine` turns on
+`Thing::Jam` sink toggles, `InserterLike` with a `Thing::Inserter`; `MixedFeeders` (M48c) is `Mixed` with a stateless `Thing::Feeder` per spawner (schedule `period 256, acc 0, kinds 0`). Since M53 no regime writes an entity after genesis (`-t belts_feeders_write_no_delta`, every regime: 0 entity deltas over 600 ticks); the spawners' inserts come at the start of `advance`, after the tick's inserter edits. The benchmark's item cap is 393,216 (`BENCH_MAX_ITEMS`), so it never binds. The dev-dependency on `engine` turns on
 `bench-phases`, so a test reads the transport advance from `engine::bench_phase::take()`.
 `tests/bench_belts.rs`: `pnpm test rust -t bench_`, `-t transport_phone_caps`, `-t
 transport_budget_exceeds`; `belts_golden_bench_64` (`golden/scenario-bench-64.json`) replays the

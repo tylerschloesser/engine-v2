@@ -34,6 +34,12 @@ thread_local! {
     static RULES: RefCell<Vec<Rule>> = RefCell::new(Vec::new());
     /// Ids the rules created, in order.
     static IDS: RefCell<Vec<LineId>> = const { RefCell::new(Vec::new()) };
+    /// M53: [`spawner`] gives its line the engine schedule (state) instead of running the rule
+    /// itself and declaring it.
+    static SCHEDULED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// M53 fix round 1: what `FcGame::declare_spawners` declares after a restore (a rule the game
+    /// runs itself, stateless so two hosts can share it).
+    static RESTORE_DECL: RefCell<Vec<(LineId, Schedule)>> = const { RefCell::new(Vec::new()) };
 }
 
 fn rule(f: impl FnMut(u32, &mut dyn TransportWrite) + 'static) {
@@ -59,6 +65,8 @@ fn id(k: usize) -> LineId {
 fn reset() {
     RULES.with(|r| r.borrow_mut().clear());
     IDS.with(|i| i.borrow_mut().clear());
+    SCHEDULED.with(|s| s.set(false));
+    RESTORE_DECL.with(|d| d.borrow_mut().clear());
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -137,6 +145,16 @@ impl Game for FcGame {
             r.extend(added);
         });
     }
+    fn declare_spawners(
+        _cx: &engine::game::RestoredCx<'_, Self>,
+        declare: &mut dyn FnMut(LineId, Schedule),
+    ) {
+        RESTORE_DECL.with(|d| {
+            for &(l, s) in d.borrow().iter() {
+                declare(l, s);
+            }
+        });
+    }
     fn admit(
         _w: &dyn WorldRead<Self>,
         _p: &PresenceTable<Self>,
@@ -193,8 +211,11 @@ fn line(t: &mut dyn TransportWrite, x0: i32, row: i32, tiles: u32, speed: u16) -
     l
 }
 
-/// A spawner on line `k` following `Schedule`'s rule, declared on its first tick.
+/// A spawner on line `k` following `Schedule`'s rule: the game's own rule, declared on its first
+/// tick (`declare_spawner`, M47), or (M53, after [`scheduled`]) the line's engine schedule, set on
+/// its first tick (`set_spawner`), which the engine runs from that tick.
 fn spawner(k: usize, period: u32, kinds: u16, first: u16) {
+    let engine_runs = SCHEDULED.with(|s| s.get());
     let mut s: Option<Schedule> = None;
     rule(move |_now, t| {
         if IDS.with(|i| i.borrow().len()) <= k {
@@ -212,9 +233,14 @@ fn spawner(k: usize, period: u32, kinds: u16, first: u16) {
                     kinds,
                     next: Item(first),
                 };
-                t.set_spawner(l, Some(sch));
+                if engine_runs {
+                    t.set_spawner(l, Some(sch)).unwrap();
+                } else {
+                    t.declare_spawner(l, Some(sch));
+                }
                 s = Some(sch);
             }
+            Some(_) if engine_runs => {}
             Some(sch) => {
                 sch.acc += 256;
                 if sch.acc >= sch.period {
@@ -228,6 +254,11 @@ fn spawner(k: usize, period: u32, kinds: u16, first: u16) {
             }
         }
     });
+}
+
+/// M53: every [`spawner`] built after this (until [`reset`]) is a scheduled line.
+fn scheduled() {
+    SCHEDULED.with(|s| s.set(true));
 }
 
 fn camera() -> CameraReport {
@@ -685,6 +716,339 @@ fn forecast_client_matches_host() {
             _ => {}
         }
     }
+}
+
+/// M53 (0079 §21): the line's schedule is sim state. On a `Sim`'s store: a schedule adds 13 B to
+/// its line's record (`period u32 | acc u32 | kinds u16 | next u16 | paused u8` after the runs,
+/// announced by bit 6 of the `out` tag) and moves the state hash; a change of its credit alone
+/// moves the hash again; cleared, the store's bytes and hash are exactly the schedule-free ones (a
+/// line without a schedule is byte-identical, so no schedule-free golden moved). A store whose
+/// schedule the item cap paused round-trips through decode with its credit, next item and pause,
+/// and decode refuses a schedule `set_spawner` would (period 255, item 0) and a pause byte of 2.
+#[test]
+fn schedule_is_state() {
+    use engine::bytes::SliceSink;
+    use engine::sim::Sim;
+    use engine::testing::testkit;
+    fn encode(t: &Transport) -> Vec<u8> {
+        let mut buf = vec![0u8; 1 << 16];
+        let mut sink = SliceSink::new(&mut buf);
+        t.write_canonical(&mut sink);
+        let n = sink.finish().expect("fits");
+        buf.truncate(n);
+        buf
+    }
+    reset();
+    let mut sim = Sim::<FcGame>::genesis(params());
+    let a = testkit::transport_mut(&mut sim).create(1024, 24).unwrap();
+    let (b0, h0) = (encode(testkit::transport_mut(&mut sim)), sim.state_hash());
+    let s = Schedule {
+        period: 683,
+        acc: 100,
+        kinds: 3,
+        next: Item(2),
+    };
+    testkit::transport_mut(&mut sim)
+        .set_spawner(a, Some(s))
+        .unwrap();
+    let (b1, h1) = (encode(testkit::transport_mut(&mut sim)), sim.state_hash());
+    assert_ne!(h1, h0, "a schedule moves the state hash");
+    assert_eq!(b1.len(), b0.len() + 13, "13 B of schedule");
+    // `line_count u32 | id u32 | len u32 | speed u16 | out tag`: the tag at 14 gains bit 6.
+    assert_eq!((b0[14], b1[14]), (0, 0x40), "the out tag's schedule bit");
+    let tail = b1.len() - 4;
+    assert_eq!(
+        b1[tail - 13..tail],
+        [0xab, 2, 0, 0, 100, 0, 0, 0, 3, 0, 2, 0, 0],
+        "period, acc, kinds, next, paused, before next_id"
+    );
+    testkit::transport_mut(&mut sim)
+        .set_spawner(a, Some(Schedule { acc: 101, ..s }))
+        .unwrap();
+    assert_ne!(sim.state_hash(), h1, "the credit alone moves the hash");
+    testkit::transport_mut(&mut sim)
+        .set_spawner(a, None)
+        .unwrap();
+    assert_eq!(
+        encode(testkit::transport_mut(&mut sim)),
+        b0,
+        "a line without a schedule is byte-identical"
+    );
+    assert_eq!(sim.state_hash(), h0, "and hashes as one");
+
+    // Paused by the item cap (one item), then decoded.
+    let mut t = Transport::new(2, 1);
+    let l = t.create(1024, 24).unwrap();
+    t.set_spawner(l, Some(s)).unwrap();
+    // Ticks 1-3: `acc` 356, 612, 868 (item 2 inserted, 185 left, next 3); 4: 441; 5: 697,
+    // refused `Full` (441 held).
+    for _ in 0..5 {
+        t.advance();
+    }
+    let held = t.schedule(l).unwrap().expect("scheduled");
+    assert_eq!(
+        held,
+        (
+            Schedule {
+                acc: 441,
+                next: Item(3),
+                ..s
+            },
+            true
+        ),
+        "the cap paused it, credit held"
+    );
+    let bytes = encode(&t);
+    let mut back = Transport::new(2, 1);
+    back.read_canonical(&mut engine::bytes::ByteReader::new(&bytes))
+        .expect("decodes");
+    assert_eq!(encode(&back), bytes, "re-encodes to the same bytes");
+    assert_eq!(back.schedule(l), Ok(Some(held)), "restored with the store");
+    let at = bytes.len() - 4 - 13;
+    for (k, v, what) in [
+        (at, 0xff, "period 255"),
+        (at + 10, 0, "item 0"),
+        (at + 12, 2, "paused 2"),
+    ] {
+        let mut bad = bytes.clone();
+        if k == at {
+            bad[at..at + 4].copy_from_slice(&255u32.to_le_bytes());
+        } else {
+            bad[k] = v;
+            if k == at + 10 {
+                bad[k + 1] = 0;
+            }
+        }
+        assert!(
+            Transport::empty()
+                .read_canonical(&mut engine::bytes::ByteReader::new(&bad))
+                .is_err(),
+            "decode refuses {what}"
+        );
+    }
+}
+
+/// M53 (0079 §21): the engine's insert and the follower's replay are one rule, so a scheduled line
+/// cannot mismatch. The arbiter's hand worlds (`forecast_client_matches_host`'s eight) with every
+/// spawner a scheduled line (`set_spawner` on its first tick; the engine inserts from that tick,
+/// the game never calls `insert_back` there), 600 ticks each: the replica's items equal the host's
+/// on every held line every tick, no outcome differs from the schedule (`spawner_mismatches` 0),
+/// none is dropped, and no insert on a scheduled line reaches the client as an arrival (an
+/// undeclared insert is a `ROUTE_INSERT` crossing; `spawner lane`'s unscheduled lane keeps its
+/// own). The schedules do insert.
+#[test]
+fn schedule_inserts_at_the_predicted_ticks() {
+    use engine::transport::ROUTE_INSERT;
+    type World = fn();
+    let worlds: [(&str, World); 8] = [
+        ("mixed speeds", world_mixed_speeds),
+        ("packed chain", world_packed_chain),
+        ("state meets lander", world_state_meets_lander),
+        ("spawner lane", world_spawner_lane),
+        ("fork", world_fork),
+        ("unheld feeders", world_unheld_feeders),
+        ("inserter", world_inserter),
+        ("surgery", world_surgery),
+    ];
+    for (label, build) in worlds {
+        reset();
+        scheduled();
+        build();
+        let mut lb = loopback();
+        let mut seen = Seen::default();
+        let mut scheduled_arrivals = 0u64;
+        for _ in 0..600 {
+            step_and_check(&mut lb, label, &mut seen);
+            let t = lb.host.sim().unwrap().authority().store().transport();
+            scheduled_arrivals += t
+                .forecast_crossings()
+                .iter()
+                .filter(|c| {
+                    c.route() == ROUTE_INSERT && t.schedule(LineId(c.to)).is_ok_and(|s| s.is_some())
+                })
+                .count() as u64;
+        }
+        let t = lb.host.sim().unwrap().authority().store().transport();
+        let c = t.forecast_host_counters();
+        println!(
+            "{label}: {seen:?} {c:?} inserts {}",
+            t.scheduled_inserts_total()
+        );
+        assert!(
+            seen.max_held >= 1 && seen.items > 500,
+            "{label}: compared too little: {seen:?}"
+        );
+        assert_eq!(c.spawner_mismatches, 0, "{label}: spawner_mismatches");
+        assert_eq!(
+            c.spawner_declarations_dropped, 0,
+            "{label}: spawner_declarations_dropped"
+        );
+        assert_eq!(scheduled_arrivals, 0, "{label}: scheduled inserts arrived");
+        // `state meets lander` has no spawner.
+        assert_eq!(
+            t.scheduled_inserts_total() > 0,
+            label != "state meets lander",
+            "{label}: the schedules inserted"
+        );
+    }
+}
+
+/// M53 (0079 §20 (a) re-pointed, §21): a scheduled line's schedule survives a save through the
+/// host with nothing declared (`FcGame` keeps `Game::declare_spawners`'s default). Three scheduled
+/// lanes (a saturating cycling one into a sink, one filling a dead end so its credit is held, one
+/// at 7.5 items a second into a sink) run 300 ticks; the host is saved (`sim_snapshot_*`) and
+/// restored into a fresh `Host` (`sim_restore_*`), which runs 300 ticks beside the one that never
+/// stopped: the state hash and every line's items are equal every tick, the restored tracker
+/// (armed from the decoded schedules) sees no mismatch and drops nothing, no insert is an arrival,
+/// and the restored host inserts exactly what the other does in the window.
+#[test]
+fn schedule_survives_restore() {
+    restore_run(false);
+}
+
+/// M53 fix round 1: the same restore with a rule the game runs itself beside the scheduled lanes
+/// (a feeder on a fourth lane, `declare_spawner`, declared again by `Game::declare_spawners`), so
+/// the host closes the saved tick (`forecast_close_restored`). The close must not step the decoded
+/// schedules (they already hold the saved tick's step): the same checks hold, `spawner_mismatches`
+/// 0 over the 300 restored ticks with the inserts exact.
+#[test]
+fn schedule_survives_restore_beside_a_declared_rule() {
+    restore_run(true);
+}
+
+fn restore_run(declared: bool) {
+    use engine::abi::{Instance, RegionLayout, Role, Status};
+    use engine::host::Host;
+    use engine::transport::ROUTE_INSERT;
+    reset();
+    scheduled();
+    once(1, |t| {
+        let s = line(t, 0, 4, 8, 24);
+        t.set_out(s, Output::Sink).unwrap();
+        line(t, 0, 6, 8, 24);
+        let p = line(t, 0, 8, 8, 24);
+        t.set_out(p, Output::Sink).unwrap();
+    });
+    spawner(0, 256, 3, 1);
+    spawner(1, 300, 0, 2);
+    spawner(2, 683, 0, 4);
+    if declared {
+        // A rule the game runs itself beside the scheduled lanes: a stateless feeder (an attempt
+        // every tick, a refusal dropped) declared on its first tick and again after the restore.
+        let feeder = Schedule {
+            period: 256,
+            acc: 0,
+            kinds: 0,
+            next: Item(5),
+        };
+        once(1, |t| {
+            let f = line(t, 0, 10, 8, 24);
+            t.set_out(f, Output::Sink).unwrap();
+        });
+        rule(move |now, t| {
+            if IDS.with(|i| i.borrow().len()) < 4 {
+                return;
+            }
+            let _ = t.insert_back(id(3), Item(5));
+            if now == 1 {
+                t.declare_spawner(id(3), Some(feeder));
+            }
+        });
+        RESTORE_DECL.with(|d| d.borrow_mut().push((LineId(4), feeder)));
+    }
+    let mut never = Host::<FcGame>::genesis_for_test(params());
+    for _ in 0..300 {
+        never.tick();
+        never.seal();
+    }
+    let mut saved = Vec::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    assert_eq!(Instance::sim_snapshot_begin(&mut never, 0, 0), Status::Ok);
+    loop {
+        let n = Instance::sim_snapshot_next(&mut never, &mut buf).expect("next") as usize;
+        if n == 0 {
+            break;
+        }
+        saved.extend_from_slice(&buf[..n]);
+    }
+    let p = params();
+    let cfg = format!(
+        r#"{{"seed":"0x{:x}","params":null,"maxEntities":{},"maxModifiedTiles":{},"maxActionGrowth":{},"maxLines":{},"maxItems":{}}}"#,
+        p.seed, p.max_entities, p.max_modified_tiles, p.max_action_growth, p.max_lines, p.max_items
+    );
+    let mut restored = Host::<FcGame>::init(Role::Sim, &cfg, &mut RegionLayout::new()).unwrap();
+    assert_eq!(restored.sim_restore_begin(saved.len() as u32), Status::Ok);
+    assert_eq!(restored.sim_restore_push(&saved), Status::Ok);
+    assert_eq!(restored.sim_restore_end(&mut [0u8; 8]), Status::Ok);
+    let hash = |h: &Host<FcGame>| h.sim().unwrap().state_hash();
+    assert_eq!(
+        hash(&restored),
+        hash(&never),
+        "the restored world is the saved one"
+    );
+    let lines_of = |h: &Host<FcGame>| -> Vec<Items> {
+        let t = h.sim().unwrap().authority().store().transport();
+        (1..t.next_id())
+            .map(|id| {
+                let mut v = Vec::new();
+                t.items_in(LineId(id), &mut |i, p| v.push((i, p))).unwrap();
+                v
+            })
+            .collect()
+    };
+    let inserts = |h: &Host<FcGame>| {
+        h.sim()
+            .unwrap()
+            .authority()
+            .store()
+            .transport()
+            .scheduled_inserts_total()
+    };
+    let (n0, r0) = (inserts(&never), inserts(&restored));
+    assert_eq!(r0, 0, "the insert count is not state");
+    let mut arrivals = 0u64;
+    for k in 0..300 {
+        never.tick();
+        never.seal();
+        restored.tick();
+        let t = restored.sim().unwrap().authority().store().transport();
+        arrivals += t
+            .forecast_crossings()
+            .iter()
+            .filter(|c| c.route() == ROUTE_INSERT)
+            .count() as u64;
+        restored.seal();
+        assert_eq!(
+            hash(&restored),
+            hash(&never),
+            "restored tick {k}: state hash"
+        );
+        assert_eq!(
+            lines_of(&restored),
+            lines_of(&never),
+            "restored tick {k}: items"
+        );
+    }
+    let c = restored
+        .sim()
+        .unwrap()
+        .authority()
+        .store()
+        .transport()
+        .forecast_host_counters();
+    println!(
+        "restored (declared {declared}): {c:?}, inserts {}",
+        inserts(&restored)
+    );
+    assert_eq!(c.spawner_mismatches, 0, "spawner_mismatches ({c:?})");
+    assert_eq!(c.spawner_declarations_dropped, 0, "dropped ({c:?})");
+    assert_eq!(arrivals, 0, "inserts routed as arrivals after the restore");
+    assert_eq!(
+        inserts(&restored),
+        inserts(&never) - n0,
+        "the restored host inserts what the other does"
+    );
+    assert!(inserts(&restored) > 200, "the schedules inserted");
 }
 
 /// A long chain across two views: ten lines of 6 tiles, 40 tiles apart along one row (where a line
