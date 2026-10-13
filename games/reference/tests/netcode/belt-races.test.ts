@@ -3,9 +3,11 @@
 // belt until the host's `NotBuildable` arrives, then the winner's. At every client frame each client
 // draws exactly one belt on the tile (never none, never two), and none is still predicted after
 // its verdict: the torn-state check for a free placement, which has no inventory to watch.
+
+import { worldServerTestHandle } from 'engine/test'
 import { expect, test } from 'vitest'
 import { advanceProbed, PREDICTED, refHarness, tornStateProbe } from '../helpers/net.js'
-import { FURNACE_A, type Tile } from '../helpers/script.js'
+import { BELT_SCRIPT_HASH, beltScript, FURNACE_A, runScript, type Tile } from '../helpers/script.js'
 
 const LATENCY_MS = 60
 const SLOWER_BY_MS = 100
@@ -97,3 +99,19 @@ test.each([0, 1] as const)(
   },
   60_000,
 )
+
+// M51b: the belt steps on the headless driver pin the hash the DOM driver must reach
+// (`reference_belt_script_dom`, `tests/browser/belt-construction.spec.ts`).
+test('reference_belt_script_headless', async () => {
+  const r = await refHarness({ clients: 1, seed: 5110 })
+  try {
+    const driver = r.drivers[0]
+    if (!driver) throw new Error('no driver')
+    await runScript(beltScript(), driver)
+    await r.h.settle()
+    r.h.assertConverged()
+    expect(worldServerTestHandle(r.h.server).hash(), 'BELT_SCRIPT_HASH').toBe(BELT_SCRIPT_HASH)
+  } finally {
+    await r.dispose()
+  }
+})

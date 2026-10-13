@@ -38,6 +38,8 @@ import {
   untilRendererRecovered,
   worldHash,
 } from 'engine/test'
+import type { BeltKind } from './bindings/BeltKind.js'
+import type { Dir } from './bindings/Dir.js'
 import type { RefAction } from './bindings/RefAction.js'
 import type { RefUi } from './bindings/RefUi.js'
 import { showStartFailure, startGame } from './game.js'
@@ -101,6 +103,8 @@ declare global {
     /** M33: the furnace sprites (`kind 0`) and ghost records (`kind 6`) of the newest DrawList. */
     __draws?: () => Array<{
       kind: number
+      /** M51b: the record's sprite id (a belt's facing and kind, `content::SPRITE_BELT_*`). */
+      spriteId: number
       x: number
       y: number
       w: number
@@ -129,6 +133,11 @@ declare global {
     /** M34b: `FurnacePickUp` straight through `client.dispatch`: the panel disables its button while a
      * furnace holds anything, so a refused pick-up (for the script's last step) cannot be clicked. */
     __dispatchFurnacePickUp?: (x: number, y: number) => number
+    /** M51b: `PlaceBelt`, `RotateBelt`, `PickUpBelt` straight through `client.dispatch` (the
+     * `placeBelt`/`rotateBelt`/`pickUpBelt` helpers; the palette is exercised by `belt-*.spec.ts`). */
+    __dispatchPlaceBelt?: (x: number, y: number, dir: Dir, kind: BeltKind) => number
+    __dispatchRotateBelt?: (x: number, y: number) => number
+    __dispatchPickUpBelt?: (x: number, y: number) => number
     /** M33c: the centre pixel of a 32x32 frame centred on world point (x, y), drawn with the
      * drawables pass on and with it off, from the same newest DrawList slot. RGBA, 0..255. */
     __pixelAt?: (
@@ -525,6 +534,7 @@ window.__draws = () => {
     )
     .map((r) => ({
       kind: r.kind,
+      spriteId: r.spriteId,
       x: r.pos[0],
       y: r.pos[1],
       w: r.size[0],
@@ -561,6 +571,21 @@ window.__dispatchFurnacePickUp = (x, y) => {
 
 window.__dispatchPlaceFurnace = (x, y) => {
   const action: RefAction = { PlaceFurnace: { origin: { x, y } } }
+  return client.dispatch(action)
+}
+
+window.__dispatchPlaceBelt = (x, y, dir, kind) => {
+  const action: RefAction = { PlaceBelt: { at: { x, y }, dir, kind } }
+  return client.dispatch(action)
+}
+
+window.__dispatchRotateBelt = (x, y) => {
+  const action: RefAction = { RotateBelt: { at: { x, y } } }
+  return client.dispatch(action)
+}
+
+window.__dispatchPickUpBelt = (x, y) => {
+  const action: RefAction = { PickUpBelt: { at: { x, y } } }
   return client.dispatch(action)
 }
 

@@ -467,6 +467,15 @@ pub struct UiFurnace {
     pub smelt_done_at: Option<u32>,
 }
 
+/// The belt whose popover is open (M51b, `RefClient`'s tapped belt): its tile, direction and kind.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, TS)]
+#[ts(export)]
+pub struct UiBelt {
+    pub at: TileXY,
+    pub dir: Dir,
+    pub kind: BeltKind,
+}
+
 /// One roster entry as `Ui.roster` shows it (M34): the engine roster joined with
 /// `RefGlobal::colours`. `colour` is the player's RGB (an unassigned player reads as
 /// `content::UNASSIGNED_COLOUR`), so the DOM needs no palette of its own.
@@ -525,6 +534,8 @@ pub struct RefUi {
     pub furnace: Option<UiFurnace>,
     /// M34: every player in the engine roster, ascending id, online or not.
     pub roster: Vec<UiRosterEntry>,
+    /// M51b: the belt whose popover is open (`RefClient::belt`), `None` when none or it is gone.
+    pub belt: Option<UiBelt>,
 }
 
 impl Default for RefUi {
@@ -543,6 +554,7 @@ impl Default for RefUi {
             can_build: false,
             furnace: None,
             roster: Vec::with_capacity(content::MAX_PLAYERS),
+            belt: None,
         }
     }
 }

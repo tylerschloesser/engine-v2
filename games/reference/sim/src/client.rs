@@ -21,8 +21,8 @@ use crate::rules::collect::in_range;
 use crate::worldgen::terrain_at;
 use crate::{
     Belt, BeltKind, BeltShape, Dir, Inventory, MAX_IN_RANGE, RefEntity, RefGame, RefParams, TileXY,
-    Tool, UiCollecting, UiCrafting, UiFurnace, UiInRange, UiPlacing, UiRecipe, UiRosterEntry,
-    WorldXY, content,
+    Tool, UiBelt, UiCollecting, UiCrafting, UiFurnace, UiInRange, UiPlacing, UiRecipe,
+    UiRosterEntry, WorldXY, content,
 };
 
 /// `Presence` sketch from `0001-camera-and-presence.md` (Decision, `Presence` code block),
@@ -318,6 +318,11 @@ pub struct RefClient {
     /// so it survives the ghost-to-real swap (0022 section 6); `frame` re-checks it every frame and
     /// clears it when the furnace is gone. TypeScript holds no state for it: it reads `Ui.furnace`.
     open: Option<TilePos>,
+    /// M51b: the tile of the belt whose popover is open (Rotate / Pick up), kept like [`Self::open`]
+    /// (by tile, re-checked every frame). A tap opens the furnace panel or this, never both;
+    /// `CLOSE_PANEL`, a tap elsewhere, picking a tool or the belt going clear it (and, but for the
+    /// belt going, the panel too).
+    belt: Option<TilePos>,
 }
 
 impl Default for RefClient {
@@ -331,6 +336,7 @@ impl Default for RefClient {
             placing: Cell::new(None),
             dir: Dir::East,
             open: None,
+            belt: None,
         }
     }
 }
@@ -350,6 +356,7 @@ impl RefClient {
             placing: Cell::new(None),
             dir: Dir::East,
             open: None,
+            belt: None,
         }
     }
 
@@ -385,10 +392,16 @@ impl RefClient {
                 _ => return,
             };
             self.placing.set(tool);
+            // Picking a tool closes the furnace panel and the belt popover (taps now place).
+            if tool.is_some() {
+                self.open = None;
+                self.belt = None;
+            }
         } else if ev.pick_id == local::ROTATE_TOOL {
             self.dir = self.dir.cw();
         } else if ev.pick_id == local::CLOSE_PANEL {
             self.open = None;
+            self.belt = None;
         }
     }
 
@@ -397,25 +410,39 @@ impl RefClient {
         self.open
     }
 
+    /// The tile of the belt whose popover is open (test-only accessor).
+    pub fn belt(&self) -> Option<TilePos> {
+        self.belt
+    }
+
     /// A tap (outside construction mode): on a furnace opens its panel (keyed by its anchor tile),
-    /// on anything else closes it. The furnace is found by the tapped tile (`ev.tile`) in the
-    /// overlay-merged view, not by `pick_id`: the engine's picker tests a sprite against its
-    /// zero-size record box, so a furnace sprite is never picked (`input/pick.ts`).
+    /// on a belt its popover (M51b), on anything else closes both; never both open. The entity is
+    /// found by the tapped tile (`ev.tile`) in the overlay-merged view, not by `pick_id` (a tile
+    /// survives the ghost-to-real swap and needs no pick record).
     pub fn apply_tap(&mut self, ev: &engine::client::InputEvent, view: &FrameView<'_, RefGame>) {
         if ev.kind != input_kind::TAP || self.placing.get().is_some() {
             return;
         }
         let fp = content::FURNACE_FOOTPRINT;
         let (tx, ty) = (ev.tile[0], ev.tile[1]);
-        // Furnaces only: a belt has no panel until M53's spawner panel.
-        self.open = view
-            .entities()
-            .find(|(_, e, o)| {
-                matches!(e, RefEntity::Furnace(_))
-                    && (o.x..o.x + fp.w as i32).contains(&tx)
-                    && (o.y..o.y + fp.h as i32).contains(&ty)
-            })
-            .map(|(_, _, origin)| origin);
+        self.open = None;
+        self.belt = None;
+        for (_, e, o) in view.entities() {
+            match e {
+                RefEntity::Furnace(_)
+                    if (o.x..o.x + fp.w as i32).contains(&tx)
+                        && (o.y..o.y + fp.h as i32).contains(&ty) =>
+                {
+                    self.open = Some(o);
+                    return;
+                }
+                RefEntity::Belt(_) if o.x == tx && o.y == ty => {
+                    self.belt = Some(o);
+                    return;
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Closes the panel when its furnace is gone. Reads through the prediction overlay
@@ -441,6 +468,29 @@ impl RefClient {
         };
         if !present {
             self.open = None;
+        }
+    }
+
+    /// Closes the belt popover when its belt is gone, by [`Self::recheck_open`]'s rules: the merged
+    /// view inside the visible rect, the raw replica outside it, `Unknown` keeps it open.
+    pub fn recheck_belt(&mut self, view: &FrameView<'_, RefGame>) {
+        let Some(at) = self.belt else { return };
+        if view.world().tile(at).is_err() {
+            return;
+        }
+        let present = if view.visible().contains(at) {
+            view.entities()
+                .any(|(_, e, o)| matches!(e, RefEntity::Belt(_)) && o == at)
+        } else {
+            let w = view.world();
+            match w.entity_at(at) {
+                Ok(Some(id)) => matches!(w.entity(id), Ok(Some(RefEntity::Belt(_))) | Err(_)),
+                Ok(None) => false,
+                Err(_) => true,
+            }
+        };
+        if !present {
+            self.belt = None;
         }
     }
 
@@ -557,6 +607,7 @@ impl ClientSide<RefGame> for RefClient {
             self.apply_tap(ev, cx.view());
         }
         self.recheck_open(cx.view());
+        self.recheck_belt(cx.view());
         let camera = cx.camera();
         let target = camera.centre;
         let target_vel = [camera.velocity[0] as f64, camera.velocity[1] as f64];
@@ -814,6 +865,22 @@ impl ClientSide<RefGame> for RefClient {
                         ingots_out: f.ingots_out,
                         smelt_done_at: f.smelt_done_at.map(|t| t.0),
                     });
+                }
+            }
+        }
+
+        out.belt = None;
+        if let Some(at) = self.belt {
+            for (_, e, origin) in view.entities() {
+                if let RefEntity::Belt(b) = e
+                    && origin == at
+                {
+                    out.belt = Some(UiBelt {
+                        at: TileXY::from_tile(origin),
+                        dir: b.dir,
+                        kind: b.kind,
+                    });
+                    break;
                 }
             }
         }

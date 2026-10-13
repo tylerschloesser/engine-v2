@@ -41,8 +41,10 @@ export type RefUiState = {
   unlocks: number
   crafting: { recipe: number; done_at: number } | null
   recipes: Array<{ recipe: number; cost: number[]; secs: number; affordable: boolean }>
-  /** Construction mode is on (client-local). */
+  /** Construction mode is on (client-local), any tool. */
   placing: boolean
+  /** M51: the tool and its direction while construction mode is on (`Ui.tool`), else `null`. */
+  tool: { tool: 'Furnace' | { Belt: BeltKind }; dir: Dir } | null
   /** The inventory holds a furnace item. */
   can_build: boolean
   /** The open furnace's state (`Ui.furnace`), `null` when no panel is open. */
@@ -57,11 +59,19 @@ export type RefUiState = {
   } | null
   /** Every player in the engine roster (`Ui.roster`), ascending id. */
   roster: Array<{ id: number; online: boolean; colour: [number, number, number]; me: boolean }>
+  /** M51b: the belt whose popover is open (`Ui.belt`), `null` when none. */
+  belt: { at: { x: number; y: number }; dir: Dir; kind: BeltKind } | null
 }
 
-/** A furnace sprite (`kind` 0) or the placement ghost (`kind` 6) from the newest DrawList. */
+/** A belt's direction of travel (`Dir`, `sim/src/lib.rs`). */
+export type Dir = 'East' | 'South' | 'West' | 'North'
+/** What a belt tile is (`BeltKind`). */
+export type BeltKind = 'Belt' | 'Spawner' | 'Despawner'
+
+/** A sprite (`kind` 0: furnace, belt, belt ghost) or the furnace ghost (`kind` 6) from the newest DrawList. */
 export type DrawRec = {
   kind: number
+  spriteId: number
   x: number
   y: number
   w: number
@@ -105,6 +115,9 @@ declare global {
     ) => void
     __dispatchPlaceFurnace?: (x: number, y: number) => number
     __dispatchFurnacePickUp?: (x: number, y: number) => number
+    __dispatchPlaceBelt?: (x: number, y: number, dir: Dir, kind: BeltKind) => number
+    __dispatchRotateBelt?: (x: number, y: number) => number
+    __dispatchPickUpBelt?: (x: number, y: number) => number
   }
 }
 
@@ -325,7 +338,7 @@ export const PLACE = {
 
 /** `ghost`/`sprite` colours and flags (`sim/src/client.rs`, `engine::client::drawlist`). */
 export const GHOST = { valid: 0x9040ff40, invalid: 0x904040ff, unknown: 0x90c0c0c0 } as const
-export const FLAG = { anchorCursorTile: 1 << 0, predicted: 1 << 2 } as const
+export const FLAG = { anchorCursorTile: 1 << 0, predicted: 1 << 2, flipX: 1 << 3 } as const
 export const KIND = { sprite: 0, rect: 3, bar: 4, ghost: 6 } as const
 
 export async function draws(page: Page): Promise<DrawRec[]> {
@@ -429,4 +442,112 @@ export async function takeAll(page: Page): Promise<void> {
 /** `pickUp(page)` (Provides): presses Pick up. */
 export async function pickUp(page: Page): Promise<void> {
   await press(page, '[data-furnace-pickup]')
+}
+
+/** Belt sprite ids (`content::SPRITE_BELT_*`): a family's id is its east sprite, `+ 1` south, `+ 2`
+ * north; west is east drawn with `FLAG.flipX` (`client::belt_sprite`). */
+export const BELT = {
+  straight: 1,
+  curveLeft: 4,
+  curveRight: 7,
+  spawner: 10,
+  despawner: 13,
+} as const
+
+/** The sprite id and `FLIP_X` a straight belt of `family` facing `dir` draws with. */
+export function beltSprite(family: number, dir: Dir): { spriteId: number; flipX: boolean } {
+  switch (dir) {
+    case 'East':
+      return { spriteId: family, flipX: false }
+    case 'South':
+      return { spriteId: family + 1, flipX: false }
+    case 'North':
+      return { spriteId: family + 2, flipX: false }
+    case 'West':
+      return { spriteId: family, flipX: true }
+  }
+}
+
+/** A tile for a belt under `TEST_SEED`: free land, no resource, away from `PLACE`'s furnace tiles
+ * and in view from `panTo(page, BELT_TILE.free)`; `iron` refuses a belt (no belt on a resource). */
+export const BELT_TILE = {
+  free: PLACE.free,
+  iron: RESOURCE_TILE.iron,
+} as const
+
+/** The belt sprites (`kind` 0, a belt sprite id) of the newest DrawList, the cursor-anchored ghost
+ * apart from the placed ones. */
+export async function beltDraws(page: Page): Promise<{ ghost: DrawRec[]; placed: DrawRec[] }> {
+  const belts = (await draws(page)).filter(
+    (r) => r.kind === KIND.sprite && r.spriteId >= BELT.straight && r.spriteId < BELT.despawner + 3,
+  )
+  return {
+    ghost: belts.filter((r) => (r.flags & FLAG.anchorCursorTile) !== 0),
+    placed: belts.filter((r) => (r.flags & FLAG.anchorCursorTile) === 0),
+  }
+}
+
+/** Flushes a dispatch (the uplink is paced at 50 ms), steps three ticks, then one frame per tick
+ * until the newest DrawList's placed belts satisfy `done` (at most `maxSteps`). */
+async function settleBelts(
+  page: Page,
+  done: (placed: DrawRec[]) => boolean,
+  maxSteps = 40,
+): Promise<DrawRec[]> {
+  await frame(page, 60)
+  await page.evaluate((k) => window.__stepTick?.(k), 3)
+  for (let i = 0; i < maxSteps; i++) {
+    await frame(page)
+    const { placed } = await beltDraws(page)
+    if (done(placed)) return placed
+    await page.evaluate((k) => window.__stepTick?.(k), 1)
+  }
+  throw new Error(`settleBelts: condition not met after ${maxSteps} tick+frame rounds`)
+}
+
+const confirmed = (r: DrawRec) => (r.flags & FLAG.predicted) === 0
+
+/** `placeBelt(page, at, dir, kind)` (M51b Provides): dispatches `PlaceBelt` and steps until one
+ * real (acked) belt is drawn. Returns the placed belt records. The tile must be in view. */
+export async function placeBelt(
+  page: Page,
+  at: { x: number; y: number },
+  dir: Dir,
+  kind: BeltKind = 'Belt',
+): Promise<DrawRec[]> {
+  const before = (await beltDraws(page)).placed.length
+  await page.evaluate(([x, y, d, k]) => window.__dispatchPlaceBelt?.(x, y, d, k), [
+    at.x,
+    at.y,
+    dir,
+    kind,
+  ] as const)
+  return settleBelts(page, (p) => p.length === before + 1 && p.every(confirmed))
+}
+
+/** `rotateBelt(page, at)` (M51b Provides): dispatches `RotateBelt` and steps until the belts drawn
+ * differ from before and none is predicted. */
+export async function rotateBelt(page: Page, at: { x: number; y: number }): Promise<DrawRec[]> {
+  const key = (p: DrawRec[]) => p.map((r) => `${r.spriteId}:${r.flags}`).join(',')
+  const before = key((await beltDraws(page)).placed)
+  await page.evaluate(([x, y]) => window.__dispatchRotateBelt?.(x, y), [at.x, at.y] as const)
+  return settleBelts(page, (p) => p.every(confirmed) && key(p) !== before)
+}
+
+/** `pickUpBelt(page, at)` (M51b Provides): dispatches `PickUpBelt` and steps until one belt fewer is drawn. */
+export async function pickUpBelt(page: Page, at: { x: number; y: number }): Promise<DrawRec[]> {
+  const before = (await beltDraws(page)).placed.length
+  await page.evaluate(([x, y]) => window.__dispatchPickUpBelt?.(x, y), [at.x, at.y] as const)
+  return settleBelts(page, (p) => p.length === before - 1 && p.every(confirmed))
+}
+
+/** Turns a belt tool on from the palette (`belt`, `spawner`, `despawner`) and steps until `Ui.tool` names it. */
+export async function pickTool(
+  page: Page,
+  tool: 'belt' | 'spawner' | 'despawner',
+): Promise<RefUiState | null> {
+  const kind = ({ belt: 'Belt', spawner: 'Spawner', despawner: 'Despawner' } as const)[tool]
+  await page.locator(`[data-tool="${tool}"]`).click()
+  await page.evaluate((d) => window.__stepFrame?.(d), 16) // drains the local-intent record
+  return pumpUntil(page, (ui) => typeof ui?.tool?.tool === 'object' && ui.tool.tool.Belt === kind)
 }

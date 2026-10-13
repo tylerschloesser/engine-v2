@@ -22,8 +22,8 @@ use reference_sim::client::PlayerPresence;
 use reference_sim::content::{self, ItemId, RECIPE_FURNACE};
 use reference_sim::rules::place::can_place_furnace;
 use reference_sim::{
-    Furnace, RefAction, RefClient, RefEntity, RefGame, RefParams, RefReject, RefWorldgen, TileXY,
-    WorldXY,
+    BeltKind, Dir, Furnace, RefAction, RefClient, RefEntity, RefGame, RefParams, RefReject,
+    RefWorldgen, TileXY, UiBelt, WorldXY,
 };
 
 const SEED: u64 = content::SEED;
@@ -760,6 +760,150 @@ fn panel_open_close_rules() {
     assert_eq!(st, Prediction::Applied);
     client.recheck_open(&lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
     assert_eq!(client.open(), None, "tombstoned: gone");
+}
+
+/// M51b: the belt popover's rules, beside the furnace panel's: a tap on a belt opens it (and closes
+/// the panel), a tap on the furnace opens the panel (and closes it), never both; `CLOSE_PANEL`,
+/// picking a tool (which closes the furnace panel too) and a tap on nothing close it; it closes when
+/// another player's pick-up reaches this replica and at the tap of the player's own (predicted) one; `ui` reports it as `Ui.belt` and allocates nothing while it is open.
+#[test]
+fn belt_tap_opens_and_closes() {
+    let (mut lb, idx, _who, (b, _)) = world_with_b(3, 1, 0, 0);
+    let origin = free_spot(-8, 30);
+    place_settled(&mut lb, idx, origin);
+    let belt = (origin.x + 3..origin.x + 30)
+        .map(|x| TilePos::new(x, origin.y))
+        .find(|p| buildable(p.x, p.y))
+        .expect("a free tile east of the furnace");
+    let place_belt = RefAction::PlaceBelt {
+        at: TileXY::from_tile(belt),
+        dir: Dir::South,
+        kind: BeltKind::Spawner,
+    };
+    assert_eq!(dispatch_settled(&mut lb, b, place_belt), Ok(()));
+    lb.run(8);
+    let mut client = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
+    let tap_at = |client: &mut RefClient, lb: &Loopback<RefGame>, t: TilePos| {
+        client.apply_tap(&tap(t), &lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    };
+
+    tap_at(&mut client, &lb, belt);
+    assert_eq!(
+        (client.belt(), client.open()),
+        (Some(belt), None),
+        "belt tap"
+    );
+    let ui = ui_of(&lb, idx, &client);
+    assert_eq!(
+        ui.belt,
+        Some(UiBelt {
+            at: TileXY::from_tile(belt),
+            dir: Dir::South,
+            kind: BeltKind::Spawner
+        })
+    );
+    assert_eq!(ui.furnace, None);
+    tap_at(&mut client, &lb, TilePos::new(origin.x + 1, origin.y + 1));
+    assert_eq!(
+        (client.belt(), client.open()),
+        (None, Some(origin)),
+        "furnace tap"
+    );
+    assert_eq!(ui_of(&lb, idx, &client).belt, None);
+    tap_at(&mut client, &lb, belt);
+    assert_eq!(
+        (client.belt(), client.open()),
+        (Some(belt), None),
+        "back to the belt"
+    );
+
+    client.apply_local(&local(content::local::CLOSE_PANEL, 0));
+    assert_eq!(client.belt(), None, "CLOSE_PANEL");
+    tap_at(&mut client, &lb, belt);
+    client.apply_local(&local(
+        content::local::PLACE_MODE,
+        content::local::TOOL_BELT,
+    ));
+    assert_eq!(client.belt(), None, "picking a tool");
+    client.apply_local(&local(content::local::PLACE_MODE, content::local::TOOL_OFF));
+    tap_at(&mut client, &lb, TilePos::new(origin.x, origin.y));
+    assert_eq!(client.open(), Some(origin));
+    client.apply_local(&local(
+        content::local::PLACE_MODE,
+        content::local::TOOL_BELT,
+    ));
+    assert_eq!(
+        client.open(),
+        None,
+        "picking a tool closes the furnace panel too"
+    );
+    tap_at(&mut client, &lb, belt);
+    assert_eq!(client.belt(), None, "ignored while placing");
+    client.apply_local(&local(content::local::PLACE_MODE, content::local::TOOL_OFF));
+    tap_at(&mut client, &lb, belt);
+    tap_at(&mut client, &lb, TilePos::new(belt.x, belt.y + 1));
+    assert_eq!(client.belt(), None, "a tap on nothing");
+
+    // Open, `ui` allocates nothing across calls.
+    tap_at(&mut client, &lb, belt);
+    {
+        let view = lb.frame_view(idx, WIDE, TilePos::new(0, 0));
+        let mut ui = reference_sim::RefUi::default();
+        client.ui(&view, &mut ui);
+        assert!(ui.belt.is_some());
+        let live = engine::abi::arena::thread_live_bytes();
+        let hw = engine::abi::arena::thread_high_water_bytes();
+        for _ in 0..50 {
+            client.ui(&view, &mut ui);
+        }
+        assert_eq!(
+            engine::abi::arena::thread_live_bytes(),
+            live,
+            "ui: live bytes moved"
+        );
+        assert_eq!(
+            engine::abi::arena::thread_high_water_bytes(),
+            hw,
+            "ui: transient allocation"
+        );
+    }
+
+    // B picks it up: the popover stays until the host's put reaches this replica, then closes.
+    let (_, _) = lb.dispatch(
+        b,
+        RefAction::PickUpBelt {
+            at: TileXY::from_tile(belt),
+        },
+    );
+    lb.step();
+    client.recheck_belt(&lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    assert_eq!(client.belt(), Some(belt), "not yet at this replica");
+    for _ in 0..20 {
+        lb.step();
+        client.recheck_belt(&lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    }
+    assert_eq!(client.belt(), None, "gone with the belt");
+    assert_eq!(ui_of(&lb, idx, &client).belt, None);
+
+    // The player's own pick-up closes it at the tap: the predicted tombstone hides the belt from the
+    // merged view before the host hears of it.
+    let own = RefAction::PlaceBelt {
+        at: TileXY::from_tile(belt),
+        dir: Dir::East,
+        kind: BeltKind::Belt,
+    };
+    assert_eq!(dispatch_settled(&mut lb, idx, own), Ok(()));
+    tap_at(&mut client, &lb, belt);
+    assert_eq!(client.belt(), Some(belt), "own belt");
+    let (_, st) = lb.dispatch(
+        idx,
+        RefAction::PickUpBelt {
+            at: TileXY::from_tile(belt),
+        },
+    );
+    assert_eq!(st, Prediction::Applied);
+    client.recheck_belt(&lb.frame_view(idx, WIDE, TilePos::new(0, 0)));
+    assert_eq!(client.belt(), None, "own pick-up: closed at the tap");
 }
 
 /// A furnace keeps smelting while its chunk is unsubscribed, and the replica has the ingot on

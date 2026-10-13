@@ -10,7 +10,7 @@
 import type { Page } from '@playwright/test'
 import type { HeadlessClient } from 'engine/test'
 import landmarks from '../fixtures/landmarks.json' with { type: 'json' }
-import type { RefUiState } from './game.js'
+import type { BeltKind, Dir, DrawRec, RefUiState } from './game.js'
 
 export type Tile = { x: number; y: number }
 export type Resource = 'stone' | 'iron' | 'wood' | 'coal'
@@ -28,6 +28,9 @@ export const LANDMARKS = landmarks as {
   resources: Record<Resource, Tile>
 }
 
+/** `Dir::cw` (`RotateBelt`'s turn). */
+const CW = { East: 'South', South: 'West', West: 'North', North: 'East' } as const
+
 /** Two free 2x2 origins of land, two tiles apart (a rejected `PlaceFurnace` fails the script). Both
  * footprints sit inside chunk (-1, 0)'s rows 1 to 4: a furnace straddling a chunk boundary (origin
  * y = -1, say) leaves the client's replica hash different from the host's region hash (found by
@@ -44,6 +47,9 @@ export type Step =
   | { op: 'pickUp'; at: Tile; refused: boolean }
   | { op: 'deposit'; at: Tile; item: DepositItem; n: 1 | 5 | 'all' }
   | { op: 'takeAll'; at: Tile }
+  | { op: 'placeBelt'; at: Tile; dir: Dir; kind: BeltKind }
+  | { op: 'rotateBelt'; at: Tile }
+  | { op: 'pickUpBelt'; at: Tile }
   | { op: 'waitTicks'; n: number }
   | { op: 'expectUi'; partial: unknown }
 
@@ -83,6 +89,19 @@ export class Script {
   takeAll(at: Tile): this {
     return this.add({ op: 'takeAll', at })
   }
+  /** M51b: places a belt (free) at `at` facing `dir`; waits for the host's ack. Not yet used by
+   * `fullGame()` (its golden stays as recorded). */
+  placeBelt(at: Tile, dir: Dir, kind: BeltKind = 'Belt'): this {
+    return this.add({ op: 'placeBelt', at, dir, kind })
+  }
+  /** M51b: turns the belt at `at` clockwise; waits for the host's ack. */
+  rotateBelt(at: Tile): this {
+    return this.add({ op: 'rotateBelt', at })
+  }
+  /** M51b: picks the belt at `at` up (nothing returns to the inventory); waits for the host's ack. */
+  pickUpBelt(at: Tile): this {
+    return this.add({ op: 'pickUpBelt', at })
+  }
   /** `n` sim ticks, nothing else. */
   waitTicks(n: number): this {
     return this.add({ op: 'waitTicks', n })
@@ -95,6 +114,25 @@ export class Script {
 
 export const script = (): Script => new Script()
 
+/** Two free land tiles without a resource (`PLACE.free`'s 2x2, `tests/helpers/game.ts`). */
+export const BELT_A: Tile = { x: -4, y: -1 }
+export const BELT_B: Tile = { x: -3, y: 0 }
+
+/** M51b: the belt steps on both drivers: two belts placed, one turned, the other picked up. Belts are
+ * free and idle, so the run ends quiescent and its state hash is the same whichever driver ran it:
+ * `BELT_SCRIPT_HASH`, pinned by the netcode suite's headless run (`reference_belt_script_headless`)
+ * and checked against the DOM run (`reference_belt_script_dom`). A change to the script or to what a
+ * belt stores moves it: re-pin from the netcode failure message. */
+export function beltScript(): Script {
+  return script()
+    .panTo({ x: 0, y: 0 })
+    .placeBelt(BELT_A, 'South', 'Spawner')
+    .placeBelt(BELT_B, 'West', 'Belt')
+    .rotateBelt(BELT_A)
+    .pickUpBelt(BELT_B)
+}
+export const BELT_SCRIPT_HASH = '4c65ee37b7002807'
+
 /** What a driver does. A driver throws on anything unexpected (a rejected action, a wait that never
  * ends); it never sleeps: a headless driver advances ticks, a DOM driver steps the manual clock. */
 export interface ScriptDriver {
@@ -106,6 +144,9 @@ export interface ScriptDriver {
   pickUp(at: Tile, refused: boolean): Promise<void>
   deposit(at: Tile, item: DepositItem, n: 1 | 5 | 'all'): Promise<void>
   takeAll(at: Tile): Promise<void>
+  placeBelt(at: Tile, dir: Dir, kind: BeltKind): Promise<void>
+  rotateBelt(at: Tile): Promise<void>
+  pickUpBelt(at: Tile): Promise<void>
   waitTicks(n: number): Promise<void>
   ui(): Promise<RefUiState>
 }
@@ -170,6 +211,15 @@ export async function runScript(
           break
         case 'takeAll':
           await driver.takeAll(step.at)
+          break
+        case 'placeBelt':
+          await driver.placeBelt(step.at, step.dir, step.kind)
+          break
+        case 'rotateBelt':
+          await driver.rotateBelt(step.at)
+          break
+        case 'pickUpBelt':
+          await driver.pickUpBelt(step.at)
           break
         case 'waitTicks':
           await driver.waitTicks(step.n)
@@ -362,6 +412,15 @@ export function headlessDriver(
       await accepted('FurnaceTake', { FurnaceTake: { at: { x: at.x, y: at.y } } })
       await until('ingots taken', () => (ui().inventory[SLOT.ingot] ?? 0) > before)
     },
+    async placeBelt(at, dir, kind) {
+      await accepted('PlaceBelt', { PlaceBelt: { at: { x: at.x, y: at.y }, dir, kind } })
+    },
+    async rotateBelt(at) {
+      await accepted('RotateBelt', { RotateBelt: { at: { x: at.x, y: at.y } } })
+    },
+    async pickUpBelt(at) {
+      await accepted('PickUpBelt', { PickUpBelt: { at: { x: at.x, y: at.y } } })
+    },
     waitTicks: (n) => advance(n),
     async ui() {
       return ui()
@@ -382,6 +441,32 @@ export async function domDriver(page: Page): Promise<ScriptDriver> {
   const { expect } = await import('@playwright/test')
   const stepTicks = (n: number) => page.evaluate((k) => window.__stepTick?.(k), n)
   const slotOf = (item: DepositItem): number => SLOT[item]
+  /** A real mouse tap on `tile`'s centre (hover first, so the engine's cursor tile is there). */
+  const tapTile = async (tile: Tile): Promise<void> => {
+    const p = await g.tileToScreen(page, tile.x + 0.5, tile.y + 0.5)
+    await page.mouse.move(p.x, p.y)
+    await g.frame(page)
+    await page.mouse.click(p.x, p.y)
+  }
+  /** Flushes the uplink, steps ticks until the placed belts satisfy `done` and none is predicted;
+   * throws when that never happens. */
+  const untilBelts = async (what: string, done: (placed: DrawRec[]) => boolean): Promise<void> => {
+    await g.frame(page, 60) // the uplink is paced at 50 ms
+    await stepTicks(3)
+    for (let i = 0; i < 40; i++) {
+      await g.frame(page)
+      const { placed } = await g.beltDraws(page)
+      if (done(placed) && placed.every((r) => (r.flags & g.FLAG.predicted) === 0)) return
+      await stepTicks(1)
+    }
+    throw new Error(`domDriver: ${what}: not drawn and acked after 40 ticks`)
+  }
+  /** Taps the belt at `at` and waits until its popover is open (`Ui.belt`). */
+  const openBelt = async (at: Tile): Promise<RefUiState | null> => {
+    await tapTile(at)
+    await g.frame(page)
+    return g.pumpUntil(page, (u) => u?.belt?.at.x === at.x && u.belt.at.y === at.y)
+  }
   return {
     panTo: (tile) => g.panTo(page, tile),
     async collect(resource, tile, n) {
@@ -456,6 +541,39 @@ export async function domDriver(page: Page): Promise<ScriptDriver> {
       const before = (await g.uiState(page))?.inventory[SLOT.ingot] ?? 0
       await g.takeAll(page)
       await g.pumpUntil(page, (u) => (u?.inventory[SLOT.ingot] ?? 0) > before)
+    },
+    async placeBelt(at, dir, kind) {
+      // The palette: the tool, Rotate until the ghost faces `dir`, a mouse tap, then Escape.
+      const tool = ({ Belt: 'belt', Spawner: 'spawner', Despawner: 'despawner' } as const)[kind]
+      let ui = await g.pickTool(page, tool)
+      for (let i = 0; i < 4 && ui?.tool?.dir !== dir; i++) {
+        const was = ui?.tool?.dir
+        await page.locator('[data-build-rotate]').click()
+        await page.evaluate((d) => window.__stepFrame?.(d), 16)
+        ui = await g.pumpUntil(page, (u) => u?.tool?.dir !== was)
+      }
+      expect(ui?.tool?.dir, 'the tool faces the step direction').toBe(dir)
+      const before = (await g.beltDraws(page)).placed.length
+      await tapTile(at)
+      await untilBelts('PlaceBelt landed', (p) => p.length === before + 1)
+      await page.keyboard.press('Escape')
+      await page.evaluate((d) => window.__stepFrame?.(d), 16)
+      await g.pumpUntil(page, (u) => u?.placing === false)
+    },
+    // A placed belt: a tap opens its popover (`src/ui/belt.ts`), then Rotate or Pick up.
+    async rotateBelt(at) {
+      const was = (await openBelt(at))?.belt?.dir
+      await page.locator('[data-belt-rotate]').click()
+      await untilBelts('RotateBelt landed', () => true)
+      const now = await g.pumpUntil(page, (u) => u?.belt?.dir !== was)
+      expect(now?.belt?.dir, 'turned clockwise').toBe(CW[was ?? 'East'])
+    },
+    async pickUpBelt(at) {
+      await openBelt(at)
+      const before = (await g.beltDraws(page)).placed.length
+      await page.locator('[data-belt-pickup]').click()
+      await untilBelts('PickUpBelt landed', (p) => p.length === before - 1)
+      await g.pumpUntil(page, (u) => u?.belt === null)
     },
     async waitTicks(n) {
       await stepTicks(n)

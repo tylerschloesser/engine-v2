@@ -1,11 +1,19 @@
-// `createBuildUi` (M33 Scope): the Build button (shown while the
-// player holds a furnace item), construction mode, and the two placement flows.
+// `createBuildUi` (M33 Scope; M51b the belt tools): the tool palette, construction mode, and the
+// two placement flows.
 //
-// Construction mode is client-local: `client.input.emit(LOCAL.PLACE_MODE, on)` tells `RefClient`
+// The palette is one fixed row (`.build-palette`, bottom centre): the Build button (the furnace
+// tool, shown while the player holds a furnace item or is placing one), then the belt, spawner and
+// despawner tools (free, always shown), then Rotate (shown while a belt tool is on). A tool button
+// turns its tool on, or off when it is already on; Escape ends construction mode; Rotate or the
+// `R` key (a belt tool on) emits `LOCAL.ROTATE_TOOL`. The direction and the tool are `Ui.tool`
+// (`RefClient` keeps them), so a placed belt faces the way the ghost does.
+//
+// Construction mode is client-local: `client.input.emit(LOCAL.PLACE_MODE, tool)` tells `RefClient`
 // (which then emits the ghost); nothing is logged and `client.input.setMode` is not used, so drags
-// keep panning (0019 section 4). Mouse: a `tap` while placing dispatches `PlaceFurnace` at the
-// tapped tile. Touch: a `tap` moves the engine's cursor tile (the ghost follows it) and shows a
-// Confirm button anchored just below the ghost; Confirm dispatches. Mouse or touch is the tap's
+// keep panning (0019 section 4). Mouse: a `tap` while placing dispatches `PlaceFurnace` (or
+// `PlaceBelt { at, dir, kind }`) at the tapped tile. Touch: a `tap` moves the engine's cursor tile
+// (the ghost follows it) and shows a Confirm button anchored just below the ghost (the 2x2
+// furnace's or the 1x1 belt's bottom edge); Confirm dispatches. Mouse or touch is the tap's
 // `pointerType`. A rejection flashes the control that sent the action with the reason as a CSS
 // class (`reject-<reason>`), like a collect button.
 //
@@ -13,9 +21,13 @@
 // construction mode: `.build-reason` (`data-reason`), for the engine's refusals (`StateBudgetFull`: the
 // world cannot take another building) and the placement rule's own.
 //
-// DOM identity: `.build-button` (`data-build`), `.build-confirm` (`data-build-confirm="x,y"`),
+// DOM identity: `.build-palette`; `.build-button` (`data-build`, the furnace tool);
+// `.tool-button` (`data-tool="belt|spawner|despawner"`, `.is-on` while active); `.build-rotate`
+// (`data-build-rotate`, `data-dir` = the page's copy of the direction, see `dir` below); `.build-confirm` (`data-build-confirm="x,y"`);
 // `.build-reason`.
 import type { ActionOutcome, Client } from 'engine'
+import type { BeltKind } from '../bindings/BeltKind.js'
+import type { Dir } from '../bindings/Dir.js'
 import type { RefAction } from '../bindings/RefAction.js'
 import type { RefReject } from '../bindings/RefReject.js'
 import type { RefUi } from '../bindings/RefUi.js'
@@ -25,12 +37,42 @@ import { el } from './dom.js'
 export const LOCAL = {
   PLACE_MODE: 1,
   CLOSE_PANEL: 2,
-  // M51: turns the construction direction clockwise; `PLACE_MODE`'s `a` is one of `TOOL` (the
-  // controls that send them are M51b's).
+  // M51: turns the construction direction clockwise; `PLACE_MODE`'s `a` is one of `TOOL`.
   ROTATE_TOOL: 3,
 } as const
 /** `PLACE_MODE`'s `a` values (`content::local::TOOL_*`). */
 export const TOOL = { OFF: 0, FURNACE: 1, BELT: 2, SPAWNER: 3, DESPAWNER: 4 } as const
+type ToolCode = (typeof TOOL)[keyof typeof TOOL]
+
+/** The free belt tools, in palette order: `data-tool`, label, `PLACE_MODE` code, `BeltKind`. */
+const BELT_TOOLS = [
+  { key: 'belt', label: 'Belt', code: TOOL.BELT, kind: 'Belt' },
+  { key: 'spawner', label: 'Spawner', code: TOOL.SPAWNER, kind: 'Spawner' },
+  { key: 'despawner', label: 'Despawner', code: TOOL.DESPAWNER, kind: 'Despawner' },
+] as const satisfies ReadonlyArray<{ key: string; label: string; code: ToolCode; kind: BeltKind }>
+
+/** Each tool's footprint in tiles (`content::FURNACE_FOOTPRINT`, `BELT_FOOTPRINT`: change together):
+ * the touch Confirm sits centred under it, at `(x + w / 2, y + h)`. */
+const FOOTPRINT: Readonly<Record<Exclude<ToolCode, 0>, { w: number; h: number }>> = {
+  [TOOL.FURNACE]: { w: 2, h: 2 },
+  [TOOL.BELT]: { w: 1, h: 1 },
+  [TOOL.SPAWNER]: { w: 1, h: 1 },
+  [TOOL.DESPAWNER]: { w: 1, h: 1 },
+}
+
+/** `Dir::cw` (`ROTATE_TOOL`'s turn) and the arrow the Rotate button shows for each direction. */
+const CW: Readonly<Record<Dir, Dir>> = {
+  East: 'South',
+  South: 'West',
+  West: 'North',
+  North: 'East',
+}
+const ARROW: Readonly<Record<Dir, string>> = { East: '→', South: '↓', West: '←', North: '↑' }
+
+function beltKindOf(tool: ToolCode): BeltKind | null {
+  for (const t of BELT_TOOLS) if (t.code === tool) return t.kind
+  return null
+}
 
 type AnchorHandle = ReturnType<Client['overlay']['anchor']>
 
@@ -62,7 +104,16 @@ function installBuildStyles(doc: Document): void {
   const style = doc.createElement('style')
   style.id = STYLE_ID
   style.textContent = [
-    '.build-button, .build-confirm {',
+    '.build-palette {',
+    '  position: fixed;',
+    '  left: 50%;',
+    '  bottom: 8px;',
+    '  transform: translateX(-50%);',
+    '  z-index: 5;',
+    '  display: flex;',
+    '  gap: 4px;',
+    '}',
+    '.build-button, .tool-button, .build-rotate, .build-confirm {',
     '  padding: 4px 10px;',
     '  border: 1px solid #345;',
     '  border-radius: 4px;',
@@ -72,14 +123,16 @@ function installBuildStyles(doc: Document): void {
     '  cursor: pointer;',
     '  white-space: nowrap;',
     '}',
-    '.build-button { position: fixed; left: 8px; bottom: 8px; z-index: 5; }',
     '.build-reason { position: fixed; left: 8px; bottom: 36px; z-index: 5; padding: 2px 8px;',
     '  border-radius: 4px; background: #a33; color: #fff; font: 11px sans-serif; }',
     '.build-reason[hidden] { display: none; }',
-    '.build-button.is-on { background: #264; }',
+    '.build-button.is-on, .tool-button.is-on { background: #264; }',
+    // A fixed width: the arrow changes, the row does not re-centre.
+    '.build-rotate { min-width: 88px; text-align: center; font-variant-numeric: tabular-nums; }',
     '.build-confirm { background: #264; }',
-    '.build-button[hidden], .build-confirm[hidden] { display: none; }',
-    '.build-button[class*="reject-"], .build-confirm[class*="reject-"] {',
+    '.build-button[hidden], .build-rotate[hidden], .build-confirm[hidden] { display: none; }',
+    '.build-button[class*="reject-"], .tool-button[class*="reject-"],',
+    '.build-confirm[class*="reject-"] {',
     '  animation: build-reject-flash 300ms ease-out;',
     '}',
     '@keyframes build-reject-flash {',
@@ -93,11 +146,23 @@ function installBuildStyles(doc: Document): void {
 export function createBuildUi(client: Client, doc: Document = document): BuildUi {
   installBuildStyles(doc)
 
+  const palette = el('div', 'build-palette')
   const button = el('button', 'build-button')
   button.dataset.build = ''
   button.textContent = 'Build'
   button.hidden = true
-  doc.body.appendChild(button)
+  const toolButtons = BELT_TOOLS.map((t) => {
+    const b = el('button', 'tool-button')
+    b.dataset.tool = t.key
+    b.textContent = t.label
+    b.addEventListener('click', () => setTool(tool === t.code ? TOOL.OFF : t.code))
+    return b
+  })
+  const rotate = el('button', 'build-rotate')
+  rotate.dataset.buildRotate = ''
+  rotate.hidden = true
+  palette.append(button, ...toolButtons, rotate)
+  doc.body.appendChild(palette)
 
   const reasonLine = el('div', 'build-reason')
   reasonLine.hidden = true
@@ -109,21 +174,42 @@ export function createBuildUi(client: Client, doc: Document = document): BuildUi
   // Anchored once, hidden until a touch tap; `set` moves it to each tapped tile.
   const anchor: AnchorHandle = client.overlay.anchor(confirm, 0, 0, { align: 'top' })
 
-  let placing = false
+  /** The tool this page last emitted (`TOOL`); `OFF` outside construction mode. */
+  let tool: ToolCode = TOOL.OFF
   let canBuild = false
+  /** The page's copy of the construction direction `RefClient` keeps across tools (`East` at
+   * start): turned at the page's own `ROTATE_TOOL` emit and overwritten by each `Ui.tool.dir`. */
+  let dir: Dir = 'East'
   /** The tile a touch tap chose; `null` until one does, and again after leaving construction mode. */
   let touchTile: { x: number; y: number } | null = null
   /** `seq -> the control that sent it`, for the rejection flash. */
   const pending = new Map<number, HTMLElement>()
 
-  function setPlacing(on: boolean): void {
-    if (on === placing) return
-    placing = on
-    client.input.emit(LOCAL.PLACE_MODE, on ? 1 : 0)
-    if (!on) {
-      hideConfirm()
-      showReason(null)
+  function setTool(next: ToolCode): void {
+    if (next === tool) return
+    tool = next
+    client.input.emit(LOCAL.PLACE_MODE, next)
+    // A new tool has another footprint: a touch tap chooses its tile again.
+    hideConfirm()
+    showReason(null)
+    render()
+  }
+
+  /** The palette button of the tool that is on (a mouse placement's rejection flashes it). */
+  function activeButton(): HTMLElement {
+    for (let i = 0; i < BELT_TOOLS.length; i++) {
+      const b = toolButtons[i]
+      if (b !== undefined && tool === BELT_TOOLS[i]?.code) return b
     }
+    return button
+  }
+
+  /** Emits the turn and advances the page's own copy of the direction at once (the same turn
+   * `RefClient` makes), so a tap in the next frame places with the direction the ghost will show. */
+  function rotateTool(): void {
+    if (beltKindOf(tool) === null) return
+    if (!client.input.emit(LOCAL.ROTATE_TOOL, 0)) return
+    dir = CW[dir]
     render()
   }
 
@@ -133,9 +219,16 @@ export function createBuildUi(client: Client, doc: Document = document): BuildUi
   }
 
   function render(): void {
-    button.hidden = !(canBuild || placing)
-    button.classList.toggle('is-on', placing)
-    button.textContent = placing ? 'Cancel' : 'Build'
+    const furnace = tool === TOOL.FURNACE
+    button.hidden = !(canBuild || furnace)
+    button.classList.toggle('is-on', furnace)
+    button.textContent = furnace ? 'Cancel' : 'Build'
+    for (let i = 0; i < BELT_TOOLS.length; i++) {
+      toolButtons[i]?.classList.toggle('is-on', tool === BELT_TOOLS[i]?.code)
+    }
+    rotate.hidden = beltKindOf(tool) === null
+    rotate.dataset.dir = dir
+    rotate.textContent = `Rotate ${ARROW[dir]}`
   }
 
   function showReason(text: string | null, reason?: string): void {
@@ -147,13 +240,19 @@ export function createBuildUi(client: Client, doc: Document = document): BuildUi
 
   function place(origin: { x: number; y: number }, from: HTMLElement): void {
     showReason(null)
-    const action: RefAction = { PlaceFurnace: { origin: { x: origin.x, y: origin.y } } }
+    const at = { x: origin.x, y: origin.y }
+    const kind = beltKindOf(tool)
+    const action: RefAction =
+      kind === null ? { PlaceFurnace: { origin: at } } : { PlaceBelt: { at, dir, kind } }
     pending.set(client.dispatch(action), from)
   }
 
-  button.addEventListener('click', () => setPlacing(!placing))
+  button.addEventListener('click', () => setTool(tool === TOOL.FURNACE ? TOOL.OFF : TOOL.FURNACE))
+  rotate.addEventListener('click', rotateTool)
   doc.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') setPlacing(false)
+    if (e.key === 'Escape') setTool(TOOL.OFF)
+    // `R` (by `code`, so any layout) turns a belt tool; never with a modifier (Ctrl+R reloads).
+    else if (e.code === 'KeyR' && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) rotateTool()
   })
   confirm.addEventListener('click', () => {
     if (touchTile === null) return
@@ -161,25 +260,29 @@ export function createBuildUi(client: Client, doc: Document = document): BuildUi
   })
 
   client.input.on('tap', (e) => {
-    if (!placing) return
+    if (tool === TOOL.OFF) return
     if (e.pointerType === 'touch') {
       // The engine has already moved its cursor tile here (the ghost follows); the Confirm button
-      // sits at the bottom edge of the 2x2 ghost, centred on it.
+      // sits at the bottom edge of the ghost (2x2 furnace, 1x1 belt), centred on it.
       touchTile = { x: e.tileX, y: e.tileY }
-      anchor.set(e.tileX + 1, e.tileY + 2)
+      const fp = FOOTPRINT[tool]
+      anchor.set(e.tileX + fp.w / 2, e.tileY + fp.h)
       confirm.dataset.buildConfirm = `${e.tileX},${e.tileY}`
       confirm.hidden = false
     } else {
-      place({ x: e.tileX, y: e.tileY }, button)
+      place({ x: e.tileX, y: e.tileY }, activeButton())
     }
   })
 
   function onUi(ui: RefUi): void {
     canBuild = ui.can_build
-    // The last furnace was placed: `RefClient` has already ended construction mode itself, so
+    // `RefClient` keeps the direction; a turn this page just emitted is already in `dir` and shows
+    // here once its record has drained (a `Ui` from before it could step it back for one `Ui`).
+    if (ui.tool !== null) dir = ui.tool.dir
+    // The last furnace was placed: `RefClient` has already ended the furnace tool itself, so
     // follow it without emitting (an emit from a `Ui` callback lands between frames).
-    if (placing && !canBuild && !ui.placing) {
-      placing = false
+    if (tool === TOOL.FURNACE && !canBuild && !ui.placing) {
+      tool = TOOL.OFF
       hideConfirm()
     }
     render()
