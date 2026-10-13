@@ -90,3 +90,77 @@ test('reference_belt_topology_converges', async () => {
     await r.dispose()
   }
 }, 60_000)
+
+// M54 (Tests added): two players build a splitter line together (a feeder behind the splitter's left
+// half, the splitter, a belt in front of each half), alternating. Both replicas hold the same line
+// structures, and they are the splitter's: eight 128-position lines, each input lane forking onto
+// the left then the right half's output lane of the same index, the feeder handing to the left
+// half's input lanes lane for lane, each half's outputs feeding its front belt lane for lane.
+test('reference_splitter_topology_converges', async () => {
+  const r = await refHarness({ clients: 2, seed: 5410 })
+  try {
+    // Facing east from (-8, -8): the left half is (-8, -8), the right (-8, -7).
+    const steps: Array<[Tile, 'Belt' | 'Splitter']> = [
+      [{ x: -9, y: -8 }, 'Belt'],
+      [{ x: -8, y: -8 }, 'Splitter'],
+      [{ x: -7, y: -8 }, 'Belt'],
+      [{ x: -7, y: -7 }, 'Belt'],
+    ]
+    for (const [i, [at, kind]] of steps.entries()) {
+      const driver = r.drivers[i % 2]
+      if (!driver) throw new Error('no driver')
+      await runScript(script().placeBelt(at, 'East', kind), driver)
+    }
+    await r.h.settle()
+    r.h.assertConverged()
+
+    const [a, b] = [0, 1].map((i) => {
+      const c = r.h.clients[i]
+      if (!c) throw new Error(`no client ${i}`)
+      return lineStructures(c)
+    }) as [LineStructure[], LineStructure[]]
+    expect(b, 'both replicas hold the same structures').toEqual(a)
+    expect(a.map((l) => l.len).sort((x, y) => x - y)).toEqual([
+      128, 128, 128, 128, 128, 128, 128, 128, 256, 256, 256, 256, 256, 256,
+    ])
+    // A line by its first point: x (where it starts along the east axis) and y (its lane's row).
+    const at = (x: number, y: number): LineStructure => {
+      const l = a.find((s) => {
+        const g = s.segments[0]
+        return g?.kind === 'Straight' && g.from[0] === x && g.from[1] === y
+      })
+      if (!l) throw new Error(`no line from (${x}, ${y})`)
+      return l
+    }
+    // Rows: the left half's lanes at -8 x 256 + 68 / + 188, the right half's at -7 x 256 + 68 / 188.
+    const rows = [
+      [-8 * 256 + 68, -8 * 256 + 188],
+      [-7 * 256 + 68, -7 * 256 + 188],
+    ] as const
+    // Starts: an output at the front edge (x -7 x 256 - 1, the edge rule), an input at the midline
+    // (128 further back), a belt at its front edge.
+    const OUT = -7 * 256 - 1
+    const IN = OUT - 128
+    for (const half of [0, 1] as const) {
+      for (const k of [0, 1] as const) {
+        expect(at(IN, rows[half][k]).out, `half ${half} lane ${k}: the fork`).toEqual({
+          kind: 'Fork',
+          a: at(OUT, rows[0][k]).id,
+          b: at(OUT, rows[1][k]).id,
+        })
+        expect(at(OUT, rows[half][k]).out, `half ${half} lane ${k}: into its belt`).toEqual({
+          kind: 'Next',
+          line: at(-6 * 256 - 1, rows[half][k]).id,
+        })
+      }
+    }
+    for (const k of [0, 1] as const) {
+      expect(at(-8 * 256 - 1, rows[0][k]).out, `feeder lane ${k}`).toEqual({
+        kind: 'Next',
+        line: at(IN, rows[0][k]).id,
+      })
+    }
+  } finally {
+    await r.dispose()
+  }
+}, 60_000)

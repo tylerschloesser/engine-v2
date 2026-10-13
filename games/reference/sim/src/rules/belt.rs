@@ -9,12 +9,17 @@
 //! once; the neighbours' shapes are the tick's. `PickUpBelt` marks the belt `removing` (a despawn wakes
 //! nothing): the tick unmaps it and despawns it. `SetSpawner` (M53b) writes a spawner lane's
 //! configuration in one put; the tick that put wakes sets the lane line's engine schedule.
+//!
+//! **Splitters** (M54) are placed with `PlaceBelt { kind: Splitter }` anchored at the footprint's
+//! min corner (`content::belt_footprint`), found by either tile (`entity_at`), turned 180 degrees in
+//! place by `RotateBelt` (the footprint and anchor never move; changing the axis is a pick-up and a
+//! new placement: README "Belts" question 12's default) and picked up like a belt.
 
 use engine::game::{EntityId, WorldRead, WorldWrite};
 use engine::world::TilePos;
 
 use crate::rules::belts::topology::shape_of_kind;
-use crate::rules::place::can_place_belt;
+use crate::rules::place::can_place_belt_kind;
 use crate::{Belt, BeltKind, Dir, RefEntity, RefGame, RefReject, SpawnCfg, TileXY, content};
 
 /// The belt at `at`, with its id: `NoBeltHere` when the tile is empty, holds a furnace or a belt
@@ -27,15 +32,16 @@ pub fn belt_at(w: &dyn WorldRead<RefGame>, at: TilePos) -> Result<(EntityId, Bel
     }
 }
 
-/// `apply(PlaceBelt)`: [`can_place_belt`] (not on an unbuildable tile, an entity or a resource), the
-/// tile's shape from its neighbours, then one `spawn` with no spawner configuration.
+/// `apply(PlaceBelt)`: [`can_place_belt_kind`] over the kind's footprint anchored at `at` (not on an
+/// unbuildable tile, an entity or a resource), the tile's shape from its neighbours (a splitter's is
+/// always straight), then one `spawn` with no spawner configuration.
 pub fn place(
     w: &mut dyn WorldWrite<RefGame>,
     at: TilePos,
     dir: Dir,
     kind: BeltKind,
 ) -> Result<(), RefReject> {
-    if !can_place_belt(w, at)? {
+    if !can_place_belt_kind(w, at, dir, kind)? {
         return Err(RefReject::NotBuildable);
     }
     let shape = shape_of_kind(w, at, dir, kind)?;
@@ -46,11 +52,17 @@ pub fn place(
     Ok(())
 }
 
-/// `apply(RotateBelt)`: one put of the same belt turned clockwise, with its shape for the new facing.
+/// `apply(RotateBelt)`: one put of the same belt turned clockwise, with its shape for the new facing;
+/// a splitter (M54) turned 180 degrees, its anchor and footprint unchanged (0079 §20 (b) by
+/// construction: nothing to re-validate).
 pub fn rotate(w: &mut dyn WorldWrite<RefGame>, at: TilePos) -> Result<(), RefReject> {
     let (id, belt) = belt_at(w, at)?;
-    let dir = belt.dir.cw();
-    let shape = shape_of_kind(w, at, dir, belt.kind)?;
+    let dir = if belt.kind == BeltKind::Splitter {
+        belt.dir.cw().cw()
+    } else {
+        belt.dir.cw()
+    };
+    let shape = shape_of_kind(w, belt.origin.tile(), dir, belt.kind)?;
     w.put_entity(id, RefEntity::Belt(Belt { dir, shape, ..belt }));
     Ok(())
 }

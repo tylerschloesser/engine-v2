@@ -237,6 +237,27 @@ pub const BELT_PROTO: PrototypeId = PrototypeId(1);
 /// A belt, spawner or despawner covers one tile (README "Belts").
 pub const BELT_FOOTPRINT: Footprint = Footprint { w: 1, h: 1 };
 
+/// The splitter's two prototypes (M54), one per axis, registered third and fourth in [`register`]:
+/// the engine's footprint is per prototype and its anchor the footprint's min corner, so a 2x1
+/// entity facing east or west is 1 x 2 tiles and one facing north or south 2 x 1 (`Game::prototype`
+/// picks by `dir`). A rotation turns a splitter 180 degrees in place, so it never changes prototype.
+pub const SPLITTER_PROTO_EW: PrototypeId = PrototypeId(2);
+/// The north-south splitter's prototype (a splitter facing north or south), registered fourth.
+pub const SPLITTER_PROTO_NS: PrototypeId = PrototypeId(3);
+/// A splitter facing east or west: 1 x 2 tiles (its halves stacked north-south).
+pub const SPLITTER_FOOTPRINT_EW: Footprint = Footprint { w: 1, h: 2 };
+/// A splitter facing north or south: 2 x 1 tiles (its halves side by side west-east).
+pub const SPLITTER_FOOTPRINT_NS: Footprint = Footprint { w: 2, h: 1 };
+
+/// The footprint of a belt of `kind` facing `dir`: one tile, or a splitter's 2x1 across `dir`.
+pub const fn belt_footprint(kind: crate::BeltKind, dir: crate::Dir) -> Footprint {
+    match (kind, dir) {
+        (crate::BeltKind::Splitter, crate::Dir::East | crate::Dir::West) => SPLITTER_FOOTPRINT_EW,
+        (crate::BeltKind::Splitter, crate::Dir::North | crate::Dir::South) => SPLITTER_FOOTPRINT_NS,
+        _ => BELT_FOOTPRINT,
+    }
+}
+
 /// What a furnace may not stand on: an unbuildable tile or another entity (R1: a resource is fine).
 pub const FURNACE_FORBIDS: TraitSet = NOT_BUILDABLE;
 
@@ -255,6 +276,11 @@ pub const SPRITE_BELT_CURVE_RIGHT: u16 = 7;
 pub const SPRITE_BELT_SPAWNER: u16 = 10;
 pub const SPRITE_BELT_DESPAWNER: u16 = 13;
 pub const SPRITE_BELT_FRAMES: u32 = 8;
+
+/// Splitter sprites (M54, appended after the items): east 22 (1 x 2 tiles), south 23 and north 24
+/// (2 x 1), [`SPRITE_BELT_FRAMES`] frames, pivot `[0, 0]` (the footprint's min corner); west is east
+/// drawn with `FLIP_X` (the art is symmetric between the halves).
+pub const SPRITE_SPLITTER: u16 = 22;
 
 /// Item squares (M51; M53 draws them on belts): sprite `SPRITE_ITEM_FIRST + ItemId`, one per item,
 /// half a tile, pivot at the centre, one frame. Transport reserves `Item(0)` for "none", so a belt
@@ -316,6 +342,17 @@ pub fn register(r: &mut Registry) {
     // A belt is not built over by anything (M51); it never stands on a resource, so it covers none.
     let belt = r.add_prototype(NOT_BUILDABLE, BELT_FOOTPRINT);
     assert_eq!(belt, BELT_PROTO, "the belt must be prototype 1");
+    // The splitter (M54), one prototype per axis; like a belt it covers no resource.
+    let ew = r.add_prototype(NOT_BUILDABLE, SPLITTER_FOOTPRINT_EW);
+    assert_eq!(
+        ew, SPLITTER_PROTO_EW,
+        "the east-west splitter must be prototype 2"
+    );
+    let ns = r.add_prototype(NOT_BUILDABLE, SPLITTER_FOOTPRINT_NS);
+    assert_eq!(
+        ns, SPLITTER_PROTO_NS,
+        "the north-south splitter must be prototype 3"
+    );
 }
 
 /// Client-local UI intent codes for `client.input.emit(code, a, b)` (M18's `InputKind.Game` record,
@@ -323,7 +360,7 @@ pub fn register(r: &mut Registry) {
 /// action. Mirrored by `src/ui/build.ts`'s `LOCAL`: change both together.
 pub mod local {
     /// `a` picks the tool (M51): [`TOOL_OFF`] ends construction mode, then furnace, belt, spawner,
-    /// despawner. Any other value is ignored.
+    /// despawner, splitter (M54). Any other value is ignored.
     pub const PLACE_MODE: u32 = 1;
     /// Closes the furnace panel (M33b step 3 reads it).
     pub const CLOSE_PANEL: u32 = 2;
@@ -336,4 +373,6 @@ pub mod local {
     pub const TOOL_BELT: i32 = 2;
     pub const TOOL_SPAWNER: i32 = 3;
     pub const TOOL_DESPAWNER: i32 = 4;
+    /// The splitter tool (M54): a 2x1 footprint anchored at the cursor tile.
+    pub const TOOL_SPLITTER: i32 = 5;
 }

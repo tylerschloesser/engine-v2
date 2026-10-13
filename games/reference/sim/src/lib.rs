@@ -107,6 +107,7 @@ pub enum RefAction {
         kind: BeltKind,
     },
     /// M51: turn the belt at `at` clockwise (east, south, west, north); same entity, same anchor.
+    /// M54: a splitter (either tile) turns 180 degrees in place (its footprint does not move).
     RotateBelt {
         at: TileXY,
     },
@@ -129,7 +130,8 @@ pub enum RefAction {
     /// M52, `test-hooks` only (never shipped; appended last): insert `item` (an engine item id,
     /// nonzero) on lane `lane` of the belt at `at`, `pos` positions behind the tile's first position
     /// on its line, on the next tick (`rules::belts::topology::test_insert`). How native tests put
-    /// items on lines before M53's spawners.
+    /// items on lines before M53's spawners. M54: on a splitter half's tile, `lane` 0 and 1 are its
+    /// input lines' lanes and 2 and 3 its output lines' (lane `lane - 2`).
     #[cfg(feature = "test-hooks")]
     TestInsertItem {
         at: TileXY,
@@ -325,6 +327,9 @@ impl Dir {
 
 /// What a belt tile is (README "Belts", Spawner and despawner): a plain belt, a spawner (creates
 /// its configured items at its back end, M53) or a despawner (deletes what would leave its front).
+/// M54: a splitter (README "Belts", Splitters), the one 2x1 kind: its `origin` is the footprint's
+/// min corner (`content::belt_footprint`), its halves are derived from `dir`
+/// (`rules::belts::topology::splitter_halves`), and its `shape` and `spawn` are unused.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
 pub enum BeltKind {
@@ -332,6 +337,7 @@ pub enum BeltKind {
     Belt,
     Spawner,
     Despawner,
+    Splitter,
 }
 
 /// A belt's shape, derived from its neighbours (README "Belts", Shape; M52 derives and writes it,
@@ -409,7 +415,8 @@ pub enum RefEntity {
 }
 
 impl RefEntity {
-    /// The anchor tile (`Game::anchor`): a furnace's min corner, a belt's own tile.
+    /// The anchor tile (`Game::anchor`): a furnace's min corner, a belt's own tile, a splitter's min
+    /// corner (M54).
     pub const fn origin(&self) -> TileXY {
         match self {
             RefEntity::Furnace(f) => f.origin,
@@ -668,7 +675,7 @@ pub struct RefGame;
 impl Game for RefGame {
     // `test-hooks` (never shipped) reports one version higher: a save of the normal build is then
     // `SaveIncompatible` (M34b).
-    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 10 } else { 9 };
+    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 11 } else { 10 };
     //  3: `Furnace` entity, `PlaceFurnace`, resources `NOT_BUILDABLE` (M33).
     //  4: `FurnaceDeposit`, `FurnaceTake`, `FurnacePickUp` and their rejects (M33b).
     //  5: `RefGlobal { colours }`, written on `Joined` (M34).
@@ -681,6 +688,8 @@ impl Game for RefGame {
     //  9: `SetSpawner` and `NotASpawner`/`BadLane`/`BadRate`; `SpawnCfg.rate` a `u8` rate index;
     //     spawner lanes carry the engine schedule, despawners end in `Sink` (M53b; a `Belt.spawn_set`
     //     field built during M53b never shipped). No migration: a schema 8 save is refused.
+    // 10: `BeltKind::Splitter` and prototypes 2 and 3 (the splitter's two axes); a splitter's eight
+    //     lines and forks (M54). No migration: a schema 9 save is refused.
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;
@@ -698,6 +707,10 @@ impl Game for RefGame {
     fn prototype(e: &RefEntity) -> PrototypeId {
         match e {
             RefEntity::Furnace(_) => content::FURNACE_PROTO,
+            RefEntity::Belt(b) if b.kind == BeltKind::Splitter => match b.dir {
+                Dir::East | Dir::West => content::SPLITTER_PROTO_EW,
+                Dir::North | Dir::South => content::SPLITTER_PROTO_NS,
+            },
             RefEntity::Belt(_) => content::BELT_PROTO,
             // A one-tick request on its belt's tile: the belt (the older, lower id) stays `entity_at`.
             #[cfg(feature = "test-hooks")]

@@ -72,7 +72,7 @@ export type RefUiState = {
 /** A belt's direction of travel (`Dir`, `sim/src/lib.rs`). */
 export type Dir = 'East' | 'South' | 'West' | 'North'
 /** What a belt tile is (`BeltKind`). */
-export type BeltKind = 'Belt' | 'Spawner' | 'Despawner'
+export type BeltKind = 'Belt' | 'Spawner' | 'Despawner' | 'Splitter'
 /** A spawner lane's configuration (`UiSpawn`): an `ITEM` wire id and a `SPAWN_RATE` index. */
 export type SpawnCfg = { item: number; rate: number }
 
@@ -459,15 +459,25 @@ export async function pickUp(page: Page): Promise<void> {
   await press(page, '[data-furnace-pickup]')
 }
 
-/** Belt sprite ids (`content::SPRITE_BELT_*`): a family's id is its east sprite, `+ 1` south, `+ 2`
- * north; west is east drawn with `FLAG.flipX` (`client::belt_sprite`). */
+/** Belt sprite ids (`content::SPRITE_BELT_*`, M54 `SPRITE_SPLITTER`): a family's id is its east
+ * sprite, `+ 1` south, `+ 2` north; west is east drawn with `FLAG.flipX` (`client::belt_sprite`).
+ * The splitter's (22-24) follow the item squares (16-21). */
 export const BELT = {
   straight: 1,
   curveLeft: 4,
   curveRight: 7,
   spawner: 10,
   despawner: 13,
+  splitter: 22,
 } as const
+
+/** Whether `spriteId` is a belt-family sprite (1-15) or a splitter's (22-24). */
+export function isBeltSprite(spriteId: number): boolean {
+  return (
+    (spriteId >= BELT.straight && spriteId < BELT.despawner + 3) ||
+    (spriteId >= BELT.splitter && spriteId < BELT.splitter + 3)
+  )
+}
 
 /** The sprite id and `FLIP_X` a straight belt of `family` facing `dir` draws with. */
 export function beltSprite(family: number, dir: Dir): { spriteId: number; flipX: boolean } {
@@ -490,11 +500,11 @@ export const BELT_TILE = {
   iron: RESOURCE_TILE.iron,
 } as const
 
-/** The belt sprites (`kind` 0, a belt sprite id) of the newest DrawList, the cursor-anchored ghost
- * apart from the placed ones. */
+/** The belt and splitter sprites (`kind` 0, `isBeltSprite`) of the newest DrawList, the
+ * cursor-anchored ghost apart from the placed ones. */
 export async function beltDraws(page: Page): Promise<{ ghost: DrawRec[]; placed: DrawRec[] }> {
   const belts = (await draws(page)).filter(
-    (r) => r.kind === KIND.sprite && r.spriteId >= BELT.straight && r.spriteId < BELT.despawner + 3,
+    (r) => r.kind === KIND.sprite && isBeltSprite(r.spriteId),
   )
   return {
     ghost: belts.filter((r) => (r.flags & FLAG.anchorCursorTile) !== 0),
@@ -556,12 +566,14 @@ export async function pickUpBelt(page: Page, at: { x: number; y: number }): Prom
   return settleBelts(page, (p) => p.length === before - 1 && p.every(confirmed))
 }
 
-/** Turns a belt tool on from the palette (`belt`, `spawner`, `despawner`) and steps until `Ui.tool` names it. */
+/** Turns a belt tool on from the palette (`belt`, `spawner`, `despawner`, `splitter`) and steps until `Ui.tool` names it. */
 export async function pickTool(
   page: Page,
-  tool: 'belt' | 'spawner' | 'despawner',
+  tool: 'belt' | 'spawner' | 'despawner' | 'splitter',
 ): Promise<RefUiState | null> {
-  const kind = ({ belt: 'Belt', spawner: 'Spawner', despawner: 'Despawner' } as const)[tool]
+  const kind = (
+    { belt: 'Belt', spawner: 'Spawner', despawner: 'Despawner', splitter: 'Splitter' } as const
+  )[tool]
   await page.locator(`[data-tool="${tool}"]`).click()
   await page.evaluate((d) => window.__stepFrame?.(d), 16) // drains the local-intent record
   return pumpUntil(page, (ui) => typeof ui?.tool?.tool === 'object' && ui.tool.tool.Belt === kind)

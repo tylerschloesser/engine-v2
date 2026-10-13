@@ -197,8 +197,11 @@ fn pickup_despawns() {
 
 /// 0079 §20 (b): over a scripted session of furnace and belt placements, rotations, pick-ups,
 /// deposits and smelting, every entity's anchor at the end of every tick equals its anchor at spawn,
-/// and (M52) every belt's stored shape is the one its neighbours give, curves included.
-/// Fails if any rule moves an entity (a rotate that shifts the origin, a furnace put elsewhere).
+/// and (M52) every belt's stored shape is the one its neighbours give, curves included. M54: a
+/// splitter is placed and turned every round, and every entity's whole footprint (a furnace's 2x2, a
+/// splitter's 2x1 for its `dir`) is its own after every tick.
+/// Fails if any rule moves an entity (a rotate that shifts the origin or turns a splitter's
+/// footprint, a furnace put elsewhere).
 #[test]
 fn no_reference_entity_moves_in_a_tick() {
     let mut s = scenario();
@@ -212,6 +215,18 @@ fn no_reference_entity_moves_in_a_tick() {
             let at = e.origin();
             let first = *spawned.entry(id).or_insert(at);
             assert_eq!(at, first, "{step}: entity {id:?} moved");
+            let fp = match e {
+                RefEntity::Furnace(_) => content::FURNACE_FOOTPRINT,
+                RefEntity::Belt(b) => content::belt_footprint(b.kind, b.dir),
+                #[cfg(feature = "test-hooks")]
+                RefEntity::TestRequest(_) => continue,
+            };
+            for dy in 0..fp.h as i32 {
+                for dx in 0..fp.w as i32 {
+                    let t = TilePos::new(at.x + dx, at.y + dy);
+                    assert_eq!(s.entity_at(t), Some(id), "{step}: {id:?} footprint {t:?}");
+                }
+            }
             if let RefEntity::Belt(b) = e {
                 assert_eq!(
                     s.entity_at(at.tile()),
@@ -240,6 +255,10 @@ fn no_reference_entity_moves_in_a_tick() {
     ];
     s.place(P1, furnace).unwrap();
     check(&s, &mut spawned, "furnace placed");
+    let splitter = TilePos::new(42, 45);
+    s.place_belt(P1, splitter, Dir::East, BeltKind::Splitter)
+        .unwrap();
+    check(&s, &mut spawned, "splitter placed");
     for (i, &at) in belts.iter().enumerate() {
         s.place_belt(P1, at, Dir::East, KINDS[i % 3]).unwrap();
         check(&s, &mut spawned, "belt placed");
@@ -253,6 +272,9 @@ fn no_reference_entity_moves_in_a_tick() {
             s.rotate_belt(P1, at).unwrap();
             check(&s, &mut spawned, "rotate");
         }
+        // Addressed by its second tile on odd rounds.
+        s.rotate_belt(P1, TilePos::new(42, 45 + round % 2)).unwrap();
+        check(&s, &mut spawned, "rotate the splitter");
         if round == 3 {
             s.pick_up_belt(P1, belts[1]).unwrap();
             s.place_belt(P1, belts[1], Dir::North, BeltKind::Belt)
@@ -270,9 +292,15 @@ fn no_reference_entity_moves_in_a_tick() {
         s.furnace_at(furnace).unwrap().ingots_out > 0,
         "the furnace smelted"
     );
-    assert_eq!(spawned.len(), 7, "two furnaces and five belt spawns");
+    // M54: one splitter more than M52's 7 spawns and 6 entities.
+    assert_eq!(
+        spawned.len(),
+        8,
+        "two furnaces, five belt spawns and a splitter"
+    );
     assert!(curves.get() > 0, "the rotations made curves (M52)");
-    assert_eq!(s.entities().len(), 6);
+    assert_eq!(s.entities().len(), 7);
+    assert_eq!(s.belt_at(splitter).unwrap().dir, Dir::East, "six 180s");
 }
 
 /// Belts sleep (the furnace rule's `idle_furnaces_cost_nothing`): 1,000 belts of every kind and
@@ -280,12 +308,14 @@ fn no_reference_entity_moves_in_a_tick() {
 /// no state change over 1,000 ticks. M52: the world is mapped onto lines (its curves, side-loads and
 /// runs counted), so the topology rule is what sleeps. Fails if a belt rule leaves a timer on a belt,
 /// puts one from the tick (a put from the tick wakes nothing, but a wake would revisit), or keeps
-/// re-mapping.
+/// re-mapping. M54: a second block two rows below mixes splitters (every facing, some turned) into
+/// belts, spawners and despawners; it is mapped (the oracle) and sleeps too.
 #[test]
 fn idle_belts_cost_nothing() {
     let mut s = RefScenario::new();
     s.join(P1);
     s.clear_area(TilePos::new(40, 40), 40, 25);
+    s.clear_area(TilePos::new(40, 67), 40, 10);
     let dirs = [Dir::East, Dir::South, Dir::West, Dir::North];
     for i in 0..1_000 {
         let at = TilePos::new(40 + i % 40, 40 + i / 40);
@@ -296,6 +326,32 @@ fn idle_belts_cost_nothing() {
         }
     }
     assert_eq!(s.entities().len(), 1_000);
+    // M54's block: rows 67-76, apart from the first (row 65 stays empty, so nothing connects
+    // across). Kinds and facings cycle out of step; a splitter whose footprint is taken is refused
+    // and skipped.
+    let all = [
+        BeltKind::Belt,
+        BeltKind::Splitter,
+        BeltKind::Spawner,
+        BeltKind::Splitter,
+        BeltKind::Despawner,
+    ];
+    let mut splitters = 0;
+    for i in 0..400 {
+        let at = TilePos::new(40 + i % 40, 67 + i / 40);
+        let kind = all[(i % 5) as usize];
+        match s.place_belt(P1, at, dirs[((i / 3) % 4) as usize], kind) {
+            Ok(()) => {
+                splitters += usize::from(kind == BeltKind::Splitter);
+                if i % 7 == 0 {
+                    s.rotate_belt(P1, at).unwrap();
+                }
+            }
+            Err(RefReject::NotBuildable) => {}
+            Err(r) => panic!("{at:?}: {r:?}"),
+        }
+    }
+    let block = s.entities().len() - 1_000;
     s.step_ticks(2); // the last action's wake is served and finds nothing to do.
 
     // M52: the world is mapped, with curves, side-loads and runs (every belt's lanes indexed).
@@ -303,6 +359,9 @@ fn idle_belts_cost_nothing() {
     let (mut curves, mut merges, mut runs) = (0, 0, 0);
     for (_, e) in s.entities() {
         let b = e.as_belt().copied().expect("belts only");
+        if b.origin.y >= 65 {
+            continue; // M54's block, counted below.
+        }
         let tr = s.read().transport();
         let m = lanes_at(tr, b.origin.tile()).expect("every belt is mapped");
         curves += usize::from(b.shape != BeltShape::Straight);
@@ -326,10 +385,27 @@ fn idle_belts_cost_nothing() {
     //   fronts the run). No two same-way neighbours are both plain, a spawner joins nothing and a
     //   despawner joins nothing in front, so every other same-way pair (of 410) stays apart.
     // - 1,000 - 67 = 933 fronting belts, two lines each: 1,866.
+    // M54's block adds its own lines (eight per splitter, two per other fronting belt).
+    let block_lines = s.read().transport().lines_len() - 1866;
+    let mut block_runs = 0;
+    for (_, e) in s.entities() {
+        let b = e.as_belt().copied().expect("belts only");
+        if b.origin.y >= 65 && b.kind != BeltKind::Splitter {
+            let m = lanes_at(s.read().transport(), b.origin.tile()).expect("mapped");
+            block_runs += usize::from(m.off > 0);
+        }
+    }
+    // Measured once: 297 entities placed of 400 tries, 109 of them splitters; 6 of the other 188
+    // inside a run, so 182 fronting pairs: 8 x 109 + 2 x 182 = 1,236 lines.
     assert_eq!(
-        (curves, merges, runs, s.read().transport().lines_len()),
-        (119, 260, 67, 1866),
-        "curves, side-loading lanes, belts inside a run, lines"
+        (block, splitters, block_runs, block_lines),
+        (297, 109, 6, 1236),
+        "M54 block: entities, splitters, belts inside a run, lines"
+    );
+    assert_eq!(
+        (curves, merges, runs),
+        (119, 260, 67),
+        "curves, side-loading lanes, belts inside a run"
     );
 
     let writes = s.writes_logged();

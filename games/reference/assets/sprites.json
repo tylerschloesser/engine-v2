@@ -156,6 +156,27 @@
       "pivot": [0.5, 0.5],
       "size": [0.5, 0.5],
       "frames": 1
+    },
+    "22": {
+      "name": "splitter/east",
+      "rect": [2, 350, 16, 32],
+      "pivot": [0, 0],
+      "size": [1, 2],
+      "frames": 8
+    },
+    "23": {
+      "name": "splitter/south",
+      "rect": [2, 386, 32, 16],
+      "pivot": [0, 0],
+      "size": [2, 1],
+      "frames": 8
+    },
+    "24": {
+      "name": "splitter/north",
+      "rect": [2, 406, 32, 16],
+      "pivot": [0, 0],
+      "size": [2, 1],
+      "frames": 8
     }
   }
 }

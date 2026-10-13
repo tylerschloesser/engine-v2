@@ -334,7 +334,11 @@ impl RefScenario {
     /// despawner, else `DeadEnd`); every line has one segment, and the store holds exactly two lines
     /// per fronting belt. M53b: a spawner joins nothing and nothing joins it in front; a despawner
     /// joins nothing in front and no belt in front of it joins it; a spawner's lanes carry the
-    /// schedule its configuration asks (`topology::schedule_for`), and no other line has one.
+    /// schedule its configuration asks (`topology::schedule_for`), and no other line has one. M54: a
+    /// splitter's halves each hold four straight 128-position lines running its way (`splitter_lanes`),
+    /// each input lane forks onto the left and right halves' output lanes (`a` the left), each half's
+    /// output lines follow `output_of` like a fronting belt's, a belt behind a half feeds its input
+    /// lanes, and the store holds eight lines per splitter.
     pub fn assert_topology(&self) {
         self.assert_topology_in(TileRect::new(
             TilePos::new(-200, -200),
@@ -356,8 +360,23 @@ impl RefScenario {
             0,
             "spawner lanes left unscheduled by a refused set_spawner"
         );
+        self.assert_lines_in(rect);
+    }
+
+    /// [`Self::assert_topology`]'s structure check alone, without the cap counters (M54 fix round 1:
+    /// a cap test that dropped lines on purpose, then re-mapped them).
+    pub fn assert_lines(&self) {
+        self.assert_lines_in(TileRect::new(
+            TilePos::new(-200, -200),
+            TilePos::new(200, 200),
+        ));
+    }
+
+    fn assert_lines_in(&self, rect: TileRect) {
         use engine::transport::Output;
-        use reference_sim::rules::belts::topology::{Link, lanes_at, output_of, shape_of};
+        use reference_sim::rules::belts::topology::{
+            Link, lanes_at, output_of, shape_of, splitter_halves, splitter_lanes,
+        };
         use reference_sim::{BeltKind, BeltShape};
         let w = self.read();
         let tr = w.transport();
@@ -392,6 +411,71 @@ impl RefScenario {
             let t = b.origin.tile();
             let shape = shape_of(w, t, b.dir).expect("host");
             assert_eq!(b.shape, shape, "{t:?}: stored shape");
+            // The outputs a line pair fronting on `t` (facing `dir`) must have for `link`.
+            let want_outs = |t: TilePos, link: Link| -> [Output; 2] {
+                let f = ahead(t, b.dir, 1);
+                match link {
+                    Link::DeadEnd => [Output::DeadEnd; 2],
+                    Link::Sink => [Output::Sink; 2],
+                    Link::Next => match splitter_lanes(tr, f) {
+                        Some(s) => [Output::Next(s.input[0]), Output::Next(s.input[1])],
+                        None => {
+                            let mf = lanes_at(tr, f).expect("front mapped");
+                            [Output::Next(mf.lane[0]), Output::Next(mf.lane[1])]
+                        }
+                    },
+                    Link::SideLoad { near } => {
+                        let mf = lanes_at(tr, f).expect("front mapped");
+                        let line = mf.lane[usize::from(near)];
+                        let at = |lane: u8| mf.off + if lane == near { 64 } else { 192 };
+                        [
+                            Output::Merge { line, at: at(0) },
+                            Output::Merge { line, at: at(1) },
+                        ]
+                    }
+                }
+            };
+            if b.kind == BeltKind::Splitter {
+                assert_eq!(
+                    b.shape,
+                    BeltShape::Straight,
+                    "{t:?}: a splitter is straight"
+                );
+                let halves = splitter_halves(&b);
+                let lanes = halves.map(|h| {
+                    let s =
+                        splitter_lanes(tr, h).unwrap_or_else(|| panic!("{h:?}: splitter lines"));
+                    assert_eq!(s.dir, b.dir, "{h:?}: splitter lines run its way");
+                    s
+                });
+                for (h, s) in halves.into_iter().zip(lanes) {
+                    for l in s.input.into_iter().chain(s.output) {
+                        assert_eq!(tr.len(l), Ok(128), "{h:?}: splitter line {l:?} len");
+                        let mut n = 0;
+                        tr.segments(l, &mut |_| n += 1).expect("line");
+                        assert_eq!(n, 1, "{h:?}: line {l:?} segments");
+                        assert_eq!(store.schedule(l).expect("line"), None, "{h:?}: no schedule");
+                    }
+                    for k in 0..2 {
+                        assert_eq!(
+                            tr.out(s.input[k]),
+                            Ok(Output::Fork {
+                                a: lanes[0].output[k],
+                                b: lanes[1].output[k],
+                            }),
+                            "{h:?} lane {k}: the input fork"
+                        );
+                    }
+                    let want = want_outs(h, output_of(w, h, b).expect("host"));
+                    assert_eq!(
+                        [tr.out(s.output[0]), tr.out(s.output[1])],
+                        [Ok(want[0]), Ok(want[1])],
+                        "{h:?} {b:?}: splitter output"
+                    );
+                }
+                fronts += 4;
+                continue;
+            }
             let m = lanes_at(tr, t).unwrap_or_else(|| panic!("{t:?} is not mapped"));
             for lane in 0..2 {
                 let want = if b.kind == BeltKind::Spawner && m.off + 256 == m.len {
@@ -426,7 +510,9 @@ impl RefScenario {
                 );
             } else {
                 let front = live(ahead(t, b.dir, 1)).filter(|f| {
-                    f.dir == b.dir && b.kind == BeltKind::Belt && f.kind != BeltKind::Spawner
+                    f.dir == b.dir
+                        && b.kind == BeltKind::Belt
+                        && !matches!(f.kind, BeltKind::Spawner | BeltKind::Splitter)
                 });
                 let back = live(ahead(t, b.dir, -1)).filter(|k| {
                     k.dir == b.dir
@@ -468,24 +554,7 @@ impl RefScenario {
                 continue;
             }
             fronts += 1;
-            let f = ahead(t, b.dir, 1);
-            let want = match output_of(w, t, b).expect("host") {
-                Link::DeadEnd => [Output::DeadEnd; 2],
-                Link::Sink => [Output::Sink; 2],
-                Link::Next => {
-                    let mf = lanes_at(tr, f).expect("front mapped");
-                    [Output::Next(mf.lane[0]), Output::Next(mf.lane[1])]
-                }
-                Link::SideLoad { near } => {
-                    let mf = lanes_at(tr, f).expect("front mapped");
-                    let line = mf.lane[usize::from(near)];
-                    let at = |lane: u8| mf.off + if lane == near { 64 } else { 192 };
-                    [
-                        Output::Merge { line, at: at(0) },
-                        Output::Merge { line, at: at(1) },
-                    ]
-                }
-            };
+            let want = want_outs(t, output_of(w, t, b).expect("host"));
             assert_eq!(
                 [tr.out(m.lane[0]), tr.out(m.lane[1])],
                 [Ok(want[0]), Ok(want[1])],
@@ -495,7 +564,7 @@ impl RefScenario {
         assert_eq!(
             tr.lines_len(),
             2 * fronts,
-            "two lines per fronting belt, no leak"
+            "two lines per fronting belt and eight per splitter, no leak"
         );
     }
 

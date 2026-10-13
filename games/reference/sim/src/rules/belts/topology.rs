@@ -21,6 +21,22 @@
 //! ([`Link::Sink`]), it never joins the run in front (it is always a run's front) and it is no input
 //! of the tile in front; it takes inputs, curves and side-loads like a plain belt.
 //!
+//! **Splitters** (M54; README "Belts", Splitters). A splitter is a run boundary with eight lines of
+//! its own, never joined, split or rescaled: per half (left and right seen along `dir`,
+//! [`splitter_halves`]) and per lane, an input line from the half's midline back to its back edge
+//! and an output line from its front edge to the midline, [`SPLITTER_LEN`] (128) each, straight,
+//! on the lane's usual cross position (the edge rule as for a run). Each input line's output is
+//! `Fork { a: the left half's output lane k, b: the right half's }` (one sub-splitter per input lane
+//! with the engine's toggle: `a`, the left half, is preferred first; Factorio's "first item goes
+//! right" is not copied). A belt behind a half facing the same way feeds that half's input lanes
+//! (`Next`, lane for lane); anything pointing into a long side, or head-on into its front, stops
+//! ([`Link::DeadEnd`]; measured `q15_splitter_long_side`). Each half's output feeds the tile in front
+//! like a belt's (C1-C4: `Next`, the sole side input of a curve, a side-load, or a dead end), and a
+//! half counts as an input of the tile in front (§4.2), so it curves or straightens it like a belt.
+//! A splitter's lines are re-created (its items destroyed) when it turns 180 degrees in place and
+//! destroyed when it is picked up; [`splitter_lanes`] reads a half's four lines back from the tile
+//! index (input or output by where its segment starts).
+//!
 //! **Lines.** One engine line is one lane (0076 §1). Lane 0 is the lane on the belt's left seen along
 //! `dir`, lane 1 its right; lanes keep their index through `Next` (C2) and a curve. One line per lane
 //! per maximal straight run (straight tiles of one direction, each feeding the next from behind),
@@ -81,6 +97,8 @@ pub const INNER_RADIUS: u32 = 68;
 pub const OUTER_RADIUS: u32 = 188;
 /// A lane's centre from the tile edge on its own side (lane 0 from the left edge, lane 1 the right).
 pub const LANE_INSET: i32 = 68;
+/// A splitter's input and output lane lines (M54): half a tile each.
+pub const SPLITTER_LEN: u32 = 128;
 /// Side-load landings past the target tile's first position: the feeder lane nearer the target's
 /// back lands 64 from its back edge, the other 64 from its front edge.
 pub const SIDE_BACK: u32 = 192;
@@ -270,14 +288,15 @@ fn kind_on(w: &dyn WorldRead<RefGame>, at: TilePos) -> Result<BeltKind, Unknown>
     Ok(live_belt(w, at)?.map_or(BeltKind::Belt, |b| b.kind))
 }
 
-/// [`Inputs`] of a belt of `kind` facing `dir` on `at`: none for a spawner (M53b).
+/// [`Inputs`] of a belt of `kind` facing `dir` on `at`: none for a spawner (M53b) or a splitter (M54:
+/// its shape never changes; what feeds its halves is [`output_of`]'s).
 pub fn inputs_of(
     w: &dyn WorldRead<RefGame>,
     at: TilePos,
     dir: Dir,
     kind: BeltKind,
 ) -> Result<Inputs, Unknown> {
-    if kind == BeltKind::Spawner {
+    if matches!(kind, BeltKind::Spawner | BeltKind::Splitter) {
         return Ok(Inputs::default());
     }
     Ok(Inputs {
@@ -317,7 +336,8 @@ pub fn shape_of_kind(
 }
 
 /// The output of the belt `b` standing on `at` (C1-C4, R6, R7; M53b: a despawner sinks, a spawner
-/// in front accepts nothing).
+/// in front accepts nothing; M54: a splitter half on `at` outputs like a belt, and a splitter in
+/// front accepts only from behind one of its halves).
 pub fn output_of(w: &dyn WorldRead<RefGame>, at: TilePos, b: Belt) -> Result<Link, Unknown> {
     if b.kind == BeltKind::Despawner {
         return Ok(Link::Sink);
@@ -328,6 +348,9 @@ pub fn output_of(w: &dyn WorldRead<RefGame>, at: TilePos, b: Belt) -> Result<Lin
     };
     if f.kind == BeltKind::Spawner {
         return Ok(Link::DeadEnd);
+    }
+    if f.kind == BeltKind::Splitter && f.dir != b.dir {
+        return Ok(Link::DeadEnd); // its long side or its front (q15_splitter_long_side)
     }
     if f.dir == b.dir {
         return Ok(Link::Next);
@@ -484,7 +507,8 @@ pub struct TileLanes {
     pub len: u32,
 }
 
-/// The lanes mapped on `at`, `None` when no belt line enters it.
+/// The lanes mapped on `at`, `None` when no belt line enters it (a splitter half's are
+/// [`splitter_lanes`]).
 pub fn lanes_at(tr: &dyn TransportRead, at: TilePos) -> Option<TileLanes> {
     mapped(tr, at).map(|m| TileLanes {
         lane: m.lane,
@@ -505,8 +529,8 @@ fn mapped(tr: &dyn TransportRead, at: TilePos) -> Option<Mapped> {
     })
     .ok()?;
     debug_assert!(
-        n == 0 || n == 2,
-        "tile {at:?}: {n} lines, not one belt's two lanes"
+        n == 0 || n == 2 || (n == 4 && splitter_lanes(tr, at).is_some()),
+        "tile {at:?}: {n} lines, not one belt's two lanes or a splitter half's four"
     );
     if n != 2 {
         return None;
@@ -535,6 +559,193 @@ fn mapped(tr: &dyn TransportRead, at: TilePos) -> Option<Mapped> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Splitters (M54)
+
+/// A splitter's halves, left then right seen along its `dir` (the footprint's min corner is
+/// `origin`): facing east the north tile is the left half, facing west the south tile, facing north
+/// the west tile, facing south the east tile.
+pub const fn splitter_halves(b: &Belt) -> [TilePos; 2] {
+    let o = b.origin.tile();
+    let (x, y) = (o.x, o.y);
+    match b.dir {
+        Dir::East => [TilePos::new(x, y), TilePos::new(x, y + 1)],
+        Dir::West => [TilePos::new(x, y + 1), TilePos::new(x, y)],
+        Dir::North => [TilePos::new(x, y), TilePos::new(x + 1, y)],
+        Dir::South => [TilePos::new(x + 1, y), TilePos::new(x, y)],
+    }
+}
+
+/// The tiles a belt covers: its own, or a splitter's two halves (left, right). The count is 1 or 2.
+fn footprint_tiles(b: &Belt) -> ([TilePos; 2], usize) {
+    if b.kind == BeltKind::Splitter {
+        (splitter_halves(b), 2)
+    } else {
+        let o = b.origin.tile();
+        ([o, o], 1)
+    }
+}
+
+/// A splitter half's four lines as the tile index reports them (M54): the direction they run, and
+/// per lane (0 the left seen along `dir`) the input line (from the midline back) and the output line
+/// (from the front edge to the midline).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SplitterLanes {
+    /// The direction the lines run (the splitter's `dir`).
+    pub dir: Dir,
+    /// Per lane, the input line: from the half's midline back to its back edge.
+    pub input: [LineId; 2],
+    /// Per lane, the output line: from the half's front edge back to its midline.
+    pub output: [LineId; 2],
+}
+
+/// The splitter lines on the half `at`, `None` unless exactly a splitter half's four lines enter it.
+/// A line is an output when its segment starts on the half's front edge (the edge rule), else an
+/// input (it starts on the midline).
+pub fn splitter_lanes(tr: &dyn TransportRead, at: TilePos) -> Option<SplitterLanes> {
+    let mut found = [LineId::NONE; 4];
+    let mut n = 0usize;
+    tr.lines_at(at, &mut |l, _| {
+        if n < 4 {
+            found[n] = l;
+        }
+        n += 1;
+    })
+    .ok()?;
+    if n != 4 {
+        return None;
+    }
+    let mut input = [LineId::NONE; 2];
+    let mut output = [LineId::NONE; 2];
+    let mut dir = Dir::East;
+    for l in found {
+        let mut seg = None;
+        tr.segments(l, &mut |s| {
+            if seg.is_none() {
+                seg = Some(s);
+            }
+        })
+        .ok()?;
+        let seg = seg?;
+        let Geometry::Straight { from, .. } = seg.geometry else {
+            return None;
+        };
+        let (Form::Run(d), k) = classify(seg, at)? else {
+            return None;
+        };
+        let along = if horizontal(d) { from.x } else { from.y };
+        let side = if along == edge(at, d) - i32::from(positive(d)) {
+            &mut output
+        } else {
+            &mut input
+        };
+        side[usize::from(k)] = l;
+        dir = d;
+    }
+    let all = input[0] != LineId::NONE
+        && input[1] != LineId::NONE
+        && output[0] != LineId::NONE
+        && output[1] != LineId::NONE;
+    debug_assert!(all, "tile {at:?}: four lines, not a splitter half's");
+    all.then_some(SplitterLanes { dir, input, output })
+}
+
+/// Lane `lane` of a splitter half on `half` facing `dir`: the output line from the front edge (the
+/// edge rule) to the midline, or the input line from the midline to the back edge.
+fn splitter_segment(half: TilePos, dir: Dir, lane: u8, input: bool) -> Segment {
+    let (dx, dy) = step(dir);
+    let len = SPLITTER_LEN as i32;
+    let front = edge(half, dir) - i32::from(positive(dir));
+    let along = if input {
+        front - (dx + dy) * len
+    } else {
+        front
+    };
+    let cross = lane_cross(dir, lane);
+    let from = if horizontal(dir) {
+        wp(along, half.y * 256 + cross)
+    } else {
+        wp(half.x * 256 + cross, along)
+    };
+    Segment {
+        len: SPLITTER_LEN,
+        geometry: Geometry::Straight {
+            from,
+            to: wp(from.x - dx * len, from.y - dy * len),
+        },
+    }
+}
+
+/// A splitter's eight lines (both halves, segments registered, the input forks set); at a full cap
+/// none of them (counted: two tiles).
+fn create_splitter(tr: Tx<'_>, b: Belt) {
+    let halves = splitter_halves(&b);
+    // Index `half * 4 + side * 2 + lane`, side 0 the input and 1 the output.
+    let mut ids = [LineId::NONE; 8];
+    for i in 0..8 {
+        let Some(l) = ok(tr.create(SPLITTER_LEN, SPEED), "create(splitter)") else {
+            drop_pair(tr, &ids[..i], 2);
+            return;
+        };
+        ids[i] = l;
+    }
+    for (i, &line) in ids.iter().enumerate() {
+        let seg = splitter_segment(halves[i / 4], b.dir, (i % 2) as u8, (i % 4) < 2);
+        if ok(tr.set_segments(line, &[seg]), "set_segments(splitter)").is_none() {
+            drop_pair(tr, &ids, 2);
+            return;
+        }
+    }
+    for i in [0, 1, 4, 5] {
+        let k = i % 2;
+        set_out(
+            tr,
+            ids[i],
+            Output::Fork {
+                a: ids[2 + k],
+                b: ids[6 + k],
+            },
+        );
+    }
+}
+
+/// Destroys a splitter half's four lines (pick-up and rotation destroy its items).
+fn destroy_splitter_half(tr: Tx<'_>, s: SplitterLanes) {
+    for l in s.input.into_iter().chain(s.output) {
+        ok(tr.destroy(l, &mut |_| {}), "destroy(splitter)");
+    }
+}
+
+/// Phase 2 for a splitter tile (`true` when `at` is one: a live splitter's half, or a half whose
+/// splitter is gone and whose lines are still there): a gone splitter's half lines are destroyed; a
+/// live splitter whose halves do not both hold lines running its way (placed, turned, or dropped by
+/// a full cap) has whatever is there destroyed and its eight lines created.
+fn reform_splitter(cx: &mut TickCx<'_, RefGame>, at: TilePos) -> bool {
+    let sp = live_belt(cx, at)
+        .ok()
+        .flatten()
+        .filter(|b| b.kind == BeltKind::Splitter);
+    let Some(tr) = tx(cx) else {
+        return sp.is_some();
+    };
+    let Some(b) = sp else {
+        let Some(here) = splitter_lanes(tr, at) else {
+            return false;
+        };
+        destroy_splitter_half(tr, here);
+        return true;
+    };
+    let lanes = splitter_halves(&b).map(|h| splitter_lanes(tr, h));
+    if lanes.iter().all(|l| l.is_some_and(|l| l.dir == b.dir)) {
+        return true;
+    }
+    for l in lanes.into_iter().flatten() {
+        destroy_splitter_half(tr, l);
+    }
+    create_splitter(tr, b);
+    true
+}
+
+// ---------------------------------------------------------------------------------------------
 // What a tile should be
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -549,6 +760,9 @@ struct Want {
 
 fn want(w: &dyn WorldRead<RefGame>, at: TilePos) -> Option<Want> {
     let b = live_belt(w, at).ok()??;
+    if b.kind == BeltKind::Splitter {
+        return None; // its own eight lines (`reform_splitter`), never in a run.
+    }
     let shape = shape_of_kind(w, at, b.dir, b.kind).ok()?;
     let straight = shape == BeltShape::Straight;
     let same = |t: TilePos| live_belt(w, t).ok().flatten().filter(|o| o.dir == b.dir);
@@ -561,14 +775,15 @@ fn want(w: &dyn WorldRead<RefGame>, at: TilePos) -> Option<Want> {
             Form::Curve(b.dir, shape)
         },
         // A spawner joins nothing, in front or behind; a despawner is no run's back part (it feeds
-        // nothing) and joins nothing in front (module doc).
+        // nothing) and joins nothing in front (module doc); nothing joins a splitter (M54).
         join_back: straight
             && b.kind != BeltKind::Spawner
             && same(back).is_some_and(|k| k.kind == BeltKind::Belt)
             && shape_of(w, back, b.dir).ok() == Some(BeltShape::Straight),
         join_front: straight
             && b.kind == BeltKind::Belt
-            && same(ahead(at, b.dir, 1)).is_some_and(|f| f.kind != BeltKind::Spawner),
+            && same(ahead(at, b.dir, 1))
+                .is_some_and(|f| !matches!(f.kind, BeltKind::Spawner | BeltKind::Splitter)),
     })
 }
 
@@ -711,43 +926,74 @@ const fn around(p: TilePos) -> [TilePos; 5] {
 /// tile and its neighbours (module doc), puts every changed shape, and despawns a `removing` belt.
 pub fn on_wake(cx: &mut TickCx<'_, RefGame>, id: EntityId, belt: Belt) {
     let p = belt.origin.tile();
-    let near = around(p);
+    // A splitter (M54) reconciles around both halves: each tile once, in order.
+    let (tiles, count) = footprint_tiles(&belt);
+    let tiles = &tiles[..count];
+    let mut near_buf = [p; 10];
+    let mut n = 0;
+    for &h in tiles {
+        for t in around(h) {
+            if !near_buf[..n].contains(&t) {
+                near_buf[n] = t;
+                n += 1;
+            }
+        }
+    }
+    let near = &near_buf[..n];
     let before = mapped(cx.transport(), p).map(|m| m.lane);
-    for t in near {
+    for &t in near {
         cut(cx, t);
     }
-    for t in near {
+    for &t in near {
         reform(cx, t);
     }
-    for t in near {
+    for &t in near {
         join(cx, t);
     }
     // A run that got shorter may now fit beside a run it was held apart from at `MAX_LINE_TILES`:
     // the two end tiles of every run within two tiles of `p` try again. Every piece `cut` left has a
     // tile there (a neighbour's run, or the run behind or beside a neighbour that became a curve),
     // and its far end is the one that matters (far from `p` only when a run passes the limit).
-    for dy in -2i32..=2 {
-        let r = 2 - dy.abs();
-        for dx in -r..=r {
-            let t = TilePos::new(p.x + dx, p.y + dy);
-            if let Some(m) = mapped(cx.transport(), t)
-                && let Form::Run(dir) = m.form
-            {
-                let front = ahead(t, dir, (m.off / STRAIGHT_LEN) as i32);
-                let back = ahead(front, opposite(dir), m.tiles() as i32 - 1);
-                join(cx, front);
-                join(cx, back);
+    for &h in tiles {
+        for dy in -2i32..=2 {
+            let r = 2 - dy.abs();
+            for dx in -r..=r {
+                let t = TilePos::new(h.x + dx, h.y + dy);
+                if let Some(m) = mapped(cx.transport(), t)
+                    && let Form::Run(dir) = m.form
+                {
+                    let front = ahead(t, dir, (m.off / STRAIGHT_LEN) as i32);
+                    let back = ahead(front, opposite(dir), m.tiles() as i32 - 1);
+                    join(cx, front);
+                    join(cx, back);
+                }
             }
         }
     }
-    // Outputs: every belt within two tiles (its front is within one of `p`).
-    for dy in -2i32..=2 {
-        let r = 2 - dy.abs();
-        for dx in -r..=r {
-            fix_output(cx, TilePos::new(p.x + dx, p.y + dy));
+    // Outputs: every belt within two tiles (its front is within one of `p`); a splitter's two
+    // diamonds overlap, and a second visit changes nothing.
+    for &h in tiles {
+        for dy in -2i32..=2 {
+            let r = 2 - dy.abs();
+            for dx in -r..=r {
+                fix_output(cx, TilePos::new(h.x + dx, h.y + dy));
+            }
         }
     }
-    for t in near {
+    // A splitter whose lines a neighbour's wake (re)created (after a full cap dropped them): its
+    // halves and the tiles behind them may lie outside the diamonds above, so their outputs (the
+    // feeders' `Next` into its inputs, its own outputs and forks) are set here too.
+    for &t in near {
+        if let Some(b) = live_belt(cx, t).ok().flatten()
+            && b.kind == BeltKind::Splitter
+        {
+            for h in splitter_halves(&b) {
+                fix_output(cx, h);
+                fix_output(cx, ahead(h, opposite(b.dir), 1));
+            }
+        }
+    }
+    for &t in near {
         put_shape(cx, t);
     }
     if belt.removing {
@@ -825,6 +1071,9 @@ fn cut(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
 /// Phase 2: the tile's own lines: destroyed when its belt is gone, created (or a run extended) for a
 /// new belt, rescaled for a reshape (items kept), destroyed and re-created for a rotation.
 fn reform(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
+    if reform_splitter(cx, at) {
+        return;
+    }
     let w = want(cx, at);
     let spawner = live_belt(cx, at)
         .ok()
@@ -987,7 +1236,8 @@ fn link(tr: Tx<'_>, front_tile: TilePos, dir: Dir, front: Mapped, back: Mapped) 
     run_pair(tr, front.lane, front_tile, dir, tiles);
 }
 
-/// Phase 4: the output of the line pair `at` fronts, from its front tile ([`output_of`]).
+/// Phase 4: the output of the line pair `at` fronts, from its front tile ([`output_of`]); on a
+/// splitter half (M54) its output lines' and its input lines' forks.
 fn fix_output(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
     let Some(b) = live_belt(cx, at).ok().flatten() else {
         return;
@@ -996,33 +1246,71 @@ fn fix_output(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
         return;
     };
     let Some(tr) = tx(cx) else { return };
-    let Some(m) = mapped(tr, at) else { return };
-    if m.off != 0 {
-        return; // inside a run: the line carries on.
-    }
-    let target = mapped(tr, ahead(at, b.dir, 1));
-    let outs = match (link, target) {
-        (Link::Next, Some(t))
-            if matches!(t.form, Form::Curve(..)) || t.off + STRAIGHT_LEN == t.len =>
-        {
-            [Output::Next(t.lane[0]), Output::Next(t.lane[1])]
+    let lanes = if b.kind == BeltKind::Splitter {
+        let Some(s) = splitter_lanes(tr, at) else {
+            return;
+        };
+        let [l, r] = splitter_halves(&b).map(|h| splitter_lanes(tr, h));
+        if let (Some(l), Some(r)) = (l, r) {
+            for k in 0..2 {
+                let fork = Output::Fork {
+                    a: l.output[k],
+                    b: r.output[k],
+                };
+                set_out(tr, s.input[k], fork);
+            }
         }
-        (Link::Sink, _) => [Output::Sink; 2],
-        (Link::SideLoad { near }, Some(t)) => {
-            let line = t.lane[usize::from(near)];
-            let at_of = |lane: u8| t.off + if lane == near { SIDE_FRONT } else { SIDE_BACK };
-            [
-                Output::Merge { line, at: at_of(0) },
-                Output::Merge { line, at: at_of(1) },
-            ]
+        s.output
+    } else {
+        let Some(m) = mapped(tr, at) else { return };
+        if m.off != 0 {
+            return; // inside a run: the line carries on.
         }
-        _ => [Output::DeadEnd; 2],
+        m.lane
     };
+    let outs = outputs_into(tr, link, ahead(at, b.dir, 1));
     for (lane, out) in outs.into_iter().enumerate() {
-        let line = m.lane[lane];
-        if tr.out(line) != Ok(out) {
-            ok(tr.set_out(line, out), "set_out");
+        set_out(tr, lanes[lane], out);
+    }
+}
+
+/// `set_out` when the line's output differs (an equal one would be a no-op anyway: the fork toggle
+/// is kept either way).
+fn set_out(tr: Tx<'_>, line: LineId, out: Output) {
+    if tr.out(line) != Ok(out) {
+        ok(tr.set_out(line, out), "set_out");
+    }
+}
+
+/// The two lanes' outputs for `link` into the tile `front`: `Next` onto a curve, the back of a run or
+/// a splitter half's input lines (M54), `Merge` onto a straight belt's near lane, `Sink`, or a dead
+/// end when the target is not mapped.
+fn outputs_into(tr: &dyn TransportRead, link: Link, front: TilePos) -> [Output; 2] {
+    match link {
+        Link::Sink => [Output::Sink; 2],
+        Link::DeadEnd => [Output::DeadEnd; 2],
+        Link::Next => {
+            if let Some(s) = splitter_lanes(tr, front) {
+                return [Output::Next(s.input[0]), Output::Next(s.input[1])];
+            }
+            match mapped(tr, front) {
+                Some(t) if matches!(t.form, Form::Curve(..)) || t.off + STRAIGHT_LEN == t.len => {
+                    [Output::Next(t.lane[0]), Output::Next(t.lane[1])]
+                }
+                _ => [Output::DeadEnd; 2],
+            }
         }
+        Link::SideLoad { near } => match mapped(tr, front) {
+            Some(t) => {
+                let line = t.lane[usize::from(near)];
+                let at_of = |lane: u8| t.off + if lane == near { SIDE_FRONT } else { SIDE_BACK };
+                [
+                    Output::Merge { line, at: at_of(0) },
+                    Output::Merge { line, at: at_of(1) },
+                ]
+            }
+            None => [Output::DeadEnd; 2],
+        },
     }
 }
 
@@ -1053,12 +1341,20 @@ fn put_shape(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
 /// result ignored: a refused insert is the test's to see) and despawns it.
 #[cfg(feature = "test-hooks")]
 pub fn test_insert(cx: &mut TickCx<'_, RefGame>, id: EntityId, r: crate::TestInsert) {
-    if let Some(tr) = tx(cx)
-        && let Some(m) = mapped(tr, r.at.tile())
-        && let Some(&line) = m.lane.get(usize::from(r.lane))
-    {
-        bump();
-        let _ = tr.insert_at(line, m.off + u32::from(r.pos), Item(r.item));
+    if let Some(tr) = tx(cx) {
+        let at = r.at.tile();
+        // M54: a splitter half's lanes 0 and 1 are its input lines, 2 and 3 its output lines.
+        let target = if let Some(s) = splitter_lanes(tr, at) {
+            [s.input[0], s.input[1], s.output[0], s.output[1]]
+                .get(usize::from(r.lane))
+                .map(|&l| (l, 0))
+        } else {
+            mapped(tr, at).and_then(|m| m.lane.get(usize::from(r.lane)).map(|&l| (l, m.off)))
+        };
+        if let Some((line, off)) = target {
+            bump();
+            let _ = tr.insert_at(line, off + u32::from(r.pos), Item(r.item));
+        }
     }
     cx.despawn(id);
 }

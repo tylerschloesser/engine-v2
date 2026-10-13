@@ -2,7 +2,10 @@
 //! `scripts/gen-assets.mjs`, M51): every belt id (five families of three facings) has
 //! `SPRITE_BELT_FRAMES` frames, size 1 x 1 and pivot [0, 0], and its art is that family's and
 //! facing's (the generator's `name`, `belt/<family>/<facing>`; rows sit in id order); every item square (`SPRITE_ITEM_FIRST + ItemId`) is one frame,
-//! half a tile, centred. Fails if the Rust ids and the generator's layout drift apart.
+//! half a tile, centred, the squares sharing one row; M54: the splitter sprites (`SPRITE_SPLITTER`
+//! east, `+ 1` south, `+ 2` north) follow in rows of their own, `SPRITE_BELT_FRAMES` frames, pivot
+//! [0, 0], 1 x 2 tiles facing east and 2 x 1 facing south and north. Fails if the Rust ids and the
+//! generator's layout drift apart.
 
 use reference_sim::content;
 use serde_json::Value;
@@ -69,6 +72,7 @@ fn sprite_ids_match_the_manifest() {
             last_y = rect[1];
         }
     }
+    let items_row = last_y;
     let items = [
         (content::ItemId::Stone, "stone"),
         (content::ItemId::Iron, "iron"),
@@ -86,11 +90,49 @@ fn sprite_ids_match_the_manifest() {
         assert_eq!(s["frames"], 1, "item sprite {id} frames");
         assert_eq!(nums(&s["size"]), [0.5, 0.5], "item sprite {id} size");
         assert_eq!(nums(&s["pivot"]), [0.5, 0.5], "item sprite {id} pivot");
+        let rect = nums(&s["rect"]);
+        assert!(rect[1] > items_row, "item sprite {id}: below the belts");
+        if item != content::ItemId::Stone {
+            assert_eq!(
+                rect[1], last_y,
+                "item sprite {id}: the squares share one row"
+            );
+        }
+        last_y = rect[1];
+    }
+    assert_eq!(
+        content::SPRITE_SPLITTER,
+        content::SPRITE_ITEM_FIRST + content::ITEM_COUNT as u16,
+        "the splitters follow the items"
+    );
+    for (facing, name, size, px) in [
+        (0u16, "east", [1.0, 2.0], (16.0, 32.0)),
+        (1, "south", [2.0, 1.0], (32.0, 16.0)),
+        (2, "north", [2.0, 1.0], (32.0, 16.0)),
+    ] {
+        let id = content::SPRITE_SPLITTER + facing;
+        let s = sprite(&m, id);
+        assert_eq!(
+            s["name"],
+            format!("splitter/{name}").as_str(),
+            "sprite {id}'s art"
+        );
+        assert_eq!(
+            s["frames"],
+            content::SPRITE_BELT_FRAMES,
+            "sprite {id} frames"
+        );
+        assert_eq!(nums(&s["size"]), size, "sprite {id} size");
+        assert_eq!(nums(&s["pivot"]), [0.0, 0.0], "sprite {id} pivot");
+        let rect = nums(&s["rect"]);
+        assert_eq!((rect[2], rect[3]), px, "sprite {id}: 16 px a tile");
+        assert!(rect[1] > last_y, "sprite {id}: rows in id order");
+        last_y = rect[1];
     }
     let count = m["sprites"].as_object().expect("an object").len();
     assert_eq!(
         count,
-        usize::from(content::SPRITE_ITEM_FIRST) + content::ITEM_COUNT,
+        usize::from(content::SPRITE_SPLITTER) + 3,
         "no other sprite"
     );
 }

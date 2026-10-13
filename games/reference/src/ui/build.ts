@@ -2,8 +2,10 @@
 // two placement flows.
 //
 // The palette is one fixed row (`.build-palette`, bottom centre): the Build button (the furnace
-// tool, shown while the player holds a furnace item or is placing one), then the belt, spawner and
-// despawner tools (free, always shown), then Rotate (shown while a belt tool is on). A tool button
+// tool, shown while the player holds a furnace item or is placing one), then the belt, spawner,
+// despawner and (M54) splitter tools (free, always shown), then Rotate (shown while a belt tool is
+// on; the splitter tool's direction cycles all four, its footprint 1 x 2 facing east or west and 2 x 1
+// facing north or south, anchored at the tapped tile). A tool button
 // turns its tool on, or off when it is already on; Escape ends construction mode; Rotate or the
 // `R` key (a belt tool on) emits `LOCAL.ROTATE_TOOL`. The direction and the tool are `Ui.tool`
 // (`RefClient` keeps them), so a placed belt faces the way the ghost does.
@@ -13,7 +15,7 @@
 // keep panning (0019 section 4). Mouse: a `tap` while placing dispatches `PlaceFurnace` (or
 // `PlaceBelt { at, dir, kind }`) at the tapped tile. Touch: a `tap` moves the engine's cursor tile
 // (the ghost follows it) and shows a Confirm button anchored just below the ghost (the 2x2
-// furnace's or the 1x1 belt's bottom edge); Confirm dispatches. Mouse or touch is the tap's
+// furnace's, the 1x1 belt's or the 2x1 splitter's bottom edge); Confirm dispatches. Mouse or touch is the tap's
 // `pointerType`. A rejection flashes the control that sent the action with the reason as a CSS
 // class (`reject-<reason>`), like a collect button.
 //
@@ -22,7 +24,7 @@
 // world cannot take another building) and the placement rule's own.
 //
 // DOM identity: `.build-palette`; `.build-button` (`data-build`, the furnace tool);
-// `.tool-button` (`data-tool="belt|spawner|despawner"`, `.is-on` while active); `.build-rotate`
+// `.tool-button` (`data-tool="belt|spawner|despawner|splitter"`, `.is-on` while active); `.build-rotate`
 // (`data-build-rotate`, `data-dir` = the page's copy of the direction, see `dir` below); `.build-confirm` (`data-build-confirm="x,y"`);
 // `.build-reason`.
 import type { ActionOutcome, Client } from 'engine'
@@ -41,7 +43,7 @@ export const LOCAL = {
   ROTATE_TOOL: 3,
 } as const
 /** `PLACE_MODE`'s `a` values (`content::local::TOOL_*`). */
-export const TOOL = { OFF: 0, FURNACE: 1, BELT: 2, SPAWNER: 3, DESPAWNER: 4 } as const
+export const TOOL = { OFF: 0, FURNACE: 1, BELT: 2, SPAWNER: 3, DESPAWNER: 4, SPLITTER: 5 } as const
 type ToolCode = (typeof TOOL)[keyof typeof TOOL]
 
 /** The free belt tools, in palette order: `data-tool`, label, `PLACE_MODE` code, `BeltKind`. */
@@ -49,15 +51,31 @@ const BELT_TOOLS = [
   { key: 'belt', label: 'Belt', code: TOOL.BELT, kind: 'Belt' },
   { key: 'spawner', label: 'Spawner', code: TOOL.SPAWNER, kind: 'Spawner' },
   { key: 'despawner', label: 'Despawner', code: TOOL.DESPAWNER, kind: 'Despawner' },
+  { key: 'splitter', label: 'Splitter', code: TOOL.SPLITTER, kind: 'Splitter' },
 ] as const satisfies ReadonlyArray<{ key: string; label: string; code: ToolCode; kind: BeltKind }>
 
-/** Each tool's footprint in tiles (`content::FURNACE_FOOTPRINT`, `BELT_FOOTPRINT`: change together):
- * the touch Confirm sits centred under it, at `(x + w / 2, y + h)`. */
-const FOOTPRINT: Readonly<Record<Exclude<ToolCode, 0>, { w: number; h: number }>> = {
-  [TOOL.FURNACE]: { w: 2, h: 2 },
-  [TOOL.BELT]: { w: 1, h: 1 },
-  [TOOL.SPAWNER]: { w: 1, h: 1 },
-  [TOOL.DESPAWNER]: { w: 1, h: 1 },
+/** Each tool's footprint in tiles by direction (`content::FURNACE_FOOTPRINT`, `belt_footprint`:
+ * change together): the touch Confirm sits centred under it, at `(x + w / 2, y + h)`. Only the
+ * splitter's depends on the direction (1 x 2 facing east or west, 2 x 1 facing north or south). */
+const ONE = { w: 1, h: 1 } as const
+const FOOTPRINT: Readonly<
+  Record<Exclude<ToolCode, 0>, Readonly<Record<Dir, { w: number; h: number }>>>
+> = {
+  [TOOL.FURNACE]: {
+    East: { w: 2, h: 2 },
+    South: { w: 2, h: 2 },
+    West: { w: 2, h: 2 },
+    North: { w: 2, h: 2 },
+  },
+  [TOOL.BELT]: { East: ONE, South: ONE, West: ONE, North: ONE },
+  [TOOL.SPAWNER]: { East: ONE, South: ONE, West: ONE, North: ONE },
+  [TOOL.DESPAWNER]: { East: ONE, South: ONE, West: ONE, North: ONE },
+  [TOOL.SPLITTER]: {
+    East: { w: 1, h: 2 },
+    South: { w: 2, h: 1 },
+    West: { w: 1, h: 2 },
+    North: { w: 2, h: 1 },
+  },
 }
 
 /** `Dir::cw` (`ROTATE_TOOL`'s turn) and the arrow the Rotate button shows for each direction. */
@@ -210,7 +228,16 @@ export function createBuildUi(client: Client, doc: Document = document): BuildUi
     if (beltKindOf(tool) === null) return
     if (!client.input.emit(LOCAL.ROTATE_TOOL, 0)) return
     dir = CW[dir]
+    // A splitter's footprint turns with the direction: its Confirm follows the ghost's bottom edge.
+    if (touchTile !== null) anchorConfirm(touchTile)
     render()
+  }
+
+  /** Puts the touch Confirm centred under the tool's footprint anchored at `at` (for `dir`). */
+  function anchorConfirm(at: { x: number; y: number }): void {
+    if (tool === TOOL.OFF) return
+    const fp = FOOTPRINT[tool][dir]
+    anchor.set(at.x + fp.w / 2, at.y + fp.h)
   }
 
   function hideConfirm(): void {
@@ -263,10 +290,9 @@ export function createBuildUi(client: Client, doc: Document = document): BuildUi
     if (tool === TOOL.OFF) return
     if (e.pointerType === 'touch') {
       // The engine has already moved its cursor tile here (the ghost follows); the Confirm button
-      // sits at the bottom edge of the ghost (2x2 furnace, 1x1 belt), centred on it.
+      // sits at the bottom edge of the ghost (2x2 furnace, 1x1 belt, 2x1 splitter), centred on it.
       touchTile = { x: e.tileX, y: e.tileY }
-      const fp = FOOTPRINT[tool]
-      anchor.set(e.tileX + fp.w / 2, e.tileY + fp.h)
+      anchorConfirm(touchTile)
       confirm.dataset.buildConfirm = `${e.tileX},${e.tileY}`
       confirm.hidden = false
     } else {

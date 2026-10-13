@@ -105,9 +105,11 @@ fn belt_frame(view: &FrameView<'_, RefGame>) -> f32 {
 
 /// The sprite and `FLIP_X` for a belt of `kind` and `shape` facing `dir` (`content::SPRITE_BELT_*`):
 /// east, south and north have their own sprites; west is east mirrored, which swaps a curve's side.
-/// Spawners and despawners draw their own straight sprite whatever the shape.
+/// Spawners and despawners draw their own straight sprite whatever the shape; a splitter (M54) its
+/// 2x1 sprite (`content::SPRITE_SPLITTER`, drawn at the footprint's min corner).
 pub fn belt_sprite(kind: BeltKind, shape: BeltShape, dir: Dir) -> (u16, bool) {
     let (east, west) = match (kind, shape) {
+        (BeltKind::Splitter, _) => (content::SPRITE_SPLITTER, content::SPRITE_SPLITTER),
         (BeltKind::Spawner, _) => (content::SPRITE_BELT_SPAWNER, content::SPRITE_BELT_SPAWNER),
         (BeltKind::Despawner, _) => (
             content::SPRITE_BELT_DESPAWNER,
@@ -389,6 +391,7 @@ impl RefClient {
                 local::TOOL_BELT => Some(Tool::Belt(BeltKind::Belt)),
                 local::TOOL_SPAWNER => Some(Tool::Belt(BeltKind::Spawner)),
                 local::TOOL_DESPAWNER => Some(Tool::Belt(BeltKind::Despawner)),
+                local::TOOL_SPLITTER => Some(Tool::Belt(BeltKind::Splitter)),
                 _ => return,
             };
             self.placing.set(tool);
@@ -436,10 +439,16 @@ impl RefClient {
                     self.open = Some(o);
                     return;
                 }
-                // A belt being picked up (M52) is gone for the player: the tap finds nothing.
-                RefEntity::Belt(b) if o.x == tx && o.y == ty && !b.removing => {
-                    self.belt = Some(o);
-                    return;
+                // A belt being picked up (M52) is gone for the player: the tap finds nothing. A
+                // splitter (M54) is found by either tile of its footprint and keyed by its anchor.
+                RefEntity::Belt(b) if !b.removing => {
+                    let fp = content::belt_footprint(b.kind, b.dir);
+                    if (o.x..o.x + fp.w as i32).contains(&tx)
+                        && (o.y..o.y + fp.h as i32).contains(&ty)
+                    {
+                        self.belt = Some(o);
+                        return;
+                    }
                 }
                 _ => {}
             }
@@ -706,14 +715,18 @@ impl ClientSide<RefGame> for RefClient {
         // The ghost: only in construction mode with a cursor tile. `pos` is relative to the cursor
         // tile (`ANCHOR_CURSOR_TILE`), so it tracks the pointer with no added latency. The furnace's
         // is a quad (its pos is its centre, so a 2x2 footprint whose min corner is the cursor tile
-        // centres at (1, 1)); a belt's is its sprite in the construction direction, tinted (M51).
+        // centres at (1, 1)); a belt's is its sprite in the construction direction, tinted (M51); a
+        // splitter's (M54) is its 2x1 sprite for the direction, its footprint's min corner at the
+        // cursor tile, tinted by `can_place` over that footprint.
         // The colour is the same `can_place` the host runs, over the `View`.
         if let Some(tool) = self.placing.get()
             && let Some(cursor) = view.cursor_tile()
         {
             let verdict = match tool {
                 Tool::Furnace => crate::rules::place::can_place_furnace(view.world(), cursor),
-                Tool::Belt(_) => crate::rules::place::can_place_belt(view.world(), cursor),
+                Tool::Belt(kind) => {
+                    crate::rules::place::can_place_belt_kind(view.world(), cursor, self.dir, kind)
+                }
             };
             let color = match verdict {
                 Ok(true) => GHOST_VALID,

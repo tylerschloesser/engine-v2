@@ -10,7 +10,7 @@
 use engine::game::{PlayerId, Unknown, WorldRead, WorldWrite};
 use engine::world::{Footprint, TilePos, TraitSet};
 
-use crate::{Furnace, RefEntity, RefGame, RefReject, TileXY, content};
+use crate::{BeltKind, Dir, Furnace, RefEntity, RefGame, RefReject, TileXY, content};
 
 /// Whether no tile of the `footprint` anchored at `origin` carries any bit of `forbidden`.
 /// `Err(Unknown)` when a footprint tile the verdict depends on is outside the reader's held chunks
@@ -44,9 +44,26 @@ pub fn can_place_furnace(w: &dyn WorldRead<RefGame>, origin: TilePos) -> Result<
     )
 }
 
-/// [`can_place`] for a belt of any kind: one tile, [`content::BELT_FORBIDS`] (no resource).
+/// [`can_place`] for a one-tile belt (a belt, spawner or despawner): [`content::BELT_FORBIDS`] (no
+/// resource).
 pub fn can_place_belt(w: &dyn WorldRead<RefGame>, at: TilePos) -> Result<bool, Unknown> {
     can_place(w, at, content::BELT_FOOTPRINT, content::BELT_FORBIDS)
+}
+
+/// [`can_place`] for a belt of `kind` facing `dir` anchored at `origin`: its footprint
+/// ([`content::belt_footprint`]: a splitter's 2x1 across `dir`, M54) and [`content::BELT_FORBIDS`].
+pub fn can_place_belt_kind(
+    w: &dyn WorldRead<RefGame>,
+    origin: TilePos,
+    dir: Dir,
+    kind: BeltKind,
+) -> Result<bool, Unknown> {
+    can_place(
+        w,
+        origin,
+        content::belt_footprint(kind, dir),
+        content::BELT_FORBIDS,
+    )
 }
 
 /// `apply(PlaceFurnace)`: validate (a furnace item, then [`can_place_furnace`]), then `spawn` and one

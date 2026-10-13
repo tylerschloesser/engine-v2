@@ -3,5 +3,8 @@
 /**
  * What a belt tile is (README "Belts", Spawner and despawner): a plain belt, a spawner (creates
  * its configured items at its back end, M53) or a despawner (deletes what would leave its front).
+ * M54: a splitter (README "Belts", Splitters), the one 2x1 kind: its `origin` is the footprint's
+ * min corner (`content::belt_footprint`), its halves are derived from `dir`
+ * (`rules::belts::topology::splitter_halves`), and its `shape` and `spawn` are unused.
  */
-export type BeltKind = "Belt" | "Spawner" | "Despawner";
+export type BeltKind = "Belt" | "Spawner" | "Despawner" | "Splitter";

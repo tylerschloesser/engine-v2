@@ -32,8 +32,9 @@ export const LANDMARKS = landmarks as {
   resources: Record<Resource, Tile>
 }
 
-/** `Dir::cw` (`RotateBelt`'s turn). */
+/** `Dir::cw` (`RotateBelt`'s turn); a splitter turns 180 degrees (M54). */
 const CW = { East: 'South', South: 'West', West: 'North', North: 'East' } as const
+const OPPOSITE = { East: 'West', South: 'North', West: 'East', North: 'South' } as const
 
 /** Two free 2x2 origins of land, two tiles apart (a rejected `PlaceFurnace` fails the script). Both
  * footprints sit inside chunk (-1, 0)'s rows 1 to 4: a furnace straddling a chunk boundary (origin
@@ -99,7 +100,8 @@ export class Script {
   placeBelt(at: Tile, dir: Dir, kind: BeltKind = 'Belt'): this {
     return this.add({ op: 'placeBelt', at, dir, kind })
   }
-  /** M51b: turns the belt at `at` clockwise; waits for the host's ack. */
+  /** M51b: turns the belt at `at` clockwise (M54: a splitter, addressed by either tile, 180
+   * degrees); waits for the host's ack. */
   rotateBelt(at: Tile): this {
     return this.add({ op: 'rotateBelt', at })
   }
@@ -257,7 +259,9 @@ export async function runScript(
  * line mapped onto transport lines (a 3-tile east run, a curve turning north, a 2-tile north run and
  * a feeder side-loading into it from the east; the feeder turned north, no longer feeding, then the
  * run's middle tile picked up, splitting it), then (M53b) a spawner filling a dead-ended run, picked
- * up, and a despawner draining the run, picked up in turn, and, since the belt tools and taps closed it, the last
+ * up, and a despawner draining the run, picked up in turn, then (M54) a spawner splitting through a
+ * splitter onto two dead-ended belts, the spawner picked up, the splitter turned 180 degrees (its
+ * items destroyed) and picked up, and, since the belt tools and taps closed it, the last
  * furnace's panel opened again (what `reference_full_game_single` reads at the end). Ends quiescent:
  * no timer, no craft, no collect, no spawner, no item moving, so the state hash does not depend on
  * how many ticks the run took. */
@@ -339,6 +343,22 @@ export function fullGame(): Script {
       .waitTicks(60)
       .pickUpBelt({ x: SPAWNER_RUN.x + 3, y: SPAWNER_RUN.y })
       .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1), belt: null })
+      // M54: a saturated spawner (iron, lane 0) behind the splitter's left (north) half, a belt in
+      // front of each half dead-ending at x = 6; the fork alternates the items onto both. The
+      // spawner is picked up, the rest comes to rest (the trip is 22 ticks), the splitter is turned
+      // 180 degrees (its items destroyed) and picked up: the two belts keep theirs at rest.
+      .panTo(SPLITTER_STAND)
+      .placeBelt(SPLITTER_FEED, 'East', 'Spawner')
+      .placeBelt(SPLITTER_AT, 'East', 'Splitter')
+      .placeBelt({ x: SPLITTER_AT.x + 1, y: SPLITTER_AT.y }, 'East')
+      .placeBelt({ x: SPLITTER_AT.x + 1, y: SPLITTER_AT.y + 1 }, 'East')
+      .setSpawner(SPLITTER_FEED, 0, 'iron', 3)
+      .waitTicks(60)
+      .pickUpBelt(SPLITTER_FEED)
+      .waitTicks(40)
+      .rotateBelt(SPLITTER_AT)
+      .pickUpBelt(SPLITTER_AT)
+      .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1), belt: null })
       .panTo(standBy(B))
       .openFurnace(B)
   )
@@ -354,6 +374,14 @@ export const BELTS_STAND: Tile = { x: 4, y: -10 }
  * popover too, and no resource within collect range). */
 export const SPAWNER_RUN: Tile = { x: 2, y: -16 }
 export const SPAWNER_STAND: Tile = { x: 4, y: -13 }
+
+/** M54: `fullGame()`'s splitter passage: the spawner at (3, -23), the splitter's anchor (its north
+ * half; facing east it covers (4, -23) and (4, -22)), the two belts at x = 5 (rows -23 and -22 are
+ * free land there at `world.json`'s seed), and the stand (in view, no resource within collect
+ * range: the nearest, (8, -20), is 3.2 tiles off). */
+export const SPLITTER_FEED: Tile = { x: 3, y: -23 }
+export const SPLITTER_AT: Tile = { x: 4, y: -23 }
+export const SPLITTER_STAND: Tile = { x: 5, y: -21 }
 
 // ---------------------------------------------------------------------------------------------
 // Headless driver
@@ -613,7 +641,9 @@ export async function domDriver(page: Page): Promise<ScriptDriver> {
     },
     async placeBelt(at, dir, kind) {
       // The palette: the tool, Rotate until the ghost faces `dir`, a mouse tap, then Escape.
-      const tool = ({ Belt: 'belt', Spawner: 'spawner', Despawner: 'despawner' } as const)[kind]
+      const tool = (
+        { Belt: 'belt', Spawner: 'spawner', Despawner: 'despawner', Splitter: 'splitter' } as const
+      )[kind]
       let ui = await g.pickTool(page, tool)
       for (let i = 0; i < 4 && ui?.tool?.dir !== dir; i++) {
         const was = ui?.tool?.dir
@@ -631,11 +661,14 @@ export async function domDriver(page: Page): Promise<ScriptDriver> {
     },
     // A placed belt: a tap opens its popover (`src/ui/belt.ts`), then Rotate or Pick up.
     async rotateBelt(at) {
-      const was = (await openBelt(at))?.belt?.dir
+      const open = (await openBelt(at))?.belt
+      const was = open?.dir
       await page.locator('[data-belt-rotate]').click()
       await untilBelts('RotateBelt landed', () => true)
       const now = await g.pumpUntil(page, (u) => u?.belt?.dir !== was)
-      expect(now?.belt?.dir, 'turned clockwise').toBe(CW[was ?? 'East'])
+      // A belt turns clockwise, a splitter 180 degrees in place (M54).
+      const turn = open?.kind === 'Splitter' ? OPPOSITE : CW
+      expect(now?.belt?.dir, 'turned').toBe(turn[was ?? 'East'])
     },
     async pickUpBelt(at) {
       await openBelt(at)

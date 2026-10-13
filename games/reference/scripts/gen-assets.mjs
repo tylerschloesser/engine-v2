@@ -82,7 +82,10 @@ const RESOURCES = [
 // atlas row. Id 0, the 2x2-tile furnace: two frames (idle, lit). Ids 1-15 (M51), the belts: five
 // families (straight, curve left, curve right, spawner, despawner) of three facings (east, south,
 // north; the game mirrors east for west), 1 x 1 tile, 8 frames whose lane marks advance 1/8 tile a
-// frame. Ids 16-21 (M51), the item squares (`ItemId` order), half a tile, centred. All art is fully
+// frame. Ids 16-21 (M51), the item squares (`ItemId` order), half a tile, centred. Ids 22-24 (M54),
+// the splitter facing east (1 x 2 tiles), south and north (2 x 1): two straight belt halves under a
+// housing across the midline, 8 frames, pivot at the footprint's min corner; symmetric between the
+// halves, so west is east mirrored. All art is fully
 // opaque (the sprite pipeline's blend is straight alpha over a premultiplied atlas, which is only
 // exact for alpha 255: M17b Deviations).
 const SPRITE_PAD_PX = 2
@@ -96,6 +99,8 @@ const BELT_FAMILIES = ['straight', 'curveLeft', 'curveRight', 'spawner', 'despaw
 const BELT_FACINGS = ['east', 'south', 'north']
 const SPRITE_BELT_FIRST = 1
 const SPRITE_ITEM_FIRST = 16
+const SPRITE_SPLITTER_FIRST = 22
+const SPLITTER_FACINGS = ['east', 'south', 'north']
 // Item names and square colours in `ItemId` order.
 const ITEM_NAMES = ['stone', 'iron', 'wood', 'coal', 'furnace', 'ingot']
 const ITEM_COLORS = [
@@ -136,6 +141,8 @@ const BELT_MARK = [210, 200, 120]
 const BELT_CORNER = [60, 60, 66] // a curve's tile outside its arc
 const SPAWNER_MARK = [70, 200, 90]
 const DESPAWNER_MARK = [220, 70, 60]
+const SPLITTER_HOUSING = [64, 92, 140]
+const SPLITTER_EDGE = [36, 52, 84]
 
 // A belt pixel in the belt's own travel frame: `along` (0..16, the back edge to the front edge) and
 // `across` (0..16, the left side of travel to the right), or `null` outside a curve's arc.
@@ -181,6 +188,30 @@ function beltPixel(family, facing, frame, x, y) {
   }
   if (Math.abs(across - BELT_PX / 2) < 0.5) return BELT_DIVIDER
   return BELT_BASE
+}
+
+// One splitter pixel facing `facing` (frame `frame`), in its own east-facing frame `(u, v)`: `u`
+// along travel (0..16), `v` across both halves (0..32, the left half first). Each half is a
+// straight belt; a housing bar crosses both halves at the midline (`u` 6..10), its rim darker.
+function splitterPixel(facing, frame, x, y) {
+  const W = 2 * BELT_PX
+  const px = x + 0.5
+  const py = y + 0.5
+  let u = px
+  let v = py
+  if (facing === 'south') {
+    u = py
+    v = W - px
+  } else if (facing === 'north') {
+    u = BELT_PX - py
+    v = px
+  }
+  if (u >= 6 && u < 10) {
+    return u < 7 || u >= 9 || v < 1 || v >= W - 1 ? SPLITTER_EDGE : SPLITTER_HOUSING
+  }
+  // The half's own across (0..16): the lanes, rails and divider of a straight belt.
+  const across = v < BELT_PX ? v : v - BELT_PX
+  return beltPixel('straight', 'east', frame, Math.floor(u), Math.floor(across))
 }
 
 /** A bordered flat item square, `ITEM_PX` on a side. */
@@ -235,6 +266,20 @@ function spriteDefs() {
       // Centred on the lane point the engine draws an item at (`transport::draw::draw_items`).
       pivot: [0.5, 0.5],
       size: [0.5, 0.5],
+    })
+  })
+  SPLITTER_FACINGS.forEach((facing, di) => {
+    const across = facing === 'east'
+    defs.push({
+      id: SPRITE_SPLITTER_FIRST + di,
+      name: `splitter/${facing}`,
+      frameW: across ? BELT_PX : 2 * BELT_PX,
+      frameH: across ? 2 * BELT_PX : BELT_PX,
+      frames: BELT_FRAMES,
+      pixel: (f, x, y) => splitterPixel(facing, f, x, y),
+      // The footprint's min corner (`Belt::origin`).
+      pivot: [0, 0],
+      size: across ? [1, 2] : [2, 1],
     })
   })
   return defs

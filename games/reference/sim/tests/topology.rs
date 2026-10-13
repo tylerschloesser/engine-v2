@@ -545,9 +545,9 @@ fn topology_surgery_count_per_edit() {
 }
 
 /// The incremental mapping equals the from-scratch one (`RefScenario::assert_topology`) after every
-/// tick of 1,500 random edits on an 8 x 8 patch (a fixed LCG): placements, rotations and pick-ups,
-/// one to three in a tick (two edits on neighbouring tiles, or on one tile, served by the same
-/// tick). Fails if any reshape, cut or join leaves a run, a curve, an output or a shape behind what
+/// tick of 1,500 random edits on an 8 x 8 patch (a fixed LCG): placements (M54: one in four a
+/// splitter; 417 placed, 65 of them splitters), rotations and pick-ups, one to three in a tick (two
+/// edits on neighbouring tiles, or on one tile, served by the same tick). Fails if any reshape, cut or join leaves a run, a curve, an output or a shape behind what
 /// the belts say, or leaks a line.
 #[test]
 fn topology_random_edits_stay_canonical() {
@@ -559,7 +559,7 @@ fn topology_random_edits_stay_canonical() {
             .wrapping_add(1_442_695_040_888_963_407);
         ((seed >> 33) % u64::from(n)) as u32
     };
-    let (mut placed, mut rotated, mut picked) = (0, 0, 0);
+    let (mut placed, mut rotated, mut picked, mut splitters) = (0, 0, 0, 0);
     for tick in 0..1_500 {
         let mut batch = Vec::new();
         for _ in 0..1 + next(3) {
@@ -568,10 +568,15 @@ fn topology_random_edits_stay_canonical() {
                 y: 50 + next(8) as i32,
             };
             batch.push(match next(5) {
+                // M54: one placement in four is a splitter (its footprint from `at`).
                 0 | 1 => reference_sim::RefAction::PlaceBelt {
                     at,
                     dir: DIRS[next(4) as usize],
-                    kind: BeltKind::Belt,
+                    kind: if next(4) == 0 {
+                        BeltKind::Splitter
+                    } else {
+                        BeltKind::Belt
+                    },
                 },
                 2 | 3 => reference_sim::RefAction::RotateBelt { at },
                 _ => reference_sim::RefAction::PickUpBelt { at },
@@ -580,7 +585,10 @@ fn topology_random_edits_stay_canonical() {
         for (a, r) in batch.iter().zip(s.dispatch_batch(P1, &batch)) {
             if r.is_ok() {
                 match a {
-                    reference_sim::RefAction::PlaceBelt { .. } => placed += 1,
+                    reference_sim::RefAction::PlaceBelt { kind, .. } => {
+                        placed += 1;
+                        splitters += usize::from(*kind == BeltKind::Splitter);
+                    }
                     reference_sim::RefAction::RotateBelt { .. } => rotated += 1,
                     _ => picked += 1,
                 }
@@ -590,8 +598,8 @@ fn topology_random_edits_stay_canonical() {
         s.assert_topology();
     }
     assert!(
-        placed > 300 && rotated > 300 && picked > 100,
-        "the edits ran: {placed} placed, {rotated} rotated, {picked} picked up"
+        placed > 300 && rotated > 300 && picked > 100 && splitters > 0,
+        "the edits ran: {placed} placed ({splitters} splitters), {rotated} rotated, {picked} picked up"
     );
 }
 
