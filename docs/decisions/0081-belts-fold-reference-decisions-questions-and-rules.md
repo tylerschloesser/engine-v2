@@ -36,7 +36,7 @@ The numbers are `PROMPT.md`'s batch of 2026-10-11 to 2026-10-13 (a series of its
 - **Question 12: a placed splitter rotates 180° in place** (built, M54).
 - **Question 13: a spawner accepts no input from any side; a rotated spawner restarts at zero credit; configuring one lane resets the other lane's credit by at most one period** (built, M53b).
 - **Question 14: rotating an underground turns that end only and unpairs it; perpendicular undergrounds are transparent to pairing; a broken pair destroys the hidden items** (built, M55; Factorio turns both ends).
-- **Question 15: the shipped world's transport caps** (M57): the recommended caps if the iPhone holds `?bench=belts` with no growth and no reload, else the phone pair of 0079 §21. Open: the phone was not on the cable at M57's gate; the recommended caps stand (default) until the `M57-belts-memory` row is walked; the answer lands as a 0080 amendment.
+- **Question 15: the shipped world's transport caps** (M57): the recommended caps if the iPhone holds `?bench=belts` with no growth and no reload, else the phone pair of 0079 §21. The phone was not on the cable at M57's gate; the row was walked on 2026-10-13 and the question closed on the recommended caps (0080's amendment of that date).
 
 Told, not asked: old saves refuse to load at every belts schema bump (0079 §6); belts are opt-in by caps (0079 §5); the host and replica reservations at the recommended caps are 0079 §21's; a packed loop through a splitter spreads at its cut (0079 §11, §23 (a)).
 

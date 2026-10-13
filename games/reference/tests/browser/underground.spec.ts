@@ -149,4 +149,28 @@ test('reference_underground_palette_fits_a_phone', async ({ page }) => {
     expect(box.x, `${text}: left edge`).toBeGreaterThanOrEqual(0)
     expect(box.x + box.width, `${text}: right edge`).toBeLessThanOrEqual(390)
   }
+  // M57-palette-look (iPhone 12, 2026-10-13): the refusal line, fixed 36 px from the bottom, sat on
+  // the first of the two wrapped rows. Shown with its real `NotBuildable` text (the line's own
+  // `showReason` path is `belt-construction.spec.ts`'s), it must overlap no button and stay inside
+  // the viewport.
+  await page.evaluate(() => {
+    const line = document.querySelector<HTMLElement>('.build-reason')
+    if (line === null) throw new Error('no .build-reason')
+    line.hidden = false
+    line.textContent = 'Cannot build there.'
+  })
+  const reason = await page.locator('.build-reason').boundingBox()
+  if (reason === null) throw new Error('the refusal line has a box')
+  expect(reason.x, 'refusal: left edge').toBeGreaterThanOrEqual(0)
+  expect(reason.x + reason.width, 'refusal: right edge').toBeLessThanOrEqual(390)
+  for (const b of await buttons.all()) {
+    const box = await b.boundingBox()
+    if (box === null) throw new Error('a visible button has a box')
+    const apart =
+      box.x + box.width <= reason.x ||
+      reason.x + reason.width <= box.x ||
+      box.y + box.height <= reason.y ||
+      reason.y + reason.height <= box.y
+    expect(apart, `${await b.textContent()}: clear of the refusal line`).toBe(true)
+  }
 })

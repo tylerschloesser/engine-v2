@@ -170,7 +170,10 @@ function installBuildStyles(doc: Document): void {
     '  cursor: pointer;',
     '  white-space: nowrap;',
     '}',
-    '.build-reason { position: fixed; left: 8px; bottom: 36px; z-index: 5; padding: 2px 8px;',
+    // M57-palette-look (iPhone 12, 2026-10-13): fixed at `bottom: 36px` the line sat on the first
+    // of the palette's two wrapped rows. It is the palette's own first row instead: full width, so
+    // it always sits above every button and never overlaps one, whatever the wrap.
+    '.build-reason { flex-basis: 100%; text-align: center; margin-bottom: 2px; padding: 2px 8px;',
     '  border-radius: 4px; background: #a33; color: #fff; font: 11px sans-serif; }',
     '.build-reason[hidden] { display: none; }',
     '.build-button.is-on, .tool-button.is-on { background: #264; }',
@@ -208,12 +211,10 @@ export function createBuildUi(client: Client, doc: Document = document): BuildUi
   const rotate = el('button', 'build-rotate')
   rotate.dataset.buildRotate = ''
   rotate.hidden = true
-  palette.append(button, ...toolButtons, rotate)
-  doc.body.appendChild(palette)
-
   const reasonLine = el('div', 'build-reason')
   reasonLine.hidden = true
-  doc.body.appendChild(reasonLine)
+  palette.append(reasonLine, button, ...toolButtons, rotate)
+  doc.body.appendChild(palette)
 
   const confirm = el('button', 'build-confirm')
   confirm.textContent = 'Confirm'
