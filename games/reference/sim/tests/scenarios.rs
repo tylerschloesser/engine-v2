@@ -336,7 +336,12 @@ fn run_edits(b: &mut Bed) -> Vec<u64> {
 /// Edits during flow on the balancer ([`run_edits`]): every edit keeps the topology canonical
 /// (`assert_topology` after each) and conservation exact after every tick with the destroyed items
 /// counted: 16 on splitter c's eight lines, the entrance's turns 44, 1, 16 and 5 (its own items and
-/// its hidden lines' when the pair breaks), the belt's 8, 7, 0 and 7. The layout is whole again at
+/// its hidden lines' when the pair breaks), the belt's none (M59: its four turns keep the 8, 9, 9 and
+/// 10 items on its two lanes; before M59 they destroyed 8, 7, 0 and 7). Those 22 items no longer
+/// destroyed move the ledger at tick 1,023 from made 2,880 / sunk 2,513 / destroyed 104 to 2,868 /
+/// 2,523 / 82 (live 263 either way): 10 more sunk on the two outputs the belt feeds (303 + 302 and
+/// 304 + 303 become 306 + 305 twice) and 12 fewer made (the kept items hold the feed back where the
+/// destroyed ones left room). The layout is whole again at
 /// the end (tick 1,023) and its outputs sink again. The host's hash is the same across
 /// `save_and_load` and the restored ledger still balances (the lines, `sunk` and hidden lines come
 /// back), and the snapshot restored as a host restores it (with the world's caps, through
@@ -350,23 +355,23 @@ fn edit_during_flow() {
     let destroyed = run_edits(&mut b);
     assert_eq!(
         destroyed,
-        [16, 16, 60, 61, 77, 82, 90, 97, 97, 104],
+        [16, 16, 60, 61, 77, 82, 82, 82, 82, 82],
         "destroyed after each edit"
     );
     let outs = l.tiles_of(O, BeltKind::Despawner);
     let end: Vec<[u64; 2]> = outs.iter().map(|&d| sunk(&b, d)).collect();
     assert_eq!(
         end,
-        [[303, 302], [304, 303], [325, 326], [325, 325]],
+        [[306, 305], [306, 305], [325, 326], [325, 325]],
         "sunk per output at tick 1,023"
     );
     assert_eq!(
         b.check(),
         common::census::Census {
-            made: 2_880,
+            made: 2_868,
             live: 263,
-            sunk: 2_513,
-            destroyed: 104
+            sunk: 2_523,
+            destroyed: 82
         }
     );
     let restored = b.s.replay_restored(200);
@@ -379,10 +384,10 @@ fn edit_during_flow() {
     assert_eq!(
         b.check(),
         common::census::Census {
-            made: 3_480,
+            made: 3_468,
             live: 263,
-            sunk: 3_113,
-            destroyed: 104
+            sunk: 3_123,
+            destroyed: 82
         },
         "the uninterrupted ledger at tick 1,223"
     );
@@ -438,9 +443,10 @@ fn ring_moves(b: &mut Bed, rings: &[Vec<LineId>; 2], n: u32) -> [(u32, u32); 2] 
 /// make nothing more (168 made, constant over the next 200 ticks: they are blocked). The full ring
 /// is not still: it rotates rigidly at belt speed (0079 §11's cut rule), every item moving exactly
 /// 24 along the ring every tick (82 x 200 and 70 x 200 moves, none other). Then the edits: the top
-/// run's first tile turned south (its 8 items destroyed, the ring cut), picked up 20 ticks later
-/// (7 more) and re-placed facing east 20 ticks after that; the feeders refill the ring (15 more
-/// made) to the same 82 and 70, rotating again. Conservation after every tick with the destroys,
+/// run's first tile turned south (the ring cut; M59: its 8 items kept, 4 a lane, where they were
+/// destroyed before), picked up 20 ticks later (the 9 then on it destroyed, 5 and 4; 7 before M59,
+/// 15 in all) and re-placed facing east 20 ticks after that; the feeders refill the ring (9 more
+/// made, 15 before M59) to the same 82 and 70, rotating again. Conservation after every tick with the destroys,
 /// `assert_topology` after each edit, no pair closer than `SPACING` on the ring's lines or across
 /// their hand-offs in any of the 1,000 ticks after the re-placement (the overfull fallback never
 /// squashes a pair) and no cut fallback. Fails if a full ring holds or slips, a feeder overfills
@@ -491,7 +497,7 @@ fn ring_saturated_holds() {
         .expect("place");
     b.s.assert_topology();
     destroyed.push(b.check().destroyed);
-    assert_eq!(destroyed, [8, 15, 15], "destroyed after each edit");
+    assert_eq!(destroyed, [0, 9, 9], "destroyed after each edit");
     let rings = ring_lanes(&b, lanes(&b, top));
     let mut short = Vec::new();
     for _ in 0..1_000 {
@@ -506,10 +512,10 @@ fn ring_saturated_holds() {
     assert_eq!(
         b.check(),
         common::census::Census {
-            made: 183,
+            made: 177,
             live: 168,
             sunk: 0,
-            destroyed: 15
+            destroyed: 9
         }
     );
     assert_eq!(b.s.transport_store().cut_fallbacks(), 0, "no cut fallback");

@@ -16,7 +16,7 @@
 //! is always straight, a belt pointing into it dead-ends, and it is never joined into a run: its two
 //! lines are its own, linked to its front by its output like a curve's. The tick sets each lane
 //! line's engine schedule from `Belt.spawn` whenever the tile's lines are (re)created (both lanes)
-//! or a `SetSpawner` woke it (both lanes again), and nothing per insert (0079
+//! or a `SetSpawner` or a rotation woke it (both lanes again), and nothing per insert (0079
 //! §19 (e)). A despawner feeds nothing: its lines end in `Output::Sink` whatever stands in front
 //! ([`Link::Sink`]), it never joins the run in front (it is always a run's front) and it is no input
 //! of the tile in front; it takes inputs, curves and side-loads like a plain belt.
@@ -75,6 +75,22 @@
 //! and plus 64 for the other (README Side-loading). Curves are never joined into a run, so `join`
 //! never closes a cycle (a loop keeps its curve links as `Next`, 0079 §11).
 //!
+//! **Rotation** (M59, Tyler's 2026-10-13 answer to question 10, README "Belts": rotating keeps the
+//! items, as Factorio does). A tile whose lines are a run or a curve before and after a rotation
+//! (plain belts, spawners and despawners) keeps its two lines: `cut` takes it out of its run, then
+//! [`reshape`] `rescale`s each lane to its new length (items at `floor(pos x new / old)`) and lays it
+//! along the new direction with `set_segments`; lane `k` stays lane `k` (the belt's left stays its
+//! left). The kept ids last only until the join phase: a rotated tile that becomes a run joining
+//! the run in front has its items moved into the front line by `join`, which destroys the back one
+//! (nothing is lost, but a line id is not stable across a join). A rotated spawner's schedules
+//! restart at zero credit (question 13), as after a `SetSpawner`. **Fallback**: if a `rescale` is refused (`NoRoom`: two items would share a position
+//! after the squash), the tile's lines are destroyed and re-created as before M59, their items
+//! counted in [`belts_destroyed_items`]. Rare: items `SPACING` apart squash at worst to 22 (295 ->
+//! 106), and only a squashed pair held at rest through many more rescales (each may lose a position
+//! to rounding) can come within the 2 positions a 295 -> 106 or 256 -> 106 squash collides; the unit
+//! test builds such a pair with the engine's own surgery. Splitters (180 degrees) and underground
+//! ends keep re-creating their lines on a rotation (their items destroyed).
+//!
 //! **Run boundaries.** A run is at most [`MAX_LINE_TILES`] (4,096) tiles, the most one line's path
 //! may enter: a tile that would make a run longer starts the next run, linked by `Next` like a curve.
 //!
@@ -91,9 +107,8 @@
 //! **The mapping** ([`on_wake`]) runs in the tick only (`apply` cannot write transport). For a woken
 //! tile P it reconciles P and its four neighbours (every tile whose inputs, shape or run membership P
 //! can change), in phases: cut (split runs where a tile must leave or change form), reform (destroy
-//! a tile's lines when its belt is gone, create or extend them for a new belt, rescale for a straight
-//! <-> curve reshape keeping items, destroy and re-create for a rotation: its items are destroyed,
-//! Tyler's question 10 default), join (`set_out(Next)` then `join` for neighbours of one run), outputs
+//! a tile's lines when its belt is gone, create or extend them for a new belt, rescale them keeping
+//! their items for a reshape or a rotation, see **Rotation**), join (`set_out(Next)` then `join` for neighbours of one run), outputs
 //! (every live belt within two tiles of P whose line it fronts: its output is a function of its front
 //! tile, whose shape P can change), shapes (one `put_entity` per changed shape) and, for a `removing`
 //! belt, the despawn. Every op that changes a line's `len` is followed by `set_segments` on that line,
@@ -178,8 +193,8 @@ pub fn spawners_unscheduled() -> u64 {
     0
 }
 
-/// Items this module's `destroy`s removed from the world on this thread (M56: a rotation's, a
-/// pick-up's, a re-pairing's and a splitter's or underground's lines, and a pair a full cap left
+/// Items this module's `destroy`s removed from the world on this thread (M56: a refused rotation's
+/// (M59), a pick-up's, a re-pairing's and a splitter's or underground's lines, and a pair a full cap left
 /// unfinished), so a test's conservation reads made = live + sunk + destroyed exactly
 /// (`debug_assertions` only; 0 otherwise, like [`belts_unmapped`]).
 pub fn belts_destroyed_items() -> u64 {
@@ -961,8 +976,9 @@ fn run_pair(tr: Tx<'_>, lane: [LineId; 2], front: TilePos, dir: Dir, tiles: u32)
     register(tr, lane, segs, tiles)
 }
 
-/// Destroys a tile's lines (pick-up and rotation destroy the tile's items); an underground
-/// entrance's hidden lines first (M55: else they would leak, reached from nothing).
+/// Destroys a tile's lines (a pick-up, an underground end's rotation and a refused rotation's
+/// rescale destroy the tile's items); an underground entrance's hidden lines first (M55: else they
+/// would leak, reached from nothing).
 fn destroy(tr: Tx<'_>, m: Mapped) {
     if let Form::Underground(_, End::In) = m.form {
         for h in hidden_of(tr, m.lane).into_iter().flatten() {
@@ -1134,7 +1150,9 @@ pub fn on_wake(cx: &mut TickCx<'_, RefGame>, id: EntityId, belt: Belt) {
         && let Some(m) = mapped(tr, p)
         && before == Some(m.lane)
     {
-        // Lines kept: a `SetSpawner` woke it (lines `reform` re-created were scheduled there).
+        // Lines kept: a `SetSpawner` or a rotation (M59: its lines rescaled, items kept) woke it;
+        // both restart the schedules at zero credit (question 13). Lines `reform` re-created were
+        // scheduled there.
         schedule(tr, m.lane, belt);
     }
 }
@@ -1153,9 +1171,9 @@ pub fn schedule_for(cfg: Option<crate::SpawnCfg>) -> Option<Schedule> {
 }
 
 /// A spawner's lane schedules (M53b), both lanes from `b.spawn` (`None` for an unset lane): run by
-/// `reform` whenever it (re)creates a spawner's lines (placed, rotated, or re-mapped beside an edit
-/// after a full cap dropped them) and by `on_wake` when a `SetSpawner` woke a spawner whose lines
-/// stayed. Both lanes every time (the entity does not say which lane changed, and two `SetSpawner`s
+/// `reform` whenever it creates a spawner's lines (placed, re-mapped beside an edit after a full cap
+/// dropped them, or re-created after a refused rotation's rescale) and by `on_wake` after a
+/// `SetSpawner` or a rotation that kept the lines (M59). Both lanes every time (the entity does not say which lane changed, and two `SetSpawner`s
 /// in one tick give one wake): the unchanged lane restarts at `acc` 0 and loses at most one period of
 /// credit. A refusal (`Full` at the forecast tracker's pool, or anything else) leaves the lane making
 /// nothing and is counted ([`spawners_unscheduled`]); one other than `Full` is a bug (debug assert).
@@ -1200,7 +1218,8 @@ fn cut(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
 }
 
 /// Phase 2: the tile's own lines: destroyed when its belt is gone, created (or a run extended) for a
-/// new belt, rescaled for a reshape (items kept), destroyed and re-created for a rotation.
+/// new belt, rescaled for a reshape or a rotation (items kept; destroyed and re-created only when a
+/// rescale is refused, and for an underground end's rotation).
 fn reform(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
     if reform_splitter(cx, at) {
         return;
@@ -1229,13 +1248,18 @@ fn reform_lines(tr: Tx<'_>, at: TilePos, w: Option<Want>) {
         (Some(w), None) => attach(tr, at, w),
         (Some(w), Some(m)) if w.form != m.form => {
             debug_assert!(m.tiles() == 1, "cut left {at:?} in a run");
-            // A reshape between a run and a curve of one direction keeps the items; an underground
-            // end is never rescaled (M55: it only changes by rotation, which destroys its items).
-            let same_dir = match (w.form, m.form) {
-                (Form::Run(a) | Form::Curve(a, _), Form::Run(b) | Form::Curve(b, _)) => a == b,
-                _ => false,
-            };
-            if same_dir && reshape(tr, at, w.form, m) {
+            // A run or a curve before and after keeps its lines and items, whatever the direction
+            // (M59: a reshape, and a rotation since Tyler's 2026-10-13 answer); a refused rescale
+            // falls back to destroy and re-create. An underground end is never rescaled (M55: it
+            // only changes by rotation, which destroys its items).
+            let rescalable = matches!(
+                (w.form, m.form),
+                (
+                    Form::Run(_) | Form::Curve(..),
+                    Form::Run(_) | Form::Curve(..)
+                )
+            );
+            if rescalable && reshape(tr, at, w.form, m) {
                 return;
             }
             destroy(tr, m);
@@ -1245,9 +1269,10 @@ fn reform_lines(tr: Tx<'_>, at: TilePos, w: Option<Want>) {
     }
 }
 
-/// Rescales a lone tile's two lines to `form` (straight <-> curve, or a curve's side), keeping their
-/// items at `floor(pos x new / old)`; `false` (nothing changed beyond what the caller destroys) if a
-/// rescale is refused.
+/// Rescales a lone tile's two lines to `form` (straight <-> curve, a curve's side, or a new
+/// direction: M59), keeping their items at `floor(pos x new / old)`, lane `k` staying lane `k`, and
+/// lays the lines along `form`'s path; `false` (nothing changed beyond what the caller destroys) if
+/// a rescale is refused (`NoRoom`).
 fn reshape(tr: Tx<'_>, at: TilePos, form: Form, m: Mapped) -> bool {
     for lane in 0..2u8 {
         let line = m.lane[usize::from(lane)];
@@ -1654,4 +1679,57 @@ pub fn test_insert(cx: &mut TickCx<'_, RefGame>, id: EntityId, r: crate::TestIns
         }
     }
     cx.despawn(id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine::transport::Transport;
+
+    /// M59's fallback: a rotation whose `rescale` is refused destroys and re-creates the tile's
+    /// lines. Play reaches it only through many rescales of a squashed pair at rest (module doc,
+    /// **Rotation**), so the pair is built with the engine's own surgery: two items 128 apart on a 25,600 line rescaled to one tile
+    /// (256) sit at 0 and 1; a rotation that makes lane 0 a curve's inner lane (106) would put both
+    /// at 0 (`NoRoom`). The tile's three items are counted destroyed and its lanes are two fresh
+    /// lines of the new form. Fails if a refused rescale keeps the old lines or leaves the tile
+    /// unmapped.
+    #[test]
+    fn topology_rotate_no_room_falls_back() {
+        let mut t = Transport::new(16, 16);
+        let at = TilePos::new(5, 5);
+        let a = t.create(100 * STRAIGHT_LEN, SPEED).unwrap();
+        t.insert_at(a, 0, Item(1)).unwrap();
+        t.insert_at(a, 128, Item(2)).unwrap();
+        t.rescale(a, STRAIGHT_LEN).unwrap();
+        let b = t.create(STRAIGHT_LEN, SPEED).unwrap();
+        t.insert_at(b, 64, Item(3)).unwrap();
+        assert!(run_pair(&mut t, [a, b], at, Dir::East, 1));
+        let mut pos = [0u32; 2];
+        let mut n = 0;
+        t.items_in(a, &mut |_, p| {
+            pos[n] = p;
+            n += 1;
+        })
+        .unwrap();
+        assert_eq!(pos, [0, 1], "a squashed pair one position apart");
+        let m = mapped(&t, at).expect("mapped");
+        assert_eq!((m.lane, m.form), ([a, b], Form::Run(Dir::East)));
+
+        let form = Form::Curve(Dir::South, BeltShape::CurveLeft);
+        assert_eq!(lane_len(form, 0), INNER_LEN, "lane 0 is the inner lane");
+        let destroyed = belts_destroyed_items();
+        let w = Want {
+            dir: Dir::South,
+            form,
+            join_back: false,
+            join_front: false,
+        };
+        reform_lines(&mut t, at, Some(w));
+        assert_eq!(belts_destroyed_items(), destroyed + 3, "the tile's items");
+        assert!(t.len(a).is_err() && t.len(b).is_err(), "the old lines gone");
+        let m = mapped(&t, at).expect("re-created");
+        assert_eq!(m.form, form);
+        assert!(!m.lane.contains(&a) && !m.lane.contains(&b), "fresh ids");
+        assert_eq!((t.count(m.lane[0]), t.count(m.lane[1])), (Ok(0), Ok(0)));
+    }
 }

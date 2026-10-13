@@ -690,7 +690,7 @@ pub struct RefGame;
 impl Game for RefGame {
     // `test-hooks` (never shipped) reports one version higher: a save of the normal build is then
     // `SaveIncompatible` (M34b).
-    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 12 } else { 11 };
+    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 13 } else { 12 };
     //  3: `Furnace` entity, `PlaceFurnace`, resources `NOT_BUILDABLE` (M33).
     //  4: `FurnaceDeposit`, `FurnaceTake`, `FurnacePickUp` and their rejects (M33b).
     //  5: `RefGlobal { colours }`, written on `Joined` (M34).
@@ -708,6 +708,9 @@ impl Game for RefGame {
     // 11: `BeltKind::UndergroundIn`/`UndergroundOut`; an entrance's lanes run through a hidden line
     //     of `(gap + 1) x 256` (no segments) into its paired exit's (M55). No migration: a schema 10
     //     save is refused.
+    // 12: a rotated belt, spawner or despawner keeps its lines and items (rescaled, laid along the
+    //     new direction; a refused rescale destroys and re-creates them) and a rotated spawner's
+    //     schedules restart (M59). Replays diverge; no migration: a schema 11 save is refused.
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;

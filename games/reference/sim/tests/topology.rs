@@ -503,9 +503,10 @@ fn topology_pickup_unmaps_in_one_tick() {
 /// chain of 20 east tiles: the 21st at its front extends both lanes (extend_front + set_segments
 /// each: 4); a tile into a one-tile gap extends the run in front and joins the run behind (10); its
 /// pick-up splits twice per lane and destroys the tile's two lines (14); a rotation of a mid-run tile
-/// to face south splits it out (12), re-creates its pair as a curve (the run behind is now its right
-/// input: 6) and points the run behind at the curve (`Next`: 2), 20. Fails if an edit
-/// starts rebuilding whole runs or touching tiles beyond its neighbours.
+/// to face south splits it out (12), rescales its pair to a curve keeping its items (the run behind
+/// is now its right input: `rescale` + `set_segments` per lane, 4; M59, where destroy + create +
+/// `set_segments` per lane made 6) and points the run behind at the curve (`Next`: 2), 18. Fails if
+/// an edit starts rebuilding whole runs or touching tiles beyond its neighbours.
 #[test]
 fn topology_surgery_count_per_edit() {
     let mut s = world();
@@ -538,7 +539,7 @@ fn topology_surgery_count_per_edit() {
         cost(&mut s, &|s| s
             .rotate_belt(P1, TilePos::new(45, 50))
             .unwrap()),
-        20,
+        18,
         "rotate mid-run"
     );
     assert_eq!(cost(&mut s, &|s| s.step_ticks(10)), 0, "idle");

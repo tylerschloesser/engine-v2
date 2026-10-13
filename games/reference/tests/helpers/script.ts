@@ -143,7 +143,7 @@ export function beltScript(): Script {
     .rotateBelt(BELT_A)
     .pickUpBelt(BELT_B)
 }
-export const BELT_SCRIPT_HASH = '213fa422f7abe35a'
+export const BELT_SCRIPT_HASH = '85fc0c4cfb98e9d0'
 
 /** What a driver does. A driver throws on anything unexpected (a rejected action, a wait that never
  * ends); it never sleeps: a headless driver advances ticks, a DOM driver steps the manual clock. */

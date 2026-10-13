@@ -68,9 +68,9 @@ fn chain(s: &mut RefScenario, n: i32, sink: bool) -> (TilePos, TilePos) {
 /// `SetSpawner` gives the lane's line the schedule its item and rate ask (period from
 /// `SPAWN_RATES`, `next` the engine item `ItemId + 1`, no cycling); a later `SetSpawner` on the other
 /// lane re-sets both lanes (fix round 1: the unchanged lane restarts at `acc` 0, losing at most one
-/// period of credit: here 84 of 683); `SPAWN_OFF` clears a lane; a rotation (re-created lines) sets
-/// the configured lane again on the new lines. No `set_spawner` is refused. Fails if the topology
-/// sets no schedule, keeps a cleared one or forgets a configuration when the lines are re-created.
+/// period of credit: here 84 of 683); `SPAWN_OFF` clears a lane; a rotation (M59: the lines kept)
+/// sets the configured lane again, its credit restarted. No `set_spawner` is refused. Fails if the
+/// topology sets no schedule, keeps a cleared one or forgets a configuration on a rotation.
 #[test]
 fn spawner_sets_the_engine_schedule() {
     let mut s = world();
@@ -117,12 +117,12 @@ fn spawner_sets_the_engine_schedule() {
 
     s.rotate_belt(P1, sp).unwrap();
     let [n0, n1] = lanes(&s, sp);
-    assert!(n0 != l0 && n1 != l1, "re-created");
+    assert_eq!([n0, n1], [l0, l1], "kept (M59)");
     assert_eq!(sched(&s, n0), None, "lane 0 stays clear");
     assert_eq!(
-        sched(&s, n1).map(|x| (x.period, x.next)),
-        Some((SPAWN_RATES[0], Item(u16::from(COAL) + 1))),
-        "the re-created lane 1 is scheduled again"
+        sched(&s, n1).map(|x| (x.period, x.acc, x.next)),
+        Some((SPAWN_RATES[0], 256, Item(u16::from(COAL) + 1))),
+        "lane 1 is scheduled again, restarted at 0 and stepped once"
     );
     s.assert_topology();
     assert_eq!(
