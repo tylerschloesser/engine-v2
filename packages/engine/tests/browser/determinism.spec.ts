@@ -1,7 +1,7 @@
 // The cross-engine golden hash (docs/decisions/0002 §3 "Cross-engine golden hashes"; 0020 §5, §6):
 // the same scenario, same driver (`tests/support/scenario.ts`) as the native, Node and Bun legs,
 // this time run from a worker in Chromium, WebKit and Firefox, for every fixture `determinism.html`
-// lists (`hash`, `worldgen`, M08; the reference full-game log, M34b; `fx-belts`' fifteen script
+// lists (`hash`, `worldgen`, M08; the reference full-game log, M34b; `fx-belts`' sixteen script
 // goldens on request, M57, `@slow`). `@engines` runs it in all
 // three (Planning decisions, "Browsers and projects"); it needs no GPU, so headless Firefox and
 // WebKit's JavaScriptCore both qualify (0020 §6).
@@ -87,7 +87,8 @@ test('determinism: fx-belts goldens reproduced in the browser @engines @slow', a
   await openPage(page, '/determinism.html')
   const listed = await page.evaluate(() => window.__determinismGoldens?.belts ?? [])
   expect(listed, "the page's fx-belts scenarios are Node's").toEqual(BELTS.map((g) => g.scenario))
-  expect(listed.length, 'fx-belts scenarios').toBe(15)
+  // Sixteen since M61 (`golden-fork-pair`: the paired Fork's turn); fifteen at M57.
+  expect(listed.length, 'fx-belts scenarios').toBe(16)
   const diverged: Record<string, string> = {}
   for (const { scenario, golden } of BELTS) {
     const got = await page.evaluate(

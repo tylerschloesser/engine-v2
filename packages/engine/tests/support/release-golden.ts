@@ -53,7 +53,7 @@ export type GoldenDirs = {
   worldgen: string
   persist: string
   reference: string
-  /** M57: `fx-belts`' build; its fifteen script goldens are replayed only when it is given. */
+  /** M57: `fx-belts`' build; its sixteen script goldens are replayed only when it is given. */
   belts?: string
 }
 
