@@ -16,6 +16,13 @@ import { domDriver, FURNACE_B, fullGame, runScript } from '../helpers/script.js'
 const GOLDEN = fileURLToPath(new URL('../golden/full-game.json', import.meta.url))
 
 test('reference_full_game_single', async ({ page }) => {
+  // The script runs about 70 real-click steps (M52-M55's belt passages included): 5.8 s inside the
+  // suite on Tyler's Mac, 7 s alone. The CI runner (4 vCPUs, software adapter) reads about 15x the
+  // Mac's browser-suite time, so the spec reached the project's 30 s ceiling at step 67 on commit
+  // 169af23a after passing on 24176ddc. CI only (`ENGINE_GPU=swiftshader`), as the `gc` project's
+  // 90 s is (`playwright.config.ts`): a hang ceiling, not a budget; locally the 30 s stands so a
+  // genuine hang still fails fast.
+  test.setTimeout(process.env.ENGINE_GPU === 'swiftshader' ? 120_000 : 30_000)
   const golden = JSON.parse(readFileSync(GOLDEN, 'utf8')) as {
     checkpoints: Array<{ tick: number; hash: string }>
   }
