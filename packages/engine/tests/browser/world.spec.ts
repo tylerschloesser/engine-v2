@@ -284,9 +284,19 @@ test('paced_session_lands_periodic_snapshots', async ({ page }) => {
   // finds it dirty and actually snapshots -- never a fixed sleep standing in for the real event
   // (0020 §4): the final assertion is what proves each wait was long enough, not this loop's own
   // timing.
-  for (let i = 0; i < 4; i++) {
+  // On a slow runner four windows of 150 ms are not four cadence windows: CI (software adapter,
+  // 4 vCPUs) landed 2 snapshots against the 3 asserted (run of 5b621e2b), and the Mac at load 18
+  // once did the same. So the loop paints until the real event has happened three times, read
+  // from the storage dump (a separate worker: it never parks the sim), with a bound of 40 paints
+  // (6 s) so a broken cadence still fails: the assertion below is unchanged.
+  const snapshotsLanded = async () =>
+    Object.keys(
+      (await page.evaluate((id) => window.__dumpWorldStorage?.(id), worldId)) ?? {},
+    ).filter((k) => k.includes('/snap/')).length
+  for (let i = 0; i < 40; i++) {
     await page.evaluate((n) => window.__dispatchPaintAt?.(60 + n, 60 + n), i)
     await page.waitForTimeout(150)
+    if (i >= 3 && (await snapshotsLanded()) >= 3) break
   }
 
   // The real ground truth, checked *before* anything parks the sim worker (`__dumpWorldStorage`
