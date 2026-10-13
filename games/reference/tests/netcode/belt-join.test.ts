@@ -185,6 +185,10 @@ test('reference_join_at_scale @slow', async () => {
  * `Mixed` world: 137 ticks, 986,734 B). `ChunkSnapshots` is 87 % of it: 151,203 B for the 12,264
  * belt entities of 77 held chunks (12.3 B a belt entity, the entities and their chunks' framing),
  * through the 48 KB/s chunk bucket's 128 KB burst; the degrade level stays 1. */
+// M61: `LineStructs` +192 B in every case (the 48 Fork lines held each carry the 4 B partner
+// field, 0079 §21's record grown to 112 B: 0082 §3), and the 400-tick paced flow's `Forecasts`
+// +68 B (the splitters' inputs now take turns at full compression); `ChunkSnapshots` and the
+// tick counts unchanged.
 const PINS_400 = {
   build: {
     ticks: 1161,
@@ -197,15 +201,15 @@ const PINS_400 = {
     lists: 336,
     listsUnknown: 0,
     recordsUnheld: 0,
-    bytesDown: 174_064,
+    bytesDown: 174_324,
     sections: {
       Global: 24,
       OwnPlayer: 13,
       ChunkSnapshots: 151_203,
       Presence: 10,
       Hashes: 65,
-      LineStructs: 11_763,
-      Forecasts: 10_641,
+      LineStructs: 11_955,
+      Forecasts: 10_709,
       ChunkEnterPristine: 84,
     },
     header: 170,
@@ -236,14 +240,14 @@ const PINS_400 = {
     lists: 336,
     listsUnknown: 0,
     recordsUnheld: 0,
-    bytesDown: 173_764,
+    bytesDown: 173_956,
     sections: {
       Global: 24,
       OwnPlayer: 13,
       Hashes: 2202,
       ChunkSnapshots: 151_188,
       Presence: 10,
-      LineStructs: 11_751,
+      LineStructs: 11_943,
       Forecasts: 8337,
       ChunkEnterPristine: 78,
     },
@@ -271,14 +275,14 @@ const PINS_FULL = {
     lists: 336,
     listsUnknown: 0,
     recordsUnheld: 0,
-    bytesDown: 180_256,
+    bytesDown: 180_448,
     sections: {
       Global: 24,
       OwnPlayer: 13,
       ChunkSnapshots: 151_206,
       Presence: 10,
       Hashes: 65,
-      LineStructs: 11_763,
+      LineStructs: 11_955,
       Forecasts: 16_820,
       ChunkEnterPristine: 84,
     },
@@ -310,14 +314,14 @@ const PINS_FULL = {
     lists: 336,
     listsUnknown: 0,
     recordsUnheld: 0,
-    bytesDown: 178_211,
+    bytesDown: 178_403,
     sections: {
       Global: 24,
       OwnPlayer: 13,
       Hashes: 2202,
       ChunkSnapshots: 151_188,
       Presence: 10,
-      LineStructs: 11_751,
+      LineStructs: 11_943,
       Forecasts: 12_784,
       ChunkEnterPristine: 78,
     },
