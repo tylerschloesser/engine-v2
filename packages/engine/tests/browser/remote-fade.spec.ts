@@ -3,7 +3,7 @@
 // its clock keeps running. A remote that closes its page is gone at once (0013: `Gone`), so the M34 device
 // item tests that separately (`vanished_at_once`); nothing tested that the fade itself happens. Same
 // multiplayer page and moving remote as `rebase-on-visible` (`gc-multiplayer-topology.spec.ts`): the host and
-// the walker go quiet for 2.6 s of the page's own injected clock (a stalled link, shorter than `net/link.ts`'s
+// the walker go quiet for up to 2.9 s of the page's own injected clock (a stalled link, shorter than `net/link.ts`'s
 // `DEAD_MS` of 3000 so the link stays up), alpha is read every frame, then the relay comes back.
 //
 // Inject-fail-revert: `SILENCE_LIMIT_MS` in `crates/engine/src/interp/buffer.rs` made huge: the alpha stays 1
@@ -24,7 +24,7 @@ const PORT = 28_273 + 2 * Number(process.env.TEST_PARALLEL_INDEX ?? 0)
 const PROXY_PORT = PORT + 1
 const BASE_PATH = `/gc-multiplayer-topology.html?url=${encodeURIComponent(`ws://127.0.0.1:${PROXY_PORT}`)}`
 const STEP_MS = 50
-const STALL_MS = 2600
+const STALL_MS = 2900
 
 let server: TestServer | undefined
 let remote: MovingRemote | undefined
@@ -123,10 +123,23 @@ test('remote-fade: a remote fades when the viewer hears nothing for 2 s and retu
   if (solid < 60) throw new Error('remote-fade: the moving remote never became solid')
 
   proxy?.stall()
+  // The fade begins once the follower's render time (the page clock less the adaptive interpolation
+  // delay) runs `SILENCE_LIMIT_MS` past the last host tick heard, so it shows at about 2 s plus the
+  // delay. The stall steps until alpha drops or `STALL_MS` of page clock has passed (still under
+  // `DEAD_MS`): CI run 38460016781 saw alpha 1 through a fixed 2.6 s stall (7 green runs before it),
+  // a delay grown past the 0.6 s margin on the slow runner; the delay is in the failure message.
+  const delayAtStall = ((await page.evaluate(() => window.__probe?.())) as { delayMs?: number })
+    ?.delayMs
   const alphas: number[] = []
-  for (let t = 0; t < STALL_MS; t += STEP_MS) alphas.push((await frame()).alpha)
+  for (let t = 0; t < STALL_MS; t += STEP_MS) {
+    alphas.push((await frame()).alpha)
+    if ((alphas.at(-1) ?? 1) < 1) break
+  }
   expect(alphas[0], 'solid at the start of the stall').toBe(1)
-  expect(Math.min(...alphas), `alpha per frame over the stall: ${alphas.join(' ')}`).toBeLessThan(1)
+  expect(
+    Math.min(...alphas),
+    `alpha per frame over the stall (interp delay ${delayAtStall} ms at the stall): ${alphas.join(' ')}`,
+  ).toBeLessThan(1)
 
   proxy?.release()
   let back = false
