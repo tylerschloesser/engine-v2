@@ -43,7 +43,7 @@ docs/
   skills/<procedure>/SKILL.md             repeatable procedures
 ```
 
-The repo was bootstrapped in four phases (pre-plan, plan, build, clean-up) from planning files that the clean-up deleted; they are at tag `phase-3-complete`. Code comments cite the build milestones as `M13` and ADR Sources sections link into the deleted paths; both resolve at that tag.
+The repo was bootstrapped in four phases (pre-plan, plan, build, clean-up) from planning files that the clean-up deleted; they are at tag `phase-3-complete`. Code comments cite the build milestones as `M13` and ADR Sources sections link into the deleted paths; both resolve at that tag. The belts effort (milestones M40-M58) was planned the same way and its plan deleted after tag `belts-complete`, where its citations (`M52`, `M55 step 3`) resolve; [`decisions/0081-belts-fold-reference-decisions-questions-and-rules.md`](decisions/0081-belts-fold-reference-decisions-questions-and-rules.md) holds what the plan decided that no other ADR does.
 
 ## Decisions
 

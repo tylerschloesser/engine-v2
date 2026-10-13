@@ -1,6 +1,6 @@
-//! Fixture game `fx-belts` (M40 onward, `PLAN.md`): the home of every engine belt test. Belts are
-//! the engine's `engine::transport` module (docs/decisions/0076) exercised without the reference
-//! game's rules (0076 §9: "engine tests never use the reference game").
+//! Fixture game `fx-belts` (M40 onward; docs/architecture/transport.md): the home of every engine
+//! belt test. Belts are the engine's `engine::transport` module (docs/decisions/0076) exercised
+//! without the reference game's rules (0076 §9: "engine tests never use the reference game").
 //!
 //! **The request pattern (M42b).** 0076 §6 forbids `apply` from touching lines, so every topology
 //! change is a request: `Action::Request(op)` validates the op's shape and spawns one

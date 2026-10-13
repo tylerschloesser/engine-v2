@@ -11,7 +11,8 @@ The engine owns:
 - WebGPU rendering.
 - The tick loop and scheduling; running the sim in a worker (single-player) or on a server (multiplayer).
 - Engine-defined player events (`PlayerEvent::{Joined, Connected, Disconnected}` in `crates/engine/src/game.rs`, logged and replayed like actions), and the connected players with their chunk subscriptions.
-- Transport, delta derivation and delivery, interpolation and prediction machinery.
+- Network transport, delta derivation and delivery, interpolation and prediction machinery.
+- Transport lines: items moving along a game's belts, their per-tick rule, replication and drawing ([transport](transport.md)); the game owns the topology.
 - Persistence (snapshots plus action log) and replay.
 
 A game supplies, as one Rust crate implementing the `Game` trait (`game.rs`): the worldgen algorithm (`type Worldgen`), the data model (`Entity`, `Player`, `Global`), the rules (`apply`, `on_player`, `genesis`), the game-defined `Action` and `Reject` types, the `Presence` type, per-action prediction opt-outs, and per-game constants (`CHUNK_BITS`, `TICK_RATE`, `SCHEMA_VERSION`). It also supplies the client-side view code (`ClientSide`), tile art and assets, and the game UI.
@@ -69,6 +70,15 @@ Confirmed by Tyler, 2026-09-19:
 - **Chunk**: a square of tiles (`1 << CHUNK_BITS` per side): the unit of generation, subscription and streaming (`world/coords.rs` `ChunkCoord`).
 - **Presence**: a per-player engine channel carrying a small game-defined sample (at most 32 encoded bytes; camera state rides it, [0001](../decisions/0001-camera-and-presence.md)) (`presence.rs`).
 - **Host**: the object running a sim for one world and its connections (`crates/engine/src/host`); **replica**: a client's local copy of subscribed state.
+- **Transport**: two senses. `engine::transport`, the `transport()` accessors and `counters.transport.*` are transport lines (below); "network transport" and "transport adapters" are the socket layer ([0009](../decisions/0009-transport-and-hosting.md), [runtime-and-hosting](runtime-and-hosting.md)).
+- **Line**: one lane of items in `engine::transport`, `len` positions long (1/256 tile), moving its items toward position 0 (the front) at its `speed`; a belt tile contributes to two, one per **lane**. Items are at least `SPACING` (64) apart ([transport](transport.md)).
+- **Run**: (1) in the item store, `Run { item, count, gap }`, packed same-kind items stored as one node; (2) in a belt game, a maximal straight stretch of belt tiles mapped onto one line per lane.
+- **Segment**: a piece of a line's registered path (`Straight` or `Arc`); a line without segments is a **hidden line** (never drawn, routed or hashed per chunk: an underground's stretch).
+- **Output**: what a line's front feeds: `DeadEnd`, `Next` (a plain hand-off), `Merge` (a side-load), `Fork` (alternating between two lines) or `Sink` (deletes).
+- **Structure**: a line's `len`, `speed`, `Output` and segments, replicated whole-value (section 12); its items are not.
+- **Forecast**: what a client is told about a line's items, as corrections in section 13: a `State` (new stop), a `RunList` (the whole list) or an `Arrival` (one item entering by a route the client does not follow). The client's **follower** moves items by that model alone; it is drawn at the **item clock**, the follower's tick plus a fraction.
+- **Schedule**: a line's spawner rule (`set_spawner`), sim state; the engine makes its inserts.
+- **Tile index**: the derived map from a tile to the lines entering it (`lines_at`, `for_each_tile_in`).
 
 ## Docs index
 
@@ -82,13 +92,14 @@ Confirmed by Tyler, 2026-09-19:
 - [client-api](client-api.md): the client API and engine events.
 - [runtime-and-hosting](runtime-and-hosting.md): server adapters, packaging, build, hosting.
 - [testing-and-tooling](testing-and-tooling.md): suites, goldens, gc tests, device checks.
+- [transport](transport.md): transport lines (belts' items): store, advance, surgery, geometry, replication, drawing, benches.
 - Reference game: [`games/reference/README.md`](../../games/reference/README.md).
 - Decisions (the why): [`docs/decisions/README.md`](../decisions/README.md). Invariants: `.claude/rules/` (determinism, hot paths, prediction).
 
 ## Where code lives
 
 - `packages/engine/src`: engine TypeScript (client, camera, input, render, host, net, sab, storage, server adapters); nested `CLAUDE.md` files give per-directory notes.
-- `packages/engine/crates/engine`: the Rust crate (`Game` trait, sim, world, wire, session, predict, interp, persist, host, `abi`).
+- `packages/engine/crates/engine`: the Rust crate (`Game` trait, sim, world, transport, wire, session, predict, interp, persist, host, `abi`).
 - `packages/engine/fixtures`: small game crates and recorded data used by tests (goldens, migrations, presence, prediction).
 - `packages/engine/tests`: `browser` (Playwright), `netcode`, `wasm` (runtime legs), `support`.
 - `games/reference`: the reference game (`sim/` crate, `src/` client, `world.json`).

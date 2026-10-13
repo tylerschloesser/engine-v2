@@ -52,4 +52,47 @@ Implementer: `docs/architecture/{transport.md (new), README.md, world-and-worldg
 None.
 
 ## Deviations
-(filled in during execution)
+
+**2026-10-13, implementer (docs half).** Built: `docs/architecture/transport.md` (95 lines: where it lives; the model; writes and the tick; surgery and primitives; geometry and the tile index; caps and arenas; replication; spawner schedules; drawing; the reference game as the consumer; benches and budgets; tests; gotchas), indexed and glossed in `docs/architecture/README.md`; every survey §1 statement fixed; the nested `CLAUDE.md` trims; the rules and skills edits. `pnpm test unit -t context` and `pnpm lint` green; `pnpm format` changed nothing.
+
+Doc statements fixed (old → new):
+- `README.md`: "Transport, delta derivation and delivery" → "Network transport, …" plus a "Transport lines" owner bullet; glossary gains Transport (two senses), Line/lane, Run (both senses), Segment/hidden line, Output, Structure, Forecast/follower/item clock, Schedule, Tile index; index row for `transport.md`; crate modules gain `transport`.
+- `world-and-worldgen.md`: overlays line names transport lines in what hashes carry; `Store` holds "… timers and the transport store", mutated only through `Store::apply` "except the transport store"; `ChunkIndex` bullet points at the transport tile index; "Chunks never tick; entities do" + "and transport lines move in `advance`"; the caps sentence ("about 16 MiB … 0079 §14") → recommended caps with "the arena sizes in 0079 §21" and a pointer to `transport.md`; `WorldRead` gains `transport`, `WorldWrite` `transport_mut`, and the host-tick-only rule.
+- `simulation.md`: the tick's long `advance`/schedule parenthetical → one clause and a link; `Host::seal` now named as draining the structure-change list and closing the tracker's tick, `build_frame` routing through `host/lines.rs`; tests list gains `transport_{rules,surgery,outputs,geometry,access}.rs`.
+- `sync-and-netcode.md`: `LineStructs` → `LineStructs` (12); the segment-less rule added to the structures bullet (0078 A14); the "Transport forecasts" bullet (tracker, follower, item clock) moved to `transport.md` "Replication", leaving the budget rules and a link; Integrity: "`Fnv64` over `encode_chunk`" → "over `write_chunk_state` … followed by the `Put` record of every transport line anchored in the chunk"; tests gain `forecasts.rs`, `line_replication.rs`, `no_alloc_transport.rs`, netcode `belts*.test.ts`; Related gains `transport`.
+- `persistence.md`: the transport section is "hashed once the world has held a line" (0079 §1); gotcha added (restore without caps); tests gain `belts_restore_keeps_spawner_schedules`.
+- `renderer.md`: the transport-items bullet (item clock, `for_each_tile_in`, 20 px) → one line and a link; tests gain `drawlist_belts.rs`, `gc-belts`, `frame-bench-belts.spec.ts`.
+- `client-api.md`: a transport-surface bullet (`item_time`, `transport_follow`, `draw_items`, `WorldRead::transport`); "0003 (amended by 0023, 0024, 0046)" + "and by 0076 for the transport accessor".
+- `threads-and-boundary.md`: "`SOAK_ARENA_BYTES` = 8 MiB over a live set under 5 MiB" → "9 MiB with transport caps 1,024 / 8,192 (the probed live set is in the test's doc)"; the arenas paragraph gains the transport arena inside the sim and client arenas.
+- `testing-and-tooling.md`: rust row's slow benches gain `slow_tick_belts_large`, `slow_snapshot_belts_large` and the `test-hooks` leg; browsers' determinism line gains the full-game log and `fx-belts`' script goldens (`@slow`); goldens gain the full-game caps (`fullGameParams`) and `fx-belts`' 15 pairs; baselines gain `frame-belts`; "only `frame-reference` sets one, 0.1 ms" → "`frame-reference` sets 0.1 ms and `frame-belts` 0.04 ms"; `belts-tick` links 0080.
+- `docs/context-architecture.md`: the bootstrap paragraph names the belts plan, tag `belts-complete` and 0081.
+
+`CLAUDE.md` files (lines before → after, bytes): `games/reference` 59 → 59, 28,670 → 21,966 B (line 57 9,183 → 2,891 chars of names only; line 58 1,048 → 602; line 12's soak "8 MiB" → "9 MiB with transport caps 1,024 / 8,192"); `crates/engine` 60 → 60, 10,281 → 8,924 B (line 26 1,757 → 500; `host/lines.rs` entry shortened); `tests/netcode` 59 → 59, 10,878 → 7,252 B (line 55 4,764 → 1,138); `fixtures` 52 → 52 ("thirteen goldens" → fifteen, with the bench world and `mixed-speeds`); `fixtures/belts` 58 → 59 (no `PLAN.md`); `packages/engine` 60 → 60 (`analyseMotion` and the deleted `check.ts` `world()` removed); `fixtures/belts/src/lib.rs` header cites `transport.md` instead of `PLAN.md`.
+
+Rules and skills: `hot-paths.md` `paths:` gains `crates/engine/src/transport/**` plus one paragraph (the Rust principle and its tests); `run-tests` names `bench.frame_belts` and `frame-belts`; `device-check`'s `M53-item-lead` "If it fails" points at 0081 §C's trigger; `gc-test` lists no pages, so unchanged; `scripts/repeat.mjs` kept (the `run-tests` skill and `testing-and-tooling.md` name it), its header no longer cites `PROMPT.md`.
+
+Deviations from the brief: the sync-and-netcode forecast detail and the renderer's item-drawing bullet were moved into `transport.md` (one home) rather than linked from it; `transport.md` quotes no ADR figure but names the 20 px cut (the fixture's constant, its reason linked to 0076 Consequences) and the 15-golden count. Open: `games/reference/CLAUDE.md` line 12 (4,597 chars, the bench page and soaks) and line 44 stay long (commands and hooks, out of this brief's scope); the UI details dropped from line 57 (the page's copy of the tool and direction, the Confirm offset, `recheck_belt`) live in `src/ui/build.ts`'s doc, `sim/src/client.rs` and 0081 §A.2.
+
+**2026-10-13, Fix round 1 (implementer; review `m58-review.md` items 10-17).**
+- `transport.md`:
+  - The schedule-carrying and `join` rules now link 0079 §21. The "only in code" list keeps only the per-lane half-join consequence.
+  - Restated decisions are now one clause plus a link: the tracker (0078 A3, A8), the follower (§2, A8), the item clock (A12), the schedule rule (0079 §21), the write phases (0076 §6, 0079 §4), and the advance order and rules (0076 §2, 0079 §3, §10, §11, §15, §16, §23).
+- Duplicates now live in one place, and the other docs link to it:
+  - restore-without-caps → `persistence.md`;
+  - the caps → `transport.md`, with the recommended caps linked to 0079 §21;
+  - the `transport_mut` phases → 0079 §4 via `transport.md`;
+  - "transport reads are `Unknown` under prediction" → `client-api.md`;
+  - the golden count → `testing-and-tooling.md`;
+  - the `belts-tick` record path → `testing-and-tooling.md`.
+- `games/reference/CLAUDE.md:57` regains these names: `belt_tap_opens_and_closes`, `spawner_writes_nothing_per_insert`, `splitter_two_inputs`, `reference_splitter_*`, `reference_underground_items_emerge`, `SPAWNER_STAND`, `SPLITTER_AT`, `UNDERGROUND_*`. It points to `testing-and-tooling.md` "Goldens", which now holds the "golden ends at the last logged action" gotcha.
+- `tests/netcode/CLAUDE.md:55` regains every `belts/*` test name, grouped by file.
+- `testing-and-tooling.md` gives the full `packages/engine/tests/support/reference-golden.ts` path.
+- Wording fixes:
+  - `world-and-worldgen.md:13`: "anchored line structures, never items".
+  - `client-api.md`: the reads through `transport()` are `Unknown`, not the accessor.
+
+Line counts are unchanged (reference 59, netcode 59, fixtures 52).
+
+**Manager, 2026-10-13.** ADR 0081 written from the survey (the reference game's decisions M51-M56, the question ledger 1-15, deferred items with triggers, working rules, brief-only figures); 0076-0079's plan citations tag-qualified, 0079's title and §21 heading brought current, the decisions index's amended-by column completed (0003 ← 0076, 0062 ← 0080, 0076 ← 0079, 0078 ← 0079) and its tag line naming `belts-complete`; the root `CLAUDE.md` names the range 0001-0081, the tag and the engine side of the hot-paths rule; the README's two pointer sentences re-pointed (no rule line). Docs review (`scratchpad/m58-review.md`): two must-fix in 0081 (list numbering out of order; the question ledger's numbers colliding with the README's `Q4`-`Q6`), duplicates of 0076-0080 figures turned into links, the index's missing amended-by entries; for the implementer, decisions restated in `transport.md` turned into links, six facts given one home, names restored to the CLAUDE.md maps. Pass 2 recorded below. The `git grep` for live references finds only tag-qualified citations and Phases 1-4's own historical ones (covered by the index's tag line). `pnpm test unit -t context` and `pnpm lint` green on the final tree.
+
+**2026-10-13, Fix round 2.** `world-and-worldgen.md:13`: "never their items" is now limited to per-chunk hashes and the wire; snapshots and the state hash carry the whole transport store (0078 §6, 0079 §17 (b)). `tests/netcode/CLAUDE.md:55` already held every `belts/*` test name grouped by file from fix round 1 (the review read the earlier tree); unchanged, 59 lines.

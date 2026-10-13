@@ -47,6 +47,6 @@ crate that blesses it (`pnpm golden:bytes`, `../CLAUDE.md` Commands).
   needs `maxActionGrowth >= 28,288` and room in `maxEntities`.
 - `belts` (`fx-belts`, M40 onward): the engine's belt fixture for `engine::transport` (0076): the
   request pattern (`Action::Request(Op)`, executed by `tick`; every line, surgery, item, segment,
-  merge and fork op), thirteen goldens (M42b core, M43b surgery and geometry, M44b side-loads and
-  forks), the four property tests M56 reuses (`tests/props.rs`), the native spikes (0077, 0078;
-  deleted in M45). Own `CLAUDE.md`.
+  merge and fork op), the goldens (M42b core, M43b surgery and geometry, M44b side-loads and
+  forks, the bench world at 1/64, M56 `mixed-speeds`), the property tests (`tests/props.rs`), the
+  bench world (M45), the client (`extract`, M49-M50). Own `CLAUDE.md`; `docs/architecture/transport.md`.

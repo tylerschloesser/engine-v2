@@ -1,7 +1,8 @@
 # fixtures/belts (`fx-belts`)
 
-The engine's belt fixture (`PLAN.md` M40 onward; 0076 §9: engine tests never use the reference
-game): it pins `engine::transport` through native tests, `.wasm` goldens and browser pages.
+The engine's belt fixture (M40 onward; 0076 §9: engine tests never use the reference game): it
+pins `engine::transport` (`docs/architecture/transport.md`) through native tests, `.wasm` goldens
+and browser pages.
 
 **The request pattern (M42b, `src/lib.rs` module doc).** `Action::Request(Op)` validates the op's
 shape and spawns a `Thing::Request` entity, nothing else: 0076 §6 makes `transport_mut()` a debug

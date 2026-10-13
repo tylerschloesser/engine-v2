@@ -14,7 +14,7 @@ Where it lives:
 - TypeScript (`packages/engine/src/`): `server.ts` (`createWorldServer`, handshake queue), `host/` (`handshake.ts`, `sessions.ts`,
   `lifecycle.ts`), `net/` (`link.ts`, `pump.ts`, `ws-connection.ts`, `conditioner.ts`), `worker/net.ts`, `desync.ts`.
 - Related: [runtime-and-hosting](runtime-and-hosting.md) (transport adapters), [threads-and-boundary](threads-and-boundary.md) (rings
-  between net, client and sim), [simulation](simulation.md) (action validation, tick order).
+  between net, client and sim), [simulation](simulation.md) (action validation, tick order), [transport](transport.md) (what sections 12 and 13 replicate).
 
 ## Wire format and deltas ([0011](../decisions/0011-wire-format-and-deltas.md), [0041](../decisions/0041-frame-bundle.md))
 
@@ -32,26 +32,19 @@ allocate nothing; readers borrow and never panic.
 - **Scopes**: chunk (overlay tiles and entities anchored there, routed by `Game::anchor`), `Global` (game value plus the engine roster),
   `OwnPlayer`. Subscribing sends `ChunkEnterPristine` (coordinate only) or a snapshot `{coord, version, overlay runs, entity puts}`
   consistent as of the frame's tick; later changes are `ChunkDeltas`. Line structures (`len`, `speed`, `Output`, segments; [0078](../decisions/0078-transport-forecast-replication.md) §1) are a
-  fourth replicated thing: section `LineStructs` puts a line while its chunk set meets a chunk the connection holds and sends `Gone` when
+  fourth replicated thing: section `LineStructs` (12) puts a line while its chunk set meets a chunk the connection holds and sends `Gone` when
   it no longer does, the structures anchored in an entering or re-snapshotted chunk that the client lacks (not held, held at an older
   `structure_version`, or with an `unknown` list) ride that frame with their lists within its put budget (past it a held one goes
   `Gone`, any other stays pending, and both come later) while the replica keeps the ones it holds (every one is put again when the snapshot answers the client's
   `ResyncChunk`; the enter drain prices exactly those puts, the delta-collapse estimate every anchored line; M48c), and the chunk hash
-  covers the structures anchored in the chunk (`host/lines.rs`).
-- **Transport forecasts** ([0078](../decisions/0078-transport-forecast-replication.md) A3, M47). A held line's items travel as forecasts
-  in section `Forecasts` (13), only when the host's model of the line is wrong, never per tick. The host's tracker
-  (`transport/forecast.rs`, derived, never hashed) keeps what every holder was told, checks each line's front item inside `advance` plus a
-  due tick per segment whose stops part, and at the end of the tick sends a `State` (a new `front_stop` for the items the line held before
-  the tick; also a spawner's pause or resume), or a `RunList` (the line's whole list with its stops and spawner schedule: with every first
-  put of the line, after an edit, a surgery, a merge landing, or when a `State` cannot reproduce the tick), and per connection an
-  `Arrival` for an item that entered a held line by a route the client does not follow (from a line it does not hold, across a `Fork`).
-  `States` and `Arrivals` are unbudgeted; puts and run lists share the put budget, and a held line whose correction does not fit is dropped
-  and put again, so no client ever steps a stale model. The client runs no belt rule: `transport/follow.rs` moves each item to
-  `max(pos - speed, stop)` per tick, follows `Next` links it holds, replays each line's spawner schedule (the rule the host's `advance` runs
-  on a scheduled line, so its inserts cannot mismatch; or a game's declared rule), and applies each frame's records around
-  that step; its items are never hashed (0078 §6). They are drawn at the item clock `clamp(host_now, T, T + 4)` (0078 A12 revised, M49; 4 because a degrade-level-4 bundle, which ends at the current tick, steps `T` by 4): `T` the follower's
-  tick, `host_now` the host-clock estimate (it follows the earliest arrivals, so at a steady frame rate the clock sits in `[T, T + 1)`), not at
-  the render time; items lead entities by the interpolation delay.
+  covers the structures anchored in the chunk (`host/lines.rs`). A line without segments has no chunk set and is never routed
+  ([0078](../decisions/0078-transport-forecast-replication.md) A14).
+- **Transport forecasts** ([0078](../decisions/0078-transport-forecast-replication.md) A3, A8, M47). A held line's items travel only as
+  corrections in section `Forecasts` (13), when the host's model of the line is wrong, never per tick: `State`, `RunList` and `Arrival`
+  records from the host's tracker, applied around each tick's step by the client's follower, which runs no belt rule; the model, the
+  item clock and the counters are [transport](transport.md) "Replication". `State`s and `Arrival`s are unbudgeted; puts and run lists share
+  the put budget, and a held line whose correction does not fit is sent `Gone` and put again with its list, so no client ever steps a
+  stale model. The replica's items are never hashed (0078 §6).
 - **Versions, not acks.** A chunk's version is the tick of its last replicated change. The host stamps a tile write's chunk, every
   chunk of every write of an entity that existed at tick start, and only the tick-end footprint of one born this tick, so an entity
   born and gone in one tick stamps nothing (M48, `Host::tick`). The replica bumps a coalesced op's tick-start and tick-end footprints,
@@ -134,8 +127,7 @@ never encode a provisional id, a predicted status is a hint.
   then replica). The overlay (`predict/overlay.rs`) is preallocated vectors; a failed action rolls back by truncating to a mark.
   `predict/diff.rs` (`OverlayDiff`) is the only thing that marks chunks dirty for re-upload.
 - `Prediction` is `Applied | NotPredictable | Rejected(R)`. `Unknown` reads (outside the subscription, including any spawn touching an
-  unheld chunk) make the action `NotPredictable`: no ghost, still sent. Every transport read under `Predicting` is `Unknown`, held lines
-  or not, so an action whose `apply` reads a line is `NotPredictable` (`belts/predicted_request_is_not_predictable`; M48b). Taint rule: once one action is `NotPredictable`, every later queued
+  unheld chunk) make the action `NotPredictable`: no ghost, still sent. Transport reads are among them, held lines or not ([client-api](client-api.md)). Taint rule: once one action is `NotPredictable`, every later queued
   action is too until it pops (§1). A local `Rejected` is never shown as a rejection; the host's `ActionResults` entry (`Applied |
   Rejected::Game | Rejected::Engine`) is the verdict, and `Lost` covers the reconnect gap. A locally dropped action (decode, out-of-memory)
   gets no result (§11).
@@ -171,8 +163,9 @@ never encode a provisional id, a predicted status is a hint.
 ## Integrity and desync ([0013](../decisions/0013-sessions-and-integrity.md), [0064](../decisions/0064-phase-3-decisions-sync-and-netcode.md) §19)
 
 - What can drift is the authoritative replica; prediction mismatches heal by design and are never hashed. `integrity.rs` defines the
-  hashes (`chunk_hash`, `global_hash`, `player_hash`) both `Host` and `Replica` call: `Fnv64` over `encode_chunk`, the canonical snapshot
-  encoding with `version` written as 0.
+  hashes (`chunk_hash`, `global_hash`, `player_hash`) both `Host` and `Replica` call: `Fnv64` over `write_chunk_state`, the canonical
+  snapshot encoding with `version` written as 0 followed by the `Put` record of every transport line anchored in the chunk
+  ([0078](../decisions/0078-transport-forecast-replication.md) §6).
 - `host/hashes.rs` `HashSchedule`: production mode sends one chunk entry per 4 ticks (recently modified first, every 4th pick round-robin)
   and `Global` + `OwnPlayer` every 5 s, riding frames that go out anyway (max 4 per frame). `HashMode::All` (the test default, announced by
   `WELCOME_HASH_ALL`) hashes every subscribed chunk on every frame.
@@ -188,11 +181,12 @@ never encode a provisional id, a predicted status is a hint.
 
 ## Tests
 
-- Rust unit and golden tests sit beside the code; `tests/no_alloc_wire.rs`, `no_alloc_interp.rs`, `no_alloc_connection.rs` and `predict`
+- Rust unit and golden tests sit beside the code; `tests/main/forecasts.rs` and `line_replication.rs` cover transport replication; `tests/no_alloc_wire.rs`, `no_alloc_interp.rs`, `no_alloc_connection.rs`, `no_alloc_transport.rs` and `predict`
   fixtures (`packages/engine/fixtures/predict`, `pnpm test rust -t predict`) prove zero-allocation. Goldens are written only by `pnpm
   golden`.
 - The `netcode` suite (`packages/engine/tests/netcode/`, registered in `scripts/suites.mjs`; see its `CLAUDE.md` for the harness,
   `assertBudget` and desync tooling) drives the real server and `HeadlessClient`s over a seeded conditioned link on a virtual clock.
-  Hash-all is its default, so every scenario is also a replication test. The `ws` scenarios (real sockets through `ws-connection.ts`) are
+  Hash-all is its default, so every scenario is also a replication test. `belts*.test.ts` drive `fx-belts` lines (the arbiter, bytes,
+  edits, degrade, joins, the item clock; [transport](transport.md) "Tests"). The `ws` scenarios (real sockets through `ws-connection.ts`) are
   `@slow`; the remote fade is `tests/browser/remote-fade.spec.ts` (`browser` suite). Commands:
   [run-tests](../../.claude/skills/run-tests/SKILL.md).

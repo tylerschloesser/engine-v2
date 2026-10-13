@@ -11,21 +11,21 @@ Read only what the task needs. A sub-agent is briefed with files: its goal, one 
 | Path | What it holds |
 |---|---|
 | `docs/architecture/<subsystem>.md` | How each subsystem works now: world and worldgen, simulation, sync and netcode, persistence, threads and the JS/WASM boundary, renderer, camera/input/overlay, client API, runtime and hosting, testing and tooling |
-| `docs/decisions/NNNN-<slug>.md` | ADRs 0001–0080 (index: `docs/decisions/README.md`): what was chosen and the *why* that can't be read from code. Supersede, don't rewrite |
+| `docs/decisions/NNNN-<slug>.md` | ADRs 0001–0081 (index: `docs/decisions/README.md`): what was chosen and the *why* that can't be read from code. Supersede, don't rewrite |
 | `packages/engine/` | The engine package: TypeScript in `src/`, the Rust crate in `crates/engine/`, fixture games in `fixtures/`, suites in `tests/`; nested `CLAUDE.md` files hold commands, layout and test placement |
 | `games/reference/`, `games/reference-server/` | The reference game (its rules: `games/reference/README.md`) and its dedicated server; each has a `CLAUDE.md` |
 | `scripts/` | `pnpm test` / `lint` / `setup:tools` runners (plain Node `.mjs`); `scripts/suites.mjs` registers suites and build steps |
 | `.claude/` | `settings.json` (allowlist; commit gate `hooks/pre-commit-check.sh`: Biome + rustfmt), `rules/` (the invariants below), `skills/` (`run-tests`, `add-action-type`, `write-adr`, `gc-test`, `profile-frame`, `device-check`) |
 | `docs/context-architecture.md` | How context is split (root and nested `CLAUDE.md`, rules, skills, sub-agent briefs) and why |
 
-Comments cite Phase 3 milestones as `M13`, `M24b steps 4-6`, ...: those briefs are under `docs/plan/` at tag `phase-3-complete` (`git show phase-3-complete:docs/plan/...`). ADR Sources links into deleted paths resolve the same way.
+Comments cite Phase 3 milestones as `M13`, `M24b steps 4-6`, ...: those briefs are under `docs/plan/` at tag `phase-3-complete` (`git show phase-3-complete:docs/plan/...`). ADR Sources links into deleted paths resolve the same way. The belts milestones `M40`-`M58` (2026-10-11 to 2026-10-13) are at tag `belts-complete` (`git show belts-complete:docs/plan/...`; their fold is ADR 0081).
 
 ## Invariants
 
 Each has a path-scoped rule file that loads when you read a matching file; read it yourself before creating a new file in its area.
 
 - **Determinism:** sim, worldgen and `apply` code must produce the same bits natively and as `.wasm` in every runtime: `.claude/rules/determinism.md`.
-- **Hot paths:** no allocation per frame or per tick in the JS around a WASM instance: `.claude/rules/hot-paths.md`.
+- **Hot paths:** no allocation per frame or per tick in the JS around a WASM instance, nor in the engine's per-frame and per-tick Rust (`transport/**`): `.claude/rules/hot-paths.md`.
 - **Prediction:** validate first and write after, `?` on every read, a provisional id is never encoded, and a predicted status is a hint until the host acks it: `.claude/rules/prediction.md`.
 - **Test budget:** each fast-tier suite has a time budget in `scripts/suites.mjs` (warn over it, fail at 1.5×); a new test fits inside it, or the commit says why the budget moves (`docs/architecture/testing-and-tooling.md`).
 

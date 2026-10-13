@@ -33,7 +33,7 @@ Fast-tier budgets are in `scripts/suites.mjs` (owners: [0020](../decisions/0020-
 
 | Suite | Runner | Budget | Holds |
 |---|---|---|---|
-| `rust` | cargo-nextest | 10 s | Unit tests of the crates; golden-hash scenarios and log replay (`crates/engine/tests/main/`, `golden/`); the `no_alloc_*.rs` zero-allocation tests; `games/reference/sim/tests`. Slow: release-profile benches (`slow_tick_large_save`, `slow_worldgen_chunk_reference`) |
+| `rust` | cargo-nextest | 10 s | Unit tests of the crates; golden-hash scenarios and log replay (`crates/engine/tests/main/`, `golden/`); the `no_alloc_*.rs` zero-allocation tests; `games/reference/sim/tests`. Slow: release-profile benches (`slow_tick_large_save`, `slow_worldgen_chunk_reference`, `slow_tick_belts_large`, `slow_snapshot_belts_large`) and, after them, the `test-hooks` leg (the reference crate under its never-shipped `test-hooks` feature, nextest profile `test-hooks`) |
 | `unit` | Vitest | 3 s | Pure TS in `packages/*/src`, `games/*/src`, `games/*/tests/unit` (M56: test-helper checks), `scripts/**/*.test.mjs`, gc analysis logic. Runs `first` |
 | `wasm` | Vitest + a `bun` script leg | 7 s | The built `.wasm` through the server entrypoint under Node (`packages/engine/tests/wasm/`): ABI, import allowlist and target features, loader, golden replays, persistence, packaging/plugin builds. The Bun leg (`bun-leg.mjs`) re-runs the golden and adapter tests |
 | `netcode` | Vitest | 10 s | Real server entrypoint + real `.wasm` + K `HeadlessClient`s over in-memory `Connection`s behind a seeded conditioner on a virtual clock (`packages/engine/tests/netcode/CLAUDE.md`, [0020](../decisions/0020-testing-strategy.md) §7), plus `games/reference/tests/netcode`. Slow tier runs `--no-file-parallelism` (real sockets, soaks) |
@@ -54,7 +54,7 @@ Set in `[profile.dev]` of the root `Cargo.toml` next to `debug = "line-tables-on
 
 - native nextest (`scenario_matches_golden` and the reference `golden_replay`),
 - the `.wasm` under Node and Bun (`wasm` suite: `determinism.test.ts` and `bun-leg.mjs` replay every fixture's `golden/scenario*.json` against its `golden*.json`, discovered, skipping the pairs a named test already replays (`REPLAYED_BY_NAME` in `tests/support/scenario.ts`); plus release builds and, in the slow tier, `feature-matrix`: plain, `wasm-opt`, `+simd128`),
-- a worker in Chromium, WebKit and Firefox (`determinism.spec.ts`, `@engines`; the fast tier runs only Chromium, the engines leg runs all three; Firefox and WebKit need no GPU for a sim hash).
+- a worker in Chromium, WebKit and Firefox (`determinism.spec.ts`, `@engines`: the hash scenarios, the reference full-game log and, `@slow`, `fx-belts`' script goldens; the fast tier runs only Chromium, the engines leg runs all three; Firefox and WebKit need no GPU for a sim hash).
 
 CI on x86-64 matched the Apple-silicon goldens in every runtime ([0068](../decisions/0068-phase-3-decisions-testing-and-tooling.md) §1). A mismatch is a finding against 0002: report the first divergent checkpoint and write an ADR before touching a golden. `scripts/lib/no-usize.test.mjs` forbids `usize`/`isize` in hashed or serialized state.
 
@@ -62,7 +62,8 @@ CI on x86-64 matched the Apple-silicon goldens in every runtime ([0068](../decis
 
 - `pnpm golden [fixture]` is the only writer of `packages/engine/fixtures/<name>/golden/golden*.json` (one per checked-in `scenario*.json`, same suffix). It rebuilds, then writes what the `.wasm` produces under Node. A fixture's native golden test must make the same calls (a `connect` is `Joined` then `Connected`), or it agrees only with itself. Review the diff: a changed golden is a changed sim; never regenerate to make a red test pass.
 - `pnpm golden:bytes [-- filter]` is the only writer of the native byte-format goldens (`crates/engine/tests/golden/*.hex|.hash`, via `GOLDEN_BLESS=1`).
-- `pnpm --filter reference golden:record` regenerates the reference game's full-game golden.
+- `pnpm --filter reference golden:record` regenerates the reference game's full-game golden; `full-game.json` records the world's transport caps and every replay passes them (`fullGameParams` in `packages/engine/tests/support/reference-golden.ts`), since a world without caps maps no belt and hashes differently ([transport](transport.md) "Gotchas"). The golden ends at the last logged action, so a scripted passage that leaves items flowing (a spawner draining into a despawner) must be over by then (`games/reference/tests/helpers/script.ts`).
+- `fx-belts` holds 15 scenario/golden pairs (`fixtures/belts/CLAUDE.md`).
 
 ## Zero GC
 
@@ -72,13 +73,13 @@ CI on x86-64 matched the Apple-silicon goldens in every runtime ([0068](../decis
 
 ## Benchmarks and baselines
 
-Wall-clock benchmarks are slow-tier only and call `gate(name, sample)` from `scripts/lib/bench-gate.mjs`. Baselines are `packages/engine/baselines/{tick,tick-node,worldgen,frame,frame-reference,belts-tick}.json`, each with a machine `fingerprint` (`os.cpus()[0].model` + `os.arch()`), `gated` metrics, absolute `limits` (the proxies of 0010 and 0018) and `conditions`.
+Wall-clock benchmarks are slow-tier only and call `gate(name, sample)` from `scripts/lib/bench-gate.mjs`. Baselines are `packages/engine/baselines/{tick,tick-node,worldgen,frame,frame-reference,frame-belts,belts-tick}.json`, each with a machine `fingerprint` (`os.cpus()[0].model` + `os.arch()`), `gated` metrics, absolute `limits` (the proxies of 0010 and 0018) and `conditions`.
 
 - The 25 % rule (`TOLERANCE = 0.25`, [0020](../decisions/0020-testing-strategy.md) §9) fails a gated metric only when the running machine's fingerprint equals the baseline's (Tyler's M3 Max). Elsewhere (CI, another Mac) nothing fails; the sample is recorded to `test-results/<suite>/bench/<name>.json`.
-- It also needs the metric to exceed the baseline by more than the baseline's `minDeltaMs` ([0047](../decisions/0047-bench-gate-absolute-floor.md); derived as twice the spread over 10+ runs, only `frame-reference` sets one, 0.1 ms). A `limits` figure fails on its own.
+- It also needs the metric to exceed the baseline by more than the baseline's `minDeltaMs` ([0047](../decisions/0047-bench-gate-absolute-floor.md); derived as twice the spread over 10+ runs; `frame-reference` sets 0.1 ms and `frame-belts` 0.04 ms, each baseline's `conditions` saying how). A `limits` figure fails on its own.
 - `tick-node` is warn-only. A baseline is rewritten only by `pnpm bench:baseline <name>` (promotes the newest record from this machine; fill `conditions` by hand; review the diff), for a reviewed expected cost. A miss is diagnosed with `.claude/skills/profile-frame/SKILL.md`, never fixed by moving a baseline, limit or workload. Check `uptime` first: the machine is shared.
 - Tick time desktop proxy 3 ms median on the standard large save ([0010](../decisions/0010-rates-and-subscriptions.md); the save is defined in 0020 §9).
-- `belts-tick` (M45): the whole tick of `fx-belts`' standard belt world (50,000 tiles, 250,000 items, eight maximum views) at most 5 ms median (Tyler, 2026-10-11; [0077](../decisions/0077-transport-item-representation.md)), by `slow_tick_belts_large`; its Node twin `tick-belts-large node` is warn-only. The release re-run and `gate` are `engine::testing::bench` (feature `testing`).
+- `belts-tick` (M45): the whole tick of `fx-belts`' standard belt world (50,000 tiles, 250,000 items, eight maximum views) at most 5 ms median (Tyler, 2026-10-11; [0077](../decisions/0077-transport-item-representation.md)), by `slow_tick_belts_large`; its Node twin `tick-belts-large node` is warn-only. The release re-run and `gate` are `engine::testing::bench` (feature `testing`); its record is the repo root's `test-results/rust/bench/belts-tick.json`, written whether or not the gate passes. The belt rows as measured: [0080](../decisions/0080-belts-budgets-as-measured.md).
 
 ## Lint and the commit gate
 

@@ -1,5 +1,5 @@
-// Repeat one suite N times for a reliability check at a milestone gate (orchestrator tool, PROMPT.md
-// Rules). Each run gets its own process group and a hard kill timeout; `--load <n>` adds n CPU burners
+// Repeat one suite N times to reproduce a flake or check reliability under load (`run-tests` skill,
+// "Test-writing and flake gotchas"). Each run gets its own process group and a hard kill timeout; `--load <n>` adds n CPU burners
 // that exit on their own if this script dies. A Bash call is capped at 10 minutes: `browser` fits
 // about 20 runs quiet, 15 under load. `--budget-scale <n>` and `--timings-json <dir>` are forwarded to
 // each `pnpm test <suite>` run; unlike `pnpm test`'s own `--timings-json <path>` (one file), here it's

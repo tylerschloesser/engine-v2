@@ -37,7 +37,7 @@ Status: Accepted (2026-10-13). Amends [0062](0062-budgets-as-measured-at-phase-3
 
 *Determinism across engines.* Every `fx-belts` golden (15 scenarios) and the reference `full-game.log` replay to the same hashes in Chromium, WebKit and Firefox (`@engines` leg, 2026-10-13) and under Node and Bun on every release variant (the `belts` variants: plain 1,046,980 B raw / 270,089 B brotli, simd128 1,043,169 / 270,658; wasm-opt not on PATH). Met. Re-measure: `pnpm test:slow browser -t "@engines"`, `pnpm test:slow wasm -t feature-matrix`.
 
-**2. Device checks that stay open.** `M57-belts-tick`, `M57-belts-frame-pacing`, `M57-belts-memory` and `M57-belts-android` (the Pixel's notes) in `.claude/skills/device-check/SKILL.md`, and `M53-item-lead` (0078 A12's lead; default accept). Each phone cell above moves from "not run" to a figure here when a row is walked; a miss is a question to Tyler with the profile, never a widened budget.
+**2. Device checks that stay open.** `M57-belts-tick`, `M57-belts-frame-pacing`, `M57-belts-memory`, `M57-belts-android` (the Pixel's notes) and `M57-palette-look` (the two-row palette under the refusal label on a 390 px phone) in `.claude/skills/device-check/SKILL.md`, and `M53-item-lead` (0078 A12's lead; default accept). Each phone cell above moves from "not run" to a figure here when a row is walked; a miss is a question to Tyler with the profile, never a widened budget.
 
 ## Alternatives rejected
 

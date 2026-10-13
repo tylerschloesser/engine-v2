@@ -1,6 +1,6 @@
 # 0077: How items on a transport line are stored
 
-Status: Accepted (2026-10-11, by the Amendment below: **B1, gap-encoded runs in a linked arena**, wins). Implements [0076](0076-transport-lines-engine-game-split.md) §1-§3; decided by the measurement of milestone 40 (`docs/plan/40-item-representation-spike.md`).
+Status: Accepted (2026-10-11, by the Amendment below: **B1, gap-encoded runs in a linked arena**, wins). Implements [0076](0076-transport-lines-engine-game-split.md) §1-§3; decided by the measurement of milestone 40 (at tag `belts-complete`: `docs/plan/40-item-representation-spike.md`).
 
 ## Context
 
@@ -43,7 +43,7 @@ Both keep `0 <= pos <= len - 1`, the spacing invariant on a line and across plai
 - [0076](0076-transport-lines-engine-game-split.md) §1-§3, §8.
 - Prior project: `PLAN.md` D3, D5, D16 (its 5,000-tile budget, never measured in WASM); `docs/12-belt-physics-measurements.md` §3a-§3c, §6 (quoted Factorio statements on aggregate movement).
 - Factorio FFF-176 "Belts optimization for 0.15" (https://www.factorio.com/blog/post/fff-176, published 2017-02-03, re-read 2026-10-11): "We no longer store absolute coordinates of items, instead we store the distance between items"; a free-flowing stretch updates only its terminal gaps ("you only increment/decrement those terminal gap sizes, and do not touch items at all"); a compressed belt "will stay that way forever", so the index of the last positive gap only decreases; adjacent belts are merged into one transport line. Candidate B is this scheme with runs of same-kind items collapsed to a count.
-- Milestone 40's spike: `packages/engine/fixtures/belts/tests/spike_repr.rs` (until milestone 45 deletes it), its Deviations in `docs/plan/40-item-representation-spike.md`, the record `test-results/rust/bench/spike-item-representation.json` (not tracked).
+- Milestone 40's spike: `packages/engine/fixtures/belts/tests/spike_repr.rs` (until milestone 45 deletes it), its Deviations in `docs/plan/40-item-representation-spike.md` (at tag `belts-complete`), the record `test-results/rust/bench/spike-item-representation.json` (not tracked).
 
 ## Amendment (2026-10-11, milestone 40): the measurement and the winner
 
