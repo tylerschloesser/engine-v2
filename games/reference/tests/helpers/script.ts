@@ -591,6 +591,22 @@ export async function domDriver(page: Page): Promise<ScriptDriver> {
     await g.frame(page)
     return g.pumpUntil(page, (u) => u?.belt?.at.x === at.x && u.belt.at.y === at.y)
   }
+  // A popover button, with the popover re-opened when it is hidden: on the CI runner the popover
+  // was seen open on the tile (`openBelt` resolved) and its button then stayed hidden for the whole
+  // test timeout (runs 38374454605 and 38380334609, step 67), as if a late event had closed it
+  // again; locally (Metal and SwiftShader alike) it never happens. Bounded: five opens, then the
+  // click's own error.
+  const popoverClick = async (at: Tile, selector: string): Promise<void> => {
+    for (let i = 0; ; i++) {
+      try {
+        await page.locator(selector).click({ timeout: i < 4 ? 5_000 : 20_000 })
+        return
+      } catch (e) {
+        if (i >= 4) throw e
+        await openBelt(at)
+      }
+    }
+  }
   return {
     panTo: (tile) => g.panTo(page, tile),
     async collect(resource, tile, n) {
@@ -697,7 +713,7 @@ export async function domDriver(page: Page): Promise<ScriptDriver> {
     async rotateBelt(at) {
       const open = (await openBelt(at))?.belt
       const was = open?.dir
-      await page.locator('[data-belt-rotate]').click()
+      await popoverClick(at, '[data-belt-rotate]')
       await untilBelts('RotateBelt landed', () => true)
       const now = await g.pumpUntil(page, (u) => u?.belt?.dir !== was)
       // A belt turns clockwise, a splitter 180 degrees in place (M54).
@@ -707,7 +723,7 @@ export async function domDriver(page: Page): Promise<ScriptDriver> {
     async pickUpBelt(at) {
       await openBelt(at)
       const before = (await g.beltDraws(page)).placed.length
-      await page.locator('[data-belt-pickup]').click()
+      await popoverClick(at, '[data-belt-pickup]')
       await untilBelts('PickUpBelt landed', (p) => p.length === before - 1)
       await g.pumpUntil(page, (u) => u?.belt === null)
     },
@@ -724,16 +740,17 @@ export async function domDriver(page: Page): Promise<ScriptDriver> {
       let ui = await openBelt(at)
       if (!shows(ui, want)) {
         const before = ui?.belt?.spawn[lane] ?? null
-        await page
-          .locator(`${lane$} [data-spawn-item="${item === 'off' ? 'off' : SLOT[item]}"]`)
-          .click()
+        await popoverClick(
+          at,
+          `${lane$} [data-spawn-item="${item === 'off' ? 'off' : SLOT[item]}"]`,
+        )
         await g.frame(page, 60) // the uplink is paced at 50 ms
         await stepTicks(3)
         const tapped = item === 'off' ? null : { item: SLOT[item], rate: before?.rate ?? 3 }
         ui = await g.pumpUntil(page, (u) => shows(u, tapped))
       }
       if (!shows(ui, want)) {
-        await page.locator(`${lane$} [data-spawn-rate="${rate}"]`).click()
+        await popoverClick(at, `${lane$} [data-spawn-rate="${rate}"]`)
         await g.frame(page, 60)
         await stepTicks(3)
         await g.pumpUntil(page, (u) => shows(u, want))
