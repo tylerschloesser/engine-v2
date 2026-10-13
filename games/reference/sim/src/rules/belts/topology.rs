@@ -143,6 +143,7 @@ thread_local! {
     static OPS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
     static UNMAPPED: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
     static UNSCHEDULED: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+    static DESTROYED: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
 }
 
 /// Transport writes (`create`, `destroy`, `split`, `join`, `extend_*`, `rescale`, `set_segments`,
@@ -173,6 +174,17 @@ pub fn belts_unmapped() -> u64 {
 pub fn spawners_unscheduled() -> u64 {
     #[cfg(debug_assertions)]
     return UNSCHEDULED.with(core::cell::Cell::get);
+    #[cfg(not(debug_assertions))]
+    0
+}
+
+/// Items this module's `destroy`s removed from the world on this thread (M56: a rotation's, a
+/// pick-up's, a re-pairing's and a splitter's or underground's lines, and a pair a full cap left
+/// unfinished), so a test's conservation reads made = live + sunk + destroyed exactly
+/// (`debug_assertions` only; 0 otherwise, like [`belts_unmapped`]).
+pub fn belts_destroyed_items() -> u64 {
+    #[cfg(debug_assertions)]
+    return DESTROYED.with(core::cell::Cell::get);
     #[cfg(not(debug_assertions))]
     0
 }
@@ -789,7 +801,7 @@ fn create_splitter(tr: Tx<'_>, b: Belt) {
 /// Destroys a splitter half's four lines (pick-up and rotation destroy its items).
 fn destroy_splitter_half(tr: Tx<'_>, s: SplitterLanes) {
     for l in s.input.into_iter().chain(s.output) {
-        ok(tr.destroy(l, &mut |_| {}), "destroy(splitter)");
+        kill(tr, l, "destroy(splitter)");
     }
 }
 
@@ -891,6 +903,16 @@ fn tx<'c>(cx: &'c mut TickCx<'_, RefGame>) -> Option<Tx<'c>> {
     cx.transport_mut().ok()
 }
 
+/// `destroy(line)`, its items counted in [`belts_destroyed_items`] (every item-destroying put of
+/// this module goes through here).
+fn kill(tr: Tx<'_>, line: LineId, what: &str) {
+    let _n = ok(tr.destroy(line, &mut |_| {}), what);
+    #[cfg(debug_assertions)]
+    if let Some(n) = _n {
+        DESTROYED.with(|c| c.set(c.get() + u64::from(n)));
+    }
+}
+
 /// Counts the write; a refusal other than a full cap (`Full`, or `NoRoom` from a rescale that would
 /// put two items on one position) is a bug in this module, asserted in debug builds. At a full cap
 /// a pair is mapped whole or not at all ([`drop_pair`], counted by [`belts_unmapped`]): a world
@@ -913,7 +935,7 @@ fn ok<T>(r: Result<T, TransportError>, what: &str) -> Option<T> {
 fn drop_pair(tr: Tx<'_>, lines: &[LineId], tiles: u32) {
     for &l in lines {
         if l != LineId::NONE {
-            ok(tr.destroy(l, &mut |_| {}), "destroy(unmapped)");
+            kill(tr, l, "destroy(unmapped)");
         }
     }
     unmapped(tiles);
@@ -944,11 +966,11 @@ fn run_pair(tr: Tx<'_>, lane: [LineId; 2], front: TilePos, dir: Dir, tiles: u32)
 fn destroy(tr: Tx<'_>, m: Mapped) {
     if let Form::Underground(_, End::In) = m.form {
         for h in hidden_of(tr, m.lane).into_iter().flatten() {
-            ok(tr.destroy(h, &mut |_| {}), "destroy(hidden)");
+            kill(tr, h, "destroy(hidden)");
         }
     }
     for l in m.lane {
-        ok(tr.destroy(l, &mut |_| {}), "destroy");
+        kill(tr, l, "destroy");
     }
 }
 
@@ -1522,7 +1544,7 @@ fn pair_entrance(cx: &mut TickCx<'_, RefGame>, at: TilePos, dir: Dir) {
         for (h, lane) in hidden.into_iter().zip(me.lane) {
             match h {
                 Some(h) => {
-                    ok(tr.destroy(h, &mut |_| {}), "destroy(hidden)");
+                    kill(tr, h, "destroy(hidden)");
                 }
                 None => set_out(tr, lane, Output::DeadEnd),
             }
@@ -1534,7 +1556,7 @@ fn pair_entrance(cx: &mut TickCx<'_, RefGame>, at: TilePos, dir: Dir) {
         [Some(a), Some(b)] if tr.len(a) == Ok(len) && tr.len(b) == Ok(len) => [a, b],
         _ => {
             for h in hidden.into_iter().flatten() {
-                ok(tr.destroy(h, &mut |_| {}), "destroy(hidden)");
+                kill(tr, h, "destroy(hidden)");
             }
             let Some(a) = ok(tr.create(len, SPEED), "create(hidden)") else {
                 unmapped(gap + 1);

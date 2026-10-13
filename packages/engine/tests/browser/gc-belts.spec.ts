@@ -30,6 +30,7 @@ zeroGcSuite({
 
 test('gc-belts items_in_view', async ({ page }) => {
   await openPage(page, '/gc-belts.html')
-  // M50: 260 belt sprites (4 rows x 65 visible tiles), then 2,072 items.
-  expect(await page.evaluate(() => window.__beltsRecords)).toBe(260 + 2_072)
+  // M50: 260 belt sprites (4 rows x 65 visible tiles), then 2,080 items (8 lanes x 65 tiles x 4,
+  // every visible tile full), read at a pinned follower tick and item clock (the page's `READ_TICK`).
+  expect(await page.evaluate(() => window.__beltsRecords)).toBe(260 + 2_080)
 })

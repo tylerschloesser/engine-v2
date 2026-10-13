@@ -18,6 +18,9 @@ export default defineConfig({
             // script's reproducibility, package/bindings hygiene), same two glob shapes as above.
             'games/*/src/**/*.test.ts',
             'games/*/scripts/**/*.test.mjs',
+            // M56: the reference game's pure test-helper checks (`tests/unit/`: the layout parser's
+            // pinned hashes, which `sim/tests/scenarios.rs` pins too).
+            'games/*/tests/unit/**/*.test.ts',
           ],
         },
       },

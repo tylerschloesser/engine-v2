@@ -15,6 +15,9 @@ use reference_sim::{RefAction, RefGame, RefParams, RefPlayer, RefReject, TileXY}
 /// `reference_sim::content::SEED` (M20b step 5 Deviations) is now the single source of that literal;
 /// this alias keeps every existing test's own `TEST_SEED` reference unchanged.
 pub const TEST_SEED: u64 = reference_sim::content::SEED;
+/// The harness's state budget (`max_entities`, `max_modified_tiles`, `max_action_growth`): 0007 §8's
+/// defaults, shared by `new`/`with_caps` and `replay_restored` so a restore cannot drift from the live world.
+pub const STATE_BUDGET: (u32, u32, u32) = (262_144, 1_048_576, 4_096);
 
 /// A fresh `Sim<RefGame>` plus a per-player `seq` counter, so a test can `join`/`dispatch`/
 /// `step_ticks` without repeating `Sim::genesis`/`Sim::step` plumbing (Provides: "new world, join a
@@ -46,9 +49,9 @@ impl RefScenario {
                 // (M12b/M15). M21 makes it real, so this native test harness needs a genuine
                 // headroom figure -- 0007 §8's own default -- instead of a value that would now
                 // reject every entity-creating action as `StateBudgetFull`.
-                max_entities: 262_144,
-                max_modified_tiles: 1_048_576,
-                max_action_growth: 4_096,
+                max_entities: STATE_BUDGET.0,
+                max_modified_tiles: STATE_BUDGET.1,
+                max_action_growth: STATE_BUDGET.2,
                 max_lines,
                 max_items,
             }),
@@ -771,9 +774,62 @@ impl RefScenario {
     }
 
     /// Writes a snapshot of the host and restores it into a fresh `Sim` (what a saved world does on
-    /// load: the same path `engine::testing::replay::heavy` uses), replacing `self.sim`.
+    /// load: the same path `engine::testing::replay::heavy` uses), replacing `self.sim`. M56: the
+    /// restore is `Authority::from_snapshot`, which reserves no transport caps (the restored store's
+    /// caps are 0: its schedules pause at their next insert and `lanes_at` finds nothing), so compare
+    /// hashes across it; to run a restored world on, use [`Self::replay_restored`].
     pub fn save_and_load(&mut self) {
         use engine::authority::Authority;
+        let (store, rng, tick) = self.snapshot_parts();
+        let authority = Authority::from_snapshot(store, rng, tick);
+        self.sim = Sim::from_parts(authority);
+    }
+
+    /// M56: restores a snapshot of the host as a host does, with the world's caps
+    /// (`engine::testing::replay`'s `Base::Snapshot`, `Authority::from_snapshot_with_caps`), runs it
+    /// `ticks` idle ticks (a log of one empty frame `ticks` after the snapshot) and returns its state
+    /// hash then. `self` is untouched.
+    pub fn replay_restored(&self, ticks: u32) -> u64 {
+        use engine::bytes::ByteSink;
+        use engine::testing::replay::{Base, SnapshotBase, WorldCaps, replay};
+        struct V(Vec<u8>);
+        impl ByteSink for V {
+            fn put(&mut self, b: &[u8]) {
+                self.0.extend_from_slice(b);
+            }
+        }
+        let (store, rng, tick) = self.snapshot_parts();
+        let tr = self.transport_store();
+        let caps = WorldCaps {
+            max_entities: STATE_BUDGET.0,
+            max_modified_tiles: STATE_BUDGET.1,
+            max_action_growth: STATE_BUDGET.2,
+            max_lines: tr.max_lines(),
+            max_items: tr.max_items(),
+        };
+        let mut log = V(Vec::new());
+        engine::persist::FrameWriter::<RefGame>::new().finish(ticks, &mut log);
+        let at = engine::time::Tick(tick.0 + ticks);
+        let base = Base::Snapshot(Box::new(SnapshotBase {
+            store,
+            tick,
+            rng,
+            log_ref_tick: tick.0,
+            caps,
+        }));
+        let got = replay(base, &log.0, &[at]);
+        assert_eq!(got.len(), 1, "the replay reached tick {at:?}");
+        got[0].1
+    }
+
+    /// The host's snapshot written and decoded into a fresh store (with its rng and tick).
+    fn snapshot_parts(
+        &self,
+    ) -> (
+        engine::store::Store<RefGame>,
+        engine::rng::SimRng,
+        engine::time::Tick,
+    ) {
         use engine::game::Game as _;
         use engine::persist::{Identity, SnapshotProgress, SnapshotReader, SnapshotWriter};
         use engine::store::Store;
@@ -818,8 +874,7 @@ impl RefScenario {
             Ok(SnapshotProgress::Done(info)) => info,
             _ => panic!("a snapshot this process just wrote must decode"),
         };
-        let authority = Authority::from_snapshot(reader.into_store(), info.rng, info.tick);
-        self.sim = Sim::from_parts(authority);
+        (reader.into_store(), info.rng, info.tick)
     }
 }
 
@@ -831,3 +886,5 @@ impl Default for RefScenario {
 
 pub mod bench_host;
 pub mod bench_run;
+pub mod census;
+pub mod layout;

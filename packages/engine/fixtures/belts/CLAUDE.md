@@ -24,7 +24,8 @@ and assert a property after every tick besides the hash: `scenario.json`/`golden
 4,096); `-edit-while-running`, `-inserter-like`, `-geometry-arc` (M43b), `-sideload-saturated`,
 `-sideload-contested`, `-fork-50-50`, `-fork-blocked-side`, `-big-step-fork`, `-forty-actions`
 (M44b; 42 actions: `runScriptScenario` acks its encoder, so no 32-action cap) at `maxLines` 16,
-`maxItems` 512. Each property is in its test's doc. `belts_op_*` run each op once;
+`maxItems` 512; `-mixed-speeds` (M56: four `Next`-linked chains at 24, 72, 96, 24, spacing held across
+every speed change, throughput the slowest line's). Each property is in its test's doc. `belts_op_*` run each op once;
 `transport_request_is_deferred_to_tick` runs `Belts::apply` between steps and asserts no line until
 the next tick. Commands: `pnpm test rust -t belts_golden`, `-t belts_op`, `-t transport_request`;
 the `.wasm` replays the goldens under Node and Bun in `pnpm test wasm -t determinism` (the discovery

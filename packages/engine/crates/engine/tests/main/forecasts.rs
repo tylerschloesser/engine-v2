@@ -702,6 +702,19 @@ fn forecast_client_matches_host() {
                 assert!(seen.totals.arrivals > 0, "{label}: arrivals from V");
                 assert!(seen.max_held < 4, "{label}: U and V are not held");
             }
+            // 0078 A8's known limit, pinned (M56): `A`'s front is held behind `B`'s moving tail
+            // most ticks, so 272 run lists in 300 ticks (0.91 a tick, 270 of them after the first
+            // frame) and 101 arrivals (0.34 a tick), no State; exact all the same.
+            "mixed speeds" => assert_eq!(
+                (
+                    seen.totals.run_lists,
+                    seen.late_run_lists,
+                    seen.totals.arrivals,
+                    seen.totals.states
+                ),
+                (272, 270, 101, 0),
+                "{label}: lists, late lists, arrivals and states in 300 ticks"
+            ),
             "fork" => assert!(seen.totals.arrivals > 0, "{label}: fork crossings arrive"),
             "spawner lane" => {
                 assert!(

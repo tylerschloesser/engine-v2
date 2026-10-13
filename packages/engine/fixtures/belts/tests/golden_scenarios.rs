@@ -1481,3 +1481,71 @@ fn belts_op_belt_rejects_past_tile_max() {
         "the in-range belt is placed"
     );
 }
+
+/// `mixed-speeds` (M56: the one scenario the reference game, one speed, cannot express): four
+/// 4-tile chains linked `Next` 0 -> 1 -> 2 -> 3 into a `Sink`, made at speed 24 and set by
+/// `Op::Speed` to 24, 72, 96 and 24, a `period` 256 spawner saturating chain 0 from tick 1. After
+/// every tick: the speeds are those four, `spawned == live + sunk`, and no two items are closer than
+/// `SPACING` on a line or across a hand-off (the spacing invariant across every speed change: the
+/// fast lines spread the items, 160-208 apart on chain 1 and 232-280 on chain 2, and chain 3 packs
+/// them back to exactly 64). The first item reaches the chains at ticks 1, 42, 57 and 68 (each
+/// chain's 1,024 positions at its speed), and the throughput is the slowest line's, 24 / 64 = 0.375
+/// a tick: 375 made by tick 1,000, 187 made and 187 sunk in ticks 500-1,000, 334 sunk in all, 41
+/// live. Pinned.
+#[test]
+fn belts_golden_mixed_speeds() {
+    let mut first = [0u32; 4];
+    let mut at_500 = (0, 0);
+    let mut end = (0, 0, 0);
+    let mut spread = Vec::new();
+    let hash = run("scenario-mixed-speeds.json", &mut |sim| {
+        let t = sim.tick().0;
+        let tr = sim.authority().transport();
+        let speeds: Vec<u16> = (0..4)
+            .map(|i| tr.speed(line(sim, i)).expect("line"))
+            .collect();
+        assert_eq!(speeds, [24, 72, 96, 24], "tick {t}: speeds");
+        for i in 0..4 {
+            if first[i as usize] == 0 && !items(sim, line(sim, i)).is_empty() {
+                first[i as usize] = t;
+            }
+        }
+        let (live, sunk_all, spawned) = census(sim);
+        assert_eq!(spawned, live + sunk_all, "tick {t}: conservation");
+        assert_eq!(short_gaps(sim), Vec::<String>::new(), "tick {t}: spacing");
+        if t == 500 {
+            at_500 = (sunk_all, spawned);
+        }
+        if t == 1_000 {
+            for i in 0..4 {
+                let p = positions(sim, i);
+                let mut d: Vec<u32> = p.windows(2).map(|w| w[1] - w[0]).collect();
+                d.sort_unstable();
+                d.dedup();
+                spread.push((p.len(), d));
+            }
+        }
+        end = (live, sunk_all, spawned);
+    });
+    assert_eq!(first, [1, 42, 57, 68], "the first item on each chain");
+    assert_eq!(
+        spread,
+        [
+            (15, vec![64]),
+            (6, vec![160, 208]),
+            (4, vec![232, 256, 280]),
+            (16, vec![64])
+        ],
+        "items and their gaps per chain at tick 1,000"
+    );
+    assert_eq!(
+        (end, end.1 - at_500.0, end.2 - at_500.1),
+        ((41, 334, 375), 187, 187),
+        "(live, sunk, spawned) at 1,000; sunk and spawned in ticks 500-1,000"
+    );
+    engine::testing::assert_golden_named(
+        env!("CARGO_MANIFEST_DIR"),
+        "golden-mixed-speeds.json",
+        &[hash],
+    );
+}

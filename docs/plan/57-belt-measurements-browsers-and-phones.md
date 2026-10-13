@@ -1,40 +1,57 @@
 # M57: Measurements on browsers and phones
 
-Status: not started · After: 56 · Tyler-dependent: no (Q5 default: `device:serve` + bench page, read by hand or a throwaway script)
+Status: not started · After: 56 · Tyler-dependent: T (the driverless iPhone pacing pass and the `M53-item-lead` verdict are his; the build, the Mac-driven runs, the Pixel evidence and the ADR proceed without him, with his rows left for his round and their defaults stated)
 
-Later-phase brief: goal, exit criteria and open questions. Filled in at the start of its phase.
+Rewritten 2026-10-12 against the as-built code (`scratchpad/m57-research.md`): the reference bench page has one mode (`large-save`, furnaces written at genesis with `maxLines: 0`), `__bench` reports tick/frame/main p95 and `engine_mem_grows` but no rAF or GPU figures, the browser determinism page runs hash-kind scenarios only (the 14 `fx-belts` script goldens cannot run in it today; the reference `full-game.log` already replays belts in WebKit and Firefox), no reference join-at-scale test exists, and the phone-round walker is gone (0070): every phone step is driven from the Mac one-off or walked by hand.
 
 ## Goal
-The belts goldens hold in WebKit and Firefox; the belt bench page runs on the iPhone 12 (pass/fail) and the Pixel 5 (evidence) for tick time, frame time and memory with a dense belt world; the numbers are recorded by an ADR amending 0062's budget record; `device-check` rows exist for what only a phone shows.
+The belt numbers that only a phone or another engine can give are measured and recorded: WebKit and Firefox replay every `fx-belts` golden and the reference golden; the reference bench page runs a dense belt world (`?bench=belts`) that the iPhone 12 and the Pixel 5 open through `device:serve`, reporting tick, frame, main and rAF p95 and memory growth; the late-join criterion of 0078 (10 s for a 256 x 144 view at default pacing) is measured on the reference world in the netcode harness; the phone caps question of 0079 §21 is decided from the phone's memory read; everything lands in ADR 0080 (belts budgets as measured, amending 0062) and in `device-check` rows walked once by the session before Tyler sees them.
 
 ## Read first
-1. `docs/architecture/README.md`
-2. `docs/architecture/testing-and-tooling.md` ("Determinism checks", "Manual device checks") and `.claude/skills/device-check/SKILL.md`
-3. `docs/decisions/0062-budgets-as-measured-at-phase-3-exit.md` and `0056-ios-pacing-and-tick-bar.md`
-4. `games/reference/CLAUDE.md` ("The bench page")
-Skills: `device-check`, `run-tests`. Memory notes on Tyler's machine and phones apply (`cp`/`mv`/`rm` aliases; the Pixel has a PIN and is never put to sleep; not during his live round; every URL and step run end to end before it is handed to him).
+1. `.claude/skills/device-check/SKILL.md` (whole: serving, the row format, M09b/M11/M16/M39 rows, `M53-item-lead`), `docs/decisions/{0062,0056,0018,0015,0070}-*.md`, 0047 A1, 0078 A10-A12, A14, 0079 §21
+2. `games/reference/CLAUDE.md` ("The bench page"), `games/reference/src/{bench.ts, bench-request.ts, check.ts, main.ts}`, `games/reference/sim/src/bench.rs` (the large-save genesis builder), `games/reference/vite.config.ts`, `packages/engine/scripts/device-serve.mjs`
+3. `packages/engine/tests/browser/{determinism.spec.ts, pages/src/determinism*.ts}`, `tests/support/{scenario.ts, feature-matrix.ts}`, `tests/wasm/determinism.test.ts` (`goldenScenarios()`), `playwright.config.ts` (the `engines` projects), `scripts/suites.mjs`
+4. `packages/engine/tests/netcode/belts-join.test.ts` (the join measurement pattern), `games/reference/tests/helpers/{net,layout}.ts` (M56's paced builder), `docs/plan/{45,50,53b,56}-*.md` Deviations
+Rules: `.claude/rules/hot-paths.md`, `.claude/rules/determinism.md`. Skills: `device-check`, `run-tests`, `gc-test` (if the bench page's gc row moves), `write-adr`. Memory notes: the Pixel has a PIN and is never slept (`svc power stayon usb`); iPhone Low Power forces 30 s Auto-Lock (turn it off from the Mac after); never during Tyler's live round; every URL and step run end to end before it is handed to him; bound every phone round; the manager runs the benches.
 
-## Scope (sketch)
-- `determinism.spec.ts` `@engines` gains the `fx-belts` goldens; `pnpm test:slow browser -t "release variants"` includes them.
-- The reference bench page gains `?bench=belts` (M45's world scaled to a viewport, spawners running, the camera over it at maximum zoom-out and at mid zoom, a slow pan); `window.__bench` reports tick p95, worker frame p95, main p95, records, `forecastSeenLate`.
-- Phone runs through `pnpm device:serve --tunnel`: iPhone 12 Safari (pass/fail against the 0056 bar for tick, the 0018 §9 budgets for frames with the iOS reading of 0056), Pixel 5 Chrome (evidence); a throwaway script in the scratchpad may read `__bench` through WebDriver/adb; nothing from the deleted phone-round tool is revived.
-- An ADR recording the belts budgets as measured (desktop proxies, phones, bytes), amending 0062; `device-check` rows `belts-frame-pacing` and `belts-memory` with their pages, steps and pass criteria.
+## Scope
+- **`?bench=belts`** on the reference bench build: `benchRequest` gains the mode with `scale` (1 = the phone world), `pan`, `zoom` (`max`, `mid` = 64 across); `benchHost` passes a regime to worldgen (the marker's `aux` gains a regime field beside the scale) and sets the world's caps to the phone pair (12,288 lines / 98,304 items, 0079 §21) for `scale 1`; `bench::build` writes the belt world at genesis (the large-save pattern: entities written directly and woken so the topology maps them on tick 1, no actions): across the 256 x 144 view, every third row an east-west run of 256 belt tiles with a spawner on both lanes at the west end (rate index 3, saturation) and a despawner at the east end, every eighth run carrying a splitter pair and an underground pair so forks and emergences are present: 48 runs, 12,288 belt tiles, 98,304 items at saturation (the item cap exactly), about 300 lines; the camera over the field at `zoom` with the triangle-wave pan. `__bench.hud()` gains `rafP95Ms`, `rafOver20Per10s` (main-thread rAF interval stats over the 10 s window), `beltRecords` (the frame's `counters.render.beltsViewRecords`), `itemsDrawn`, and `gpuP95Ms` if the client already exposes the timestamp-query figure `device.html` uses (else recorded as a gap). `bench-absent.spec.ts` still holds; a Chromium `@slow` spec opens `?bench=belts&zoom=max` and `&zoom=mid`, waits for the window and pins the exact `beltRecords` (36,864 / the mid count) and `itemsDrawn` at mid, `engineMemGrows` 0, with the p95s printed (the desktop record for 0080, not gated: `frame-belts` gates the desktop).
+- **WebKit and Firefox replay the `fx-belts` goldens**: the determinism worker gains the `runGoldenScenario` path for `kind: "script"` scenarios (sim plus the client-role encoder, as the wasm leg runs them), the page lists the `fx-belts` scenarios discovered like `goldenScenarios()`, `belts` joins `CRATE_KEYS` for the release-variants test; the `@engines` leg replays all 15 (14 + M56's `mixed-speeds`) to the same hashes in WebKit and Firefox; the fast Chromium tier is unchanged in time (the belts scenarios are `@engines @slow` or run only in the engines leg).
+- **The reference late join at scale** (`games/reference/tests/netcode/belt-join.test.ts`, `@slow`): a reference world built by M56's paced builder at a raised `actionRate` (the bench field above as a layout constant, or the 48-run field tiled from the balancer builder's primitives), spawners saturated, 400 ticks of flow; one client joins with the 256 x 144 view at default pacing: the join time (the tick of the last list, no queued enters, the view revealed), the bytes by section (`ChunkSnapshots` carries every belt entity here, unlike the fixture: the per-entity cost measured), the degrade level reached; pinned exact and compared with 0078's 10 s; a lifted hash-all run as the reference set. If it misses 10 s the levers are named (the view, the entity bytes of a belt tile, the chunk bucket) and Tyler is asked; nothing is widened.
+- **Phone runs** (manager, Mac-driven): `pnpm device:serve --tunnel --app reference --bench` (`?bench=belts&zoom=max` then `&zoom=mid`, 60 s each) on the iPhone 12 through WDA (tick p95 against 0056's bar, frame and main p95 against 0018 §9's 8 / 4 ms, `engineMemGrows` 0 and no reload; rAF figures as notes, 0056: a driven run never judges pacing) and on the Pixel 5 through `adb reverse` + CDP (evidence); the readings copied into 0080. Memory: the page at the phone caps reserves 8.2 MB; the single-player reference world at `world.json` caps reserves 21.8 MB sim + 18.0 MB client on a phone: 0079 §21's phone-cap decision is made from these runs (question 15 to Tyler: the shipped world's caps, default the recommended caps if the phone holds them with `grows` 0 and no reload, else the phone pair).
+- **`device-check` rows** (`.claude/skills/device-check/SKILL.md`, a new M57 section): `M57-belts-tick` (iPhone, `?bench=belts&zoom=max`, tick p95 against 0056), `M57-belts-frame-pacing` (driverless iPhone: rAF p95 ≤ 17.5 ms advisory, GPU p95 ≤ 6 ms if reported, frame p95 ≤ 8 ms, main ≤ 4 ms at both zooms; the fallback ladder of 0018 Consequences if it fails: scale cap, then M50's tile-visual fallback as a new piece of work), `M57-belts-memory` (60 s at each zoom, no reload, grows 0), `M57-belts-android` (the Pixel notes), with the `M53-item-lead` row kept and its setup script run end to end by the session; the M55 palette note (`build.ts`'s refusal label over the two-row palette on a 390 px phone) added to the lead row's steps as a look to report. Each row walked once by the session (Mac-driven) before it is handed to Tyler; his driverless pass and the lead verdict stay open with their defaults (accept) and are not exit criteria.
+- **ADR 0080** (manager, `write-adr`): belts budgets as measured, amending 0062's ledger format with the belt rows (bench baselines, budget rows, 0078's bytes, 0079 §21's arenas, the desktop proxies, the phone readings, the reference join, the phone-cap decision, the lead verdict's status); 0062 §2's `device:walk` line amended; `testing-and-tooling.md`'s bench list gains `frame-belts` and `minDeltaMs`.
 
-- (Note 2026-10-12, M55 review) On a 390 px phone the construction palette wraps to two rows and its top row runs under the refusal-reason label (`build.ts`, 36 px above the bottom edge): check it in the phone round and move the label above the palette if it reads badly.
+## Non-scope
+A new phone-round tool (0070: hand-walked rows, Mac-driven one-offs); the tile-visual fallback (M50: built only if the phone frame budget fails, as new work after Tyler sees the numbers); a phone join row (the join is measured in the harness; a two-device join is evidence if time permits); `forecastSeenLate` on the worker client (headless-only; recorded); the 0056 engine-cause instrument (gone with the walker; rAF p95 and the over-20 ms count stand in, as notes on iOS).
 
-## Seams
-**Provides:** `?bench=belts`, the device-check rows, the budgets ADR.
-**Consumes:** M45 world, M50 bench page pattern, M56 builder.
+## Files touched
+`games/reference/src/{bench.ts, bench-request.ts, bench-stats.ts}`, `games/reference/sim/src/{bench.rs, lib.rs (the marker)}`, `games/reference/tests/browser/bench-belts.spec.ts (new)`, `games/reference/tests/netcode/belt-join.test.ts (new)`, `games/reference/CLAUDE.md`, `packages/engine/tests/browser/{determinism.spec.ts, pages/src/determinism*.ts}`, `packages/engine/tests/support/{scenario.ts, feature-matrix.ts}`, `.claude/skills/device-check/SKILL.md` (manager), `docs/decisions/{0080 (new), 0062, README}.md` (manager), `docs/architecture/testing-and-tooling.md` (manager), `packages/engine/budgets.json` only if a gc row moves.
+
+## Planning decisions
+- **The belt world is written at genesis, not built by actions**: 12,288 placements at the host's 20 a second is ten minutes; the large-save builder already writes entities directly and the topology maps woken tiles on tick 1.
+- **The phone world is the phone pair's caps exactly**: 12,288 saturated belt tiles hold 98,304 items, so the page is the cap's worst case and its memory read decides 0079 §21's open question (question 15, default the recommended caps if the phone holds them).
+- **The join is measured in the harness on the reference world**, where belts are entities and ride the chunk bucket: the fixture's 6.35 s does not transfer; the number here is the one 0078 deferred.
+- **Driven phone runs give tick and memory verdicts and pacing notes only** (0056): Tyler's driverless pass is a row, not an exit criterion, so the milestone closes without him.
+
+## Order of work
+1. `?bench=belts` (regime, caps, genesis field, camera), the `__bench` fields, the Chromium spec; `bench-absent` still green.
+2. The determinism worker's script-scenario path, the page list, `CRATE_KEYS`; the `engines` leg in WebKit and Firefox.
+3. The reference join test on the paced builder.
+4. Manager: phone runs, rows, 0080, Deviations.
 
 ## Exit criteria
-- [ ] WebKit and Firefox replay every `fx-belts` golden to the same hashes.
-- [ ] The iPhone 12 run is recorded (numbers in the ADR); a miss is a question to Tyler with the profile, not a widened budget.
-- [ ] The `device-check` rows exist and were walked once by the session before being handed to Tyler.
-- [ ] `pnpm test`, `pnpm lint` and `pnpm test:slow browser` are green.
+- [ ] WebKit and Firefox replay every `fx-belts` golden and the reference golden to the same hashes (`pnpm test:slow browser` engines leg).
+- [ ] `?bench=belts` runs at both zooms with the pinned records on desktop; the iPhone 12 and Pixel 5 readings (driven) are recorded in 0080; a budget miss is a question to Tyler with the profile, never a widened budget.
+- [ ] The reference late join is measured and pinned against 0078's 10 s; the result and its levers recorded in 0080 (and 0078 if the criterion is not met).
+- [ ] The `device-check` rows exist and were walked once by the session (Mac-driven) before being handed to Tyler; his rows carry their defaults.
+- [ ] `pnpm test`, `pnpm lint`, `pnpm test:slow browser` green; the fast tiers inside their budgets; `belts-tick` within noise of 0.2146 ms.
 
-## Open questions (answered by earlier phases)
-- M50: whether the tile-visual fallback is in; the phone frame numbers depend on it.
-- M45: the phone `max_items`/`max_lines` defaults versus the memory read on the device.
+## Verification commands
+`pnpm test browser -t bench-absent` · `pnpm test:slow browser -t bench_belts` · `pnpm test:slow browser -t "release variants"` · `pnpm test:slow browser -t "@engines"` · `pnpm test:slow netcode -t reference_join` · `pnpm device:serve --app reference --bench` (loopback; `--tunnel` for the iPhone) · `pnpm test && pnpm lint`
+
+## Budgets
+`gc.pages.reference*` if the bench page's JS grows (the bench build only); no engine row.
 
 ## Deviations
 (filled in during execution)

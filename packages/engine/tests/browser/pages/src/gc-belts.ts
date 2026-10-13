@@ -22,7 +22,10 @@ import {
   drawListRecords,
   parkWorkers,
   pumpUntilLive,
+  resumeWorkers,
+  simCounters,
   stepSimTickSync,
+  untilQuiescent,
 } from '../../../../src/test/client.ts'
 import { installGcPage } from '../../../../src/test/gc-page.ts'
 import { createManualClock } from '../../../../src/test/manual-clock.ts'
@@ -77,6 +80,15 @@ const client = createClient({
   test: { clock, flags: { gcHook: true } },
 })
 await pumpUntilLive(client)
+// `__beltsRecords` is read at one pinned state: the follower at `READ_TICK` and the item clock at it
+// (`host_now` = `T`, fraction 0, 0078 A12). `pumpUntilLive` ticks until the session is live, a
+// scheduling-dependent count (1 to 7 seen under load), so the join below runs `READ_TICK - pumped`
+// ticks, one stepped 50 ms frame each, rather than a fixed 40.
+const READ_TICK = 60
+await parkWorkers(client)
+const pumped = (await simCounters(client)).ticksRun
+await resumeWorkers(client)
+if (pumped > READ_TICK - 40) throw new Error(`gc-belts: pumpUntilLive ran ${pumped} ticks`)
 const harness = asHarness(client)
 
 const drawablesRenderer = await createDrawablesRenderer(device.device, {
@@ -105,15 +117,27 @@ setViewport(client, 1280, 640)
 const FRAME_MS = 50
 
 // The join: chunk snapshots, every line's structure and first list (one-time setup, 0016 §2).
-for (let i = 0; i < 40; i++) {
+for (let i = pumped; i < READ_TICK; i++) {
   harness.stepFrame(FRAME_MS)
   stepSimTickSync(client, 1)
 }
+// The client worker draws (`frame()`, then the DrawList publish) before it applies the host frames
+// waiting on its downlink (`worker/client.ts` `body()`), and `stepSimTickSync` returns on the sim's
+// ack: unsettled, the read's frame drew the follower at `READ_TICK - 1` with the item clock one tick
+// ahead (2,332 records) or at `READ_TICK` (2,340) by which wake came first.
+await untilQuiescent(client)
+await resumeWorkers(client)
 harness.stepFrame(FRAME_MS)
 harness.stepTick()
 
 const records: DrawRecord[] = []
 window.__beltsRecords = drawListRecords(client, records)
+const readClock = client.clock()
+if (readClock.authoritative !== READ_TICK || readClock.tickFraction !== 0) {
+  throw new Error(
+    `gc-belts: read at tick ${readClock.authoritative} + ${readClock.tickFraction}, not ${READ_TICK}`,
+  )
+}
 
 const uploadDrain = createUploadDrain(new RingConsumer(client.uploadRing), renderer, {
   sabWriteTextureOk: device.sabWriteTextureOk,
