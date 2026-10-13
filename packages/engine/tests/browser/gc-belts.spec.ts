@@ -22,10 +22,13 @@ zeroGcSuite({
   controlKinds: ['object', 'burst'],
   // M49 CI follow-up (run 38310820864): on the CI runner (4 vCPUs, SwiftShader) `neg object main`
   // and `neg object sim` hit the gc project's timeout (90 s there) in the warm-up passes (7 of 8);
-  // here a test takes about 5 s. Under SwiftShader only, three times the project's timeout for this
+  // here a test takes about 5 s. Under SwiftShader only, a multiple of the project's timeout for this
   // page: a ceiling on a hang, not a budget (nothing is measured against it). Locally the project's
-  // stands, so a real hang still fails fast (`playwright.config.ts`, ADR 0071).
-  timeoutScale: process.env.ENGINE_GPU === 'swiftshader' ? 3 : undefined,
+  // stands, so a real hang still fails fast (`playwright.config.ts`, ADR 0071). Five, not three
+  // (M58 CI follow-up): `neg burst client @slow` read 196 s on run 38359813173 and timed out at
+  // 270 s on run 38391953558 with nothing in its path changed; the client worker renders the full
+  // belt field in software while the burst runs.
+  timeoutScale: process.env.ENGINE_GPU === 'swiftshader' ? 5 : undefined,
 })
 
 test('gc-belts items_in_view', async ({ page }) => {
@@ -33,7 +36,7 @@ test('gc-belts items_in_view', async ({ page }) => {
   // renders the full field in software, and after the four burst pages at machine load 10 it ran
   // past the project's 90 s (locally, alone, 2 s there; CI run 38384 of the popover-retry commit
   // read the follower one tick behind, which the page's settle cycles now absorb).
-  test.setTimeout(process.env.ENGINE_GPU === 'swiftshader' ? 270_000 : 30_000)
+  test.setTimeout(process.env.ENGINE_GPU === 'swiftshader' ? 450_000 : 30_000)
   await openPage(page, '/gc-belts.html')
   // M50: 260 belt sprites (4 rows x 65 visible tiles), then 2,080 items (8 lanes x 65 tiles x 4,
   // every visible tile full), read at a pinned follower tick and item clock (the page's `READ_TICK`).
