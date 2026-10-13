@@ -28,17 +28,25 @@ struct Edits {
 /// seeded 300-tick worlds under random edits (one tick in four): cuts, joins (a `Next` feeder into
 /// its target), destroys, inserts, removes and take-fronts on any live line. The world: chain 0
 /// (3 tiles) `Next` chain 1 (2 tiles, `Sink`); chain 2 side-loads onto chain 1 at a random entry;
-/// chain 3 forks onto chain 4 (`Sink`) and chain 5 (`DeadEnd`); spawners on chains 0, 2, 3.
+/// chain 3 forks onto chain 4 (`Sink`) and chain 5 (`DeadEnd`); spawners on chains 0, 2, 3. M61: on
+/// odd seeds chain 6 (spawner too) forks onto the same two as chain 3's partner (`ForkPair`), so
+/// the random edits also cut, join and destroy around a pair.
 #[test]
 fn prop_conservation() {
     let mut e = Edits::default();
     let mut sunk = 0;
+    let mut pairs = 0;
+    let mut turned = 0;
     for seed in 0..6u64 {
         let mut rng = SimRng::new(0xC0_0000 + seed);
         let mut w = World::new(seed + 1, 64, 1024);
         let at = rng.below(512);
         let mut setup = vec![chain(3, 24, &[]), chain(2, 24, &[])];
         setup.extend((0..4).map(|_| chain(2, 24, &[])));
+        let paired = seed % 2 == 1;
+        if paired {
+            setup.push(chain(2, 24, &[]));
+        }
         setup.extend([
             Op::Link {
                 from_line: 0,
@@ -57,11 +65,38 @@ fn prop_conservation() {
             },
             Op::Sink { line: 4 },
         ]);
+        if paired {
+            setup.extend([
+                Op::Fork {
+                    line: 6,
+                    a: 4,
+                    b: 5,
+                },
+                Op::ForkPair {
+                    line: 6,
+                    a: 4,
+                    b: 5,
+                    partner: 3,
+                },
+                Op::Spawner {
+                    line: 6,
+                    item: 4,
+                    period: 256,
+                },
+            ]);
+        }
         for (line, item) in [(0, 1), (2, 2), (3, 3)] {
             let period = between(&mut rng, 256, 1024);
             setup.push(Op::Spawner { line, item, period });
         }
         w.step(&setup);
+        if paired {
+            assert!(
+                matches!(w.out(w.line(3)), Output::Fork { partner: Some(p), .. } if p == w.line(6)),
+                "seed {seed}: chain 3 paired with chain 6"
+            );
+            pairs += 1;
+        }
         for t in 2..=300 {
             let mut ops = Vec::new();
             let mut joined = LineId::NONE;
@@ -122,11 +157,19 @@ fn prop_conservation() {
             e.inserts += u32::from(g.inserted > before.inserted);
             e.removes += u32::from(g.removed + g.taken > before.removed + before.taken);
             sunk = sunk.max(g.sunk);
+            turned += u32::from(paired && (w.fork_yield(w.line(3)) || w.fork_yield(w.line(6))));
         }
     }
     assert!(
         e.cuts > 5 && e.joins > 5 && e.destroys > 2 && e.inserts > 5 && e.removes > 5 && sunk > 50,
         "the edits landed and items sank: {e:?}, sunk {sunk}"
+    );
+    assert_eq!(pairs, 3, "three seeds paired a fork");
+    // Non-vacuity of the turn on the paired seeds: ticks where chain 3 or chain 6 held the turn
+    // bit (191 of the 897 measured; a broken turn that still conserves items reads 0).
+    assert!(
+        turned >= 100,
+        "the pair's turn engaged on only {turned} ticks"
     );
 }
 

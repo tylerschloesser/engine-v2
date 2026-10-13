@@ -20,6 +20,18 @@
 use super::{LineId, Output, Schedule, Transport};
 
 pub(super) const NIL: u32 = u32::MAX;
+/// [`Line::fork`]: the fork prefers `b` (M44's toggle).
+pub(super) const FORK_TOGGLE: u8 = 1;
+/// [`Line::fork`]: the input turn (M61): this line delivered last and its partner has not since.
+pub(super) const FORK_YIELD: u8 = 2;
+/// [`Line::fork`]: during `advance`, this line delivered while it owed the turn, because its
+/// partner had not advanced yet and its landing left room for the partner's: the partner's
+/// delivery later this tick repays it and does not pass the turn (`advance.rs`). Scratch: never
+/// encoded, cleared by the line's own `advance_line` and read by its partner only when the line
+/// advanced this tick, so it never outlives the tick observably.
+pub(super) const FORK_AHEAD: u8 = 8;
+/// The encoded fork bits (`codec.rs`).
+pub(super) const FORK_STATE: u8 = FORK_TOGGLE | FORK_YIELD;
 /// `Line::fresh_cap` with no landing across a cut this tick.
 pub(super) const NO_CAP: u16 = u16::MAX;
 
@@ -38,7 +50,9 @@ pub(super) struct Node {
     pub prev: u32,
 }
 
-/// One line's record. A free slot has `id == LineId::NONE` and `head` is the next free slot.
+/// One line's record. A free slot has `id == LineId::NONE` and `head` is the next free slot. 112 B
+/// since M61 (104 B before: a `Fork`'s `partner` grew [`Output`] from 12 B to 16 B and
+/// `partner_slot` takes the 4 B left of the 8 B alignment step).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Line {
     pub id: LineId,
@@ -50,9 +64,15 @@ pub(super) struct Line {
     pub next_slot: u32,
     /// The slot of `Fork`'s `b` (`NIL` otherwise), kept like `next_slot` (M44).
     pub alt_slot: u32,
-    /// A `Fork`'s preferred output (M44, 0076 §1): `false` is `a`. Sim state (encoded with the
-    /// fork's output, `codec.rs`); always `false` on a line whose output is not a `Fork`.
-    pub toggle: bool,
+    /// The slot of `Fork`'s `partner` (M61; `NIL` for none or another output), kept by `set_out`,
+    /// the surgery redirects and decode (a partner that goes away leaves the fork `None`).
+    pub partner_slot: u32,
+    /// A `Fork`'s bits: [`FORK_TOGGLE`] (M44, 0076 §1: its preferred output, clear is `a`) and
+    /// [`FORK_YIELD`] (M61: it delivered last, so its partner goes first when both are due), sim
+    /// state encoded with the fork's output as one byte (`codec.rs`); [`FORK_AHEAD`] is `advance`
+    /// scratch, never encoded. All clear on a line whose output is not a `Fork` (a partner's
+    /// delivery only ever clears its `FORK_YIELD`).
+    pub fork: u8,
     pub head: u32,
     pub tail: u32,
     pub runs: u32,
@@ -121,7 +141,8 @@ impl Line {
             out: Output::DeadEnd,
             next_slot: NIL,
             alt_slot: NIL,
-            toggle: false,
+            partner_slot: NIL,
+            fork: 0,
             head: NIL,
             tail: NIL,
             runs: 0,

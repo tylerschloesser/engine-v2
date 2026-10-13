@@ -71,7 +71,7 @@ test('bench-build @slow', async () => {
 }, 120_000)
 
 /** `bench_belts.rs`'s `bench_belts_field_hash`: the belt field's state hash at tick 200 (seed 7). */
-const BELT_FIELD_HASH_200 = 'ee989193ed484d9e'
+const BELT_FIELD_HASH_200 = '2da20837c13a48b6'
 
 test('bench-build: reference belt field hashes as natively @slow', async () => {
   const cfg: WorldConfig = {

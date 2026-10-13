@@ -6,13 +6,16 @@
 import { RegionId, Status } from '../abi.js'
 import type { EngineInstance } from '../loader.js'
 
-/** A line's output as the replica holds it (0076 §1; a fork's toggle is item state, not here). */
+/**
+ * A line's output as the replica holds it (0076 §1; a fork's toggle and M61 turn are item state,
+ * not here; `partner` is the other input that takes turns with it, M61).
+ */
 export type LineOutput =
   | { kind: 'DeadEnd' }
   | { kind: 'Sink' }
   | { kind: 'Next'; line: number }
   | { kind: 'Merge'; line: number; at: number }
-  | { kind: 'Fork'; a: number; b: number }
+  | { kind: 'Fork'; a: number; b: number; partner: number | null }
 
 /** One registered segment of a line's path (0076 §4; positions and points in 1/256 tile). */
 export type LineSegment =

@@ -39,7 +39,7 @@
 //! `max_lines` ids (structures change at placement rate); past that it is marked overflowed and
 //! the host reconciles every line once instead (`host::lines`). A client replica's store is in
 //! *replica mode* ([`Transport::set_replica`]): it holds structures only, through
-//! [`Transport::apply_structure`], and answers `sunk`/`toggle` with `Unknown`.
+//! [`Transport::apply_structure`], and answers `sunk`/`toggle`/`fork_yield` with `Unknown`.
 //!
 //! M47 (0078 A3): items replicate as forecasts. On the host, `forecast.rs`'s tracker (derived,
 //! never encoded or hashed) follows every line's model through `advance`'s hooks and decides each
@@ -82,7 +82,7 @@ pub use forecast::{
 };
 pub use geometry::{Geometry, MAX_LINE_TILES, MAX_SEGMENTS, Segment, walk_evals};
 use geometry::{SegRec, TileEntry};
-use line::{Line, NIL, Node};
+use line::{FORK_TOGGLE, FORK_YIELD, Line, NIL, Node};
 
 /// The longest line (M43): positions stay below `i32::MAX`, so a run's signed gap (`line.rs`) is
 /// an `i32`. `create`, `extend_*`, `join` and `rescale` refuse past it with
@@ -135,9 +135,16 @@ pub enum Output {
     /// plain hand-off landing `target.len - o` (`tail + SPACING <= landing`), else to the other
     /// on the same rule, else it waits at position 0; the toggle flips only when the item went to
     /// the preferred side. `a != b`, both at least the feeder's `speed` long (0079 §8).
+    ///
+    /// `partner` (M61): the other input line sharing this fork's `{a, b}` (a splitter's two inputs
+    /// name each other), so the two take turns (`advance.rs`'s input turn): a line that delivered
+    /// last waits while its partner's front item is also due this tick. `None` (a lone input)
+    /// behaves as before M61. The partner must exist and is not the line itself (`set_out`); a
+    /// destroyed partner (or one joined away) leaves `None` (`surgery.rs`).
     Fork {
         a: LineId,
         b: LineId,
+        partner: Option<LineId>,
     },
     /// Deletes the item and counts it on the line.
     Sink,
@@ -160,7 +167,8 @@ pub enum TransportError {
     NoLine,
     /// `Item(0)` ("none") cannot be placed on a line.
     BadItem,
-    /// An output naming the line itself, or a `Fork` with `a == b`.
+    /// An output naming the line itself (a `Fork`'s `partner` included), or a `Fork` with
+    /// `a == b`.
     Unsupported,
     /// `set_caps` after the arena was reserved, with other caps (0079 §5: reserved once).
     CapsFixed,
@@ -202,6 +210,14 @@ pub trait TransportRead {
     /// The line's fork toggle (M44): `true` when its `Fork` prefers `b`; `false` for any other
     /// output.
     fn toggle(&self, line: LineId) -> Result<bool, Unknown>;
+    /// The line's fork turn bit (M61, `advance.rs`'s input turn): `true` when the line delivered
+    /// at its `Fork` last and its partner has not since, so it waits while the partner's front
+    /// item is also due. Host sim state, encoded with the toggle (`codec.rs`); `false` for a line
+    /// that is not a fork; `Unknown` where items are not known (a replica, like `toggle`; the
+    /// default for every context but the host store).
+    fn fork_yield(&self, _line: LineId) -> Result<bool, Unknown> {
+        Err(Unknown)
+    }
     /// The line's registered segments front to back (M43; none until `set_segments`).
     fn segments(&self, line: LineId, f: &mut dyn FnMut(Segment)) -> Result<(), Unknown>;
     /// Where position `pos` is in the world (M43, `geometry.rs`): `None` without segments or for
@@ -270,7 +286,12 @@ pub trait TransportWrite: TransportRead {
     /// that changes a line's `len` clears its segments; the game registers them again.
     fn set_segments(&mut self, line: LineId, segs: &[Segment]) -> Result<(), TransportError>;
     /// Sets what the line feeds (refusals: [`TransportError`]). A changed output clears the fork
-    /// toggle; the same output again is a no-op (toggle, order and `touched` unchanged).
+    /// toggle; the same output again is a no-op (toggle, order and `touched` unchanged). M61: a
+    /// `Fork` with a `partner` pairs two inputs (a mutual link): the partner must already be a
+    /// `Fork` on the same `a` and `b`, lone or naming this line (else `Unsupported`); a lone one is
+    /// linked back (its turn cleared) and this line starts on its toggle. Replacing a paired fork
+    /// (with any other output) leaves its partner a lone fork, as `destroy` does. So a splitter's
+    /// two inputs are set lone first, then one of them with the other as `partner`.
     fn set_out(&mut self, line: LineId, out: Output) -> Result<(), TransportError>;
     fn set_speed(&mut self, line: LineId, speed: u16) -> Result<(), TransportError>;
     /// A spawner's primitive: lands at `max(len - speed, tail + SPACING)`, refused (`NoRoom`) past
@@ -769,6 +790,27 @@ impl Transport {
         Ok(self.advanced_epoch != 0 && self.lines[l as usize].mark == self.advanced_epoch)
     }
 
+    /// M61 fix round 2: slot `p`, the partner of a fork that is being replaced, stops naming it:
+    /// a lone fork with its turn cleared (its toggle kept), touched as an output change.
+    fn unpair(&mut self, p: u32) {
+        let rec = &mut self.lines[p as usize];
+        if let Output::Fork {
+            a,
+            b,
+            partner: Some(_),
+        } = rec.out
+        {
+            rec.out = Output::Fork {
+                a,
+                b,
+                partner: None,
+            };
+            rec.partner_slot = NIL;
+            rec.fork &= FORK_TOGGLE;
+            self.touch_motion(p);
+        }
+    }
+
     /// The update order (ascending in position: the first line advances first), recomputed first
     /// if the graph changed. Tests and tools; `advance` uses its own copy.
     pub fn order_into(&mut self, out: &mut Vec<LineId>) {
@@ -942,7 +984,12 @@ impl TransportRead for Transport {
 
     fn toggle(&self, line: LineId) -> Result<bool, Unknown> {
         self.items_known()?;
-        Ok(self.read_line(line)?.toggle)
+        Ok(self.read_line(line)?.fork & FORK_TOGGLE != 0)
+    }
+
+    fn fork_yield(&self, line: LineId) -> Result<bool, Unknown> {
+        self.items_known()?;
+        Ok(self.read_line(line)?.fork & FORK_YIELD != 0)
     }
 
     fn segments(&self, line: LineId, f: &mut dyn FnMut(Segment)) -> Result<(), Unknown> {
@@ -1078,27 +1125,76 @@ impl TransportWrite for Transport {
                 }
                 (ts, NIL)
             }
-            Output::Fork { a, b } => {
-                if a == line || b == line || a == b {
+            Output::Fork { a, b, partner } => {
+                if a == line || b == line || a == b || partner == Some(line) {
                     return Err(TransportError::Unsupported);
                 }
                 let sa = self.slot(a).ok_or(TransportError::NoLine)?;
                 let sb = self.slot(b).ok_or(TransportError::NoLine)?;
+                if let Some(p) = partner {
+                    // M61 fix round 2: the link is mutual over the same `{a, b}`. The partner is
+                    // already a fork on these targets, lone or naming this line (it is linked
+                    // back below).
+                    let ps = self.slot(p).ok_or(TransportError::NoLine)?;
+                    match self.lines[ps as usize].out {
+                        Output::Fork {
+                            a: pa,
+                            b: pb,
+                            partner: pp,
+                        } if pa == a && pb == b && (pp.is_none() || pp == Some(line)) => {}
+                        _ => return Err(TransportError::Unsupported),
+                    }
+                }
                 if !fits(self, sa) || !fits(self, sb) {
                     return Err(BadSpeed);
                 }
                 (sa, sb)
             }
         };
+        let partner_slot = match out {
+            Output::Fork {
+                partner: Some(p), ..
+            } => self.slot(p).expect("checked"),
+            _ => NIL,
+        };
         if let Output::Next(old) = self.lines[slot as usize].out {
             self.fc.next_changed(self.lines[slot as usize].id, old);
+        }
+        // M61 fix round 2: a replaced fork's partner is a lone fork again (as `destroy` leaves it).
+        let old_ps = self.lines[slot as usize].partner_slot;
+        if old_ps != NIL {
+            self.unpair(old_ps);
+        }
+        if partner_slot != NIL {
+            let p = &mut self.lines[partner_slot as usize];
+            if let Output::Fork { partner: None, .. } = p.out {
+                // The lone partner names this line back, its turn clear (it owes nothing yet).
+                if let Output::Fork { a, b, .. } = p.out {
+                    p.out = Output::Fork {
+                        a,
+                        b,
+                        partner: Some(line),
+                    };
+                }
+                p.partner_slot = slot;
+                p.fork &= FORK_TOGGLE;
+                self.touch_motion(partner_slot);
+            }
         }
         let rec = &mut self.lines[slot as usize];
         rec.out = out;
         rec.next_slot = next_slot;
         rec.alt_slot = alt_slot;
-        // A changed output starts preferring `a` (the toggle is only ever set on a fork).
-        rec.toggle = false;
+        // A changed output starts preferring `a` with no turn owed (the fork bits are only ever
+        // set on a fork), or (fix round 1) with its partner's toggle: a pair shares one.
+        let toggle = if partner_slot != NIL {
+            self.lines[partner_slot as usize].fork & FORK_TOGGLE
+        } else {
+            0
+        };
+        let rec = &mut self.lines[slot as usize];
+        rec.partner_slot = partner_slot;
+        rec.fork = toggle;
         rec.jam_valid = false;
         self.graph_dirty = true;
         self.touch_motion(slot);

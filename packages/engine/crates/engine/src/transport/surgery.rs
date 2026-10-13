@@ -24,7 +24,9 @@
 //! A merge's entry point also follows the positions of its target (M44 review): `extend_front`
 //! adds `by`, `shrink_front` subtracts it (an entry point that falls off the front, `at < by`,
 //! becomes `DeadEnd`, like a destroyed target), `rescale` maps it to `floor(at x new / old)`;
-//! `extend_back`/`shrink_back` leave it (positions from the front do not change).
+//! `extend_back`/`shrink_back` leave it (positions from the front do not change). A `Fork`'s
+//! `partner` (M61) is no target: a destroyed or joined-away partner leaves the fork `None` (its
+//! turn bit cleared); a split partner keeps its id, its output and the pairing.
 //!
 //! Schedules (M53, 0079 §21) follow the line's back, where a spawner inserts: `split` moves the
 //! line's schedule to the new back part; `join` moves `back`'s to `front` (the joined line's back is
@@ -32,7 +34,7 @@
 //! it; `extend_*`, `shrink_*` and `rescale` keep it. A moved schedule is declared to the forecast tracker on its new line (the
 //! surgery resends both lines' lists anyway).
 
-use super::line::{Line, NIL, Run};
+use super::line::{FORK_TOGGLE, Line, NIL, Run};
 use super::{Item, LineId, MAX_LEN, Output, SPACING, Transport, TransportError};
 
 const SP: i64 = SPACING as i64;
@@ -128,7 +130,7 @@ impl Transport {
                     slot,
                     NIL,
                 )),
-                (Output::Fork { a, b }, _) if a == from || b == from => {
+                (Output::Fork { a, b, partner }, _) if a == from || b == from => {
                     let (other, other_slot) = if a == from {
                         (b, rec.alt_slot)
                     } else {
@@ -141,9 +143,9 @@ impl Transport {
                     };
                     match id {
                         Some(id) if id != other => Some(if a == from {
-                            (Output::Fork { a: id, b }, slot, rec.alt_slot)
+                            (Output::Fork { a: id, b, partner }, slot, rec.alt_slot)
                         } else {
-                            (Output::Fork { a, b: id }, rec.next_slot, slot)
+                            (Output::Fork { a, b: id, partner }, rec.next_slot, slot)
                         }),
                         // Gone, or both targets are now one line: a plain hand-off to the other.
                         _ => Some((Output::Next(other), other_slot, NIL)),
@@ -151,13 +153,44 @@ impl Transport {
                 }
                 _ => None,
             };
+            // M61: a fork whose partner went away (destroyed or joined behind another line; a
+            // split partner keeps its id and its output) is a lone input again.
+            let gone = !matches!(to, Redirect::Split { .. });
+            let base = moved.unwrap_or((rec.out, rec.next_slot, rec.alt_slot));
+            let moved = match base.0 {
+                Output::Fork {
+                    a,
+                    b,
+                    partner: Some(p),
+                } if gone && p == from => Some((
+                    Output::Fork {
+                        a,
+                        b,
+                        partner: None,
+                    },
+                    base.1,
+                    base.2,
+                )),
+                _ => moved,
+            };
             if let Some((out, next_slot, alt_slot)) = moved {
                 if let Output::Next(old) = self.lines[s as usize].out {
                     self.fc.next_changed(self.lines[s as usize].id, old);
                 }
                 let rec = &mut self.lines[s as usize];
-                if !matches!(out, Output::Fork { .. }) {
-                    rec.toggle = false;
+                match out {
+                    Output::Fork {
+                        partner: Some(_), ..
+                    } => {}
+                    // A lone fork owes no turn.
+                    Output::Fork { partner: None, .. } => {
+                        rec.fork &= FORK_TOGGLE;
+                        rec.partner_slot = NIL;
+                    }
+                    _ => {
+                        rec.fork = 0;
+                        rec.partner_slot = NIL;
+                    }
                 }
                 rec.out = out;
                 rec.next_slot = next_slot;
@@ -242,7 +275,7 @@ impl Transport {
         // destroyed it must also drop what its last step handed on).
         match self.lines[slot as usize].out {
             Output::Next(old) => self.fc.next_changed(line, old),
-            Output::Fork { a, b } => {
+            Output::Fork { a, b, .. } => {
                 self.fc.next_changed(line, a);
                 self.fc.next_changed(line, b);
             }
@@ -423,7 +456,7 @@ impl Transport {
         // The joined line would feed itself.
         let feeds_back = match self.lines[fs as usize].out {
             Output::Next(t) | Output::Merge { line: t, .. } => t == back,
-            Output::Fork { a, b } => a == back || b == back,
+            Output::Fork { a, b, .. } => a == back || b == back,
             Output::DeadEnd | Output::Sink => false,
         };
         // M53 (0079 §21): a schedule on `front` would sit mid-line on the joined line, whose back is

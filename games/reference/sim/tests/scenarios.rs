@@ -133,13 +133,19 @@ fn layout_hashes_pinned() {
 
 /// The 4x4 balancer ([`BALANCER`]) with four saturated spawners (iron, coal, wood, stone; both lanes)
 /// and four despawners, 1,000 ticks, conservation exact after every tick. Every input runs at its
-/// full rate (2,998 made: 8 lanes x 0.3748 a tick) and every output lane sinks at the same rate once
-/// flowing: 187 or 188 a lane in the steady window 500-1,000 (500 x 0.3748 = 187.4). The totals
+/// full rate (3,000 made: 8 lanes x 3/8 a tick; 2,998 before M61) and every output lane sinks at
+/// the same rate once flowing: 187 or 188 a lane in the steady window 500-1,000 (500 x 3/8 =
+/// 187.5). The totals
 /// differ by the trip only: c's outputs (x 1, 2) are fed by the short paths (first sink at tick 75),
 /// d's (x 4, 5) through the crossing's curves and the east underground (first sinks at 81 and 84),
-/// so after 1,000 ticks they have sunk 347, 347, 337 and 336 a lane, the difference held in transit.
+/// so after 1,000 ticks they have sunk 347, 347, 337 and 337 a lane (336 for the last before M61,
+/// whose window read 187), the difference held in transit.
 /// By kind the outputs are not mixed evenly (the forks alternate only while both sides have room):
-/// pinned. With all eight input lanes saturated, any one-to-one wiring would sink the same 187-188
+/// pinned. M61 (the input turn, a splitter lane's two inputs sharing one output toggle, and fork
+/// landings compressed right behind the tail) routes saturated inputs straight through where the
+/// two deliver in turn (the shared toggle alternates with them: one always meets `a`, the other
+/// `b`, Factorio's pass-through at saturation): coal and wood each reach one output (694), while
+/// stone and iron share outputs 2 and 3 (504 / 186 and 170 / 488; measured). Before M61 the toggles spread every kind over two or three. With all eight input lanes saturated, any one-to-one wiring would sink the same 187-188
 /// a lane: [`balancer_4x4_spreads_one_input`] and [`balancer_4x4_sub_saturation`] show the
 /// balancing. The line ids by role are pinned too (the netcode cells' constants). Fails if a link of
 /// the layout is lost (an input or output at a lower rate), the fork or side order changes, the id
@@ -205,12 +211,12 @@ fn balancer_4x4_balances() {
     assert_eq!(first, [75, 75, 81, 84], "the tick each output first sinks");
     assert_eq!(
         end,
-        [[347, 347], [347, 347], [337, 337], [336, 336]],
+        [[347, 347], [347, 347], [337, 337], [337, 337]],
         "sunk per output and lane after 1,000 ticks"
     );
     assert_eq!(
         window,
-        [[187, 187], [187, 187], [188, 188], [187, 187]],
+        [[187, 187], [187, 187], [188, 188], [188, 188]],
         "sunk per output and lane, ticks 500-1,000"
     );
     // [stone, iron, wood, coal] per output, both lanes.
@@ -218,19 +224,19 @@ fn balancer_4x4_balances() {
     assert_eq!(
         k,
         [
-            [346, 312, 0, 36],
-            [0, 346, 348, 0],
-            [344, 2, 328, 0],
-            [2, 34, 16, 620]
+            [0, 0, 0, 694],
+            [0, 0, 694, 0],
+            [504, 170, 0, 0],
+            [186, 488, 0, 0]
         ],
         "sunk by kind per output"
     );
     assert_eq!(
         b.check(),
         common::census::Census {
-            made: 2_998,
+            made: 3_000,
             live: 264,
-            sunk: 2_734,
+            sunk: 2_736,
             destroyed: 0
         }
     );
@@ -238,22 +244,24 @@ fn balancer_4x4_balances() {
 }
 
 /// Question 11 on four inputs ([`BALANCER_BLOCKED`]: d's right output, column 5, ends in a plain
-/// belt that fills): the three open outputs carry 3 x 2 lanes at saturation and the four saturated
-/// inputs share them by item kind (an input is a kind), counted at the despawners by the FIFO diff
-/// over the window 500-1,000 (steady from tick 250: the blocked belt and d's right output line full
-/// since then, the last coal sunk before it). Iron, wood and stone take a third each (374, 374, 376
-/// of 1,124) and coal **none**: d's right output blocked, d's two inputs share its left output and
-/// the left one (b1, from b's right output) wins every slot (M54's starvation), so a0 (a's left
-/// output) backs up; then a's two inputs share a's right output and again the left one (iron) wins,
-/// so coal (a's right input) starves through two splitters. Pinned exactly, restated to Tyler
-/// (question 11). Fails if the forks' side order or the input fairness changes, or a link is lost.
+/// belt that fills): the four saturated inputs share the three open outputs by item kind (an input
+/// is a kind), counted at the despawners by the FIFO diff over the window 500-1,000 (steady from
+/// tick 250: the blocked belt and d's right output line full since then). Before M61 iron, wood
+/// and stone took a third each (374, 374, 376 of 1,124) and coal **none**: d's left input won
+/// every slot of d's one open output, a's left output backed up, and a's left input (iron) won
+/// a's right output, so coal starved through two splitters. M61 (Tyler, 2026-10-13: inputs take
+/// turns 50/50): every input gets a quarter, 282, 282, 280 and 280 of the same 1,124 (3 x 2 lanes
+/// x 500 x 3/8 = 1,125, the window's phase taking one): a waiting item lands right behind the
+/// output's rearmost item (fix round 1), so an output fed in turn stays compressed at 3/8 a tick.
+/// d's open output carries all four kinds, 94 each; c's outputs carry the pass-through pairs
+/// (iron with coal, stone with wood). The ledger is the pre-M61 one exactly. Pinned exactly. Fails if the forks' side order, the turn
+/// or the input fairness changes, or a link is lost.
 #[test]
 fn balancer_4x4_one_output_blocked() {
     let (mut b, l) = bed(BALANCER_BLOCKED, &FEED);
     track_outputs(&mut b, &l);
     let open = |b: &Bed| -> Vec<[u64; 4]> { (0..3).map(|k| kinds(b, k)).collect() };
     b.step_checked(250);
-    let at_250 = open(&b);
     let blocked = lanes(&b, at(5, 0));
     let half = splitter_lanes(b.tr(), at(5, 1)).expect("d's right half");
     let full = |b: &Bed| {
@@ -276,19 +284,14 @@ fn balancer_4x4_one_output_blocked() {
         .collect();
     assert_eq!(
         window,
-        [[186, 188, 0, 0], [0, 186, 188, 0], [188, 0, 188, 0]],
+        [[0, 188, 0, 186], [188, 0, 186, 0], [94, 94, 94, 94]],
         "sunk by kind per open output, ticks 500-1,000"
     );
     let share = [0, 1, 2, 3].map(|i| window.iter().map(|w| w[i]).sum::<u64>());
     assert_eq!(
         share,
-        [374, 374, 376, 0],
+        [282, 282, 280, 280],
         "each input's share (stone, iron, wood, coal) of 1,124"
-    );
-    assert_eq!(
-        (at_250[0][3], at_1000[0][3]),
-        (36, 36),
-        "coal's last sink before tick 250"
     );
     assert_eq!(
         b.check(),
@@ -347,8 +350,11 @@ fn run_edits(b: &mut Bed) -> Vec<u64> {
 /// reversed windows of 20, its exit then head-on into the belt at (0, 3)) instead of 60 (three
 /// unpaired turns), so the feed behind it backs up less and the spawners find room more often. The
 /// 34 is measured, not derived: the two rules' ledgers logged after every edit agree until the
-/// entrance's turns and then part by +15, +29 and +37, settling at +33 to +35. The layout is whole
-/// again at the end (tick 1,023) and its outputs sink again. The host's hash is the same across
+/// entrance's turns and then part by +15, +29 and +37, settling at +33 to +35. M61 (the input
+/// turn, the shared toggle, compressed fork landings) keeps the ledger exactly and only moves which
+/// of the first two outputs sinks one more: 320 + 320 and 321 + 321 become 321 + 321 and 320 + 320
+/// (measured). The layout is whole again at the end
+/// (tick 1,023) and its outputs sink again. The host's hash is the same across
 /// `save_and_load` and the restored ledger still balances (the lines, `sunk` and hidden lines come
 /// back), and the snapshot restored as a host restores it (with the world's caps, through
 /// `engine::testing::replay`: `RefScenario::replay_restored`) runs 200 more ticks to the same hash
@@ -368,7 +374,7 @@ fn edit_during_flow() {
     let end: Vec<[u64; 2]> = outs.iter().map(|&d| sunk(&b, d)).collect();
     assert_eq!(
         end,
-        [[320, 320], [321, 321], [336, 336], [335, 335]],
+        [[321, 321], [320, 320], [336, 336], [335, 335]],
         "sunk per output at tick 1,023"
     );
     assert_eq!(
@@ -884,10 +890,14 @@ fn balancer_4x4_spreads_one_input() {
 
 /// All four inputs below saturation (rate index 2: one item per 5 ticks a lane, 0.2 a tick): every
 /// output lane sinks exactly 100 in the window 500-1,000 (the inputs' 4 x 2 x 100 split evenly), but
-/// by kind each input reaches two outputs, half each, not all four: at equal rates and phase (the
-/// spawners configured in the same tick) the forks' toggles lock to the inputs' interleaving (stone at outputs 0 and 2, iron at 1 and 2, wood at 1
-/// and 3, coal at 0 and 3). Recorded with question 11 (the balancer balances throughput, not each input's
-/// spread). Fails if a fork, a side or the crossing changes.
+/// by kind each input reached two outputs, half each, before M61 (the forks' toggles locked to
+/// the inputs' interleaving at equal rates and phase). Recorded with question 11 (the balancer balances throughput, not each input's
+/// spread). M61's shared toggle makes it one of four: the two inputs of each splitter lane arrive
+/// at equal rates and phase and deliver alternately, and the pair's one toggle alternates with
+/// them, so every delivery of one input meets the same side (pass-through), at both stages: each
+/// kind reaches exactly one output, 200 a lane (measured; the lanes and the ledger are unchanged).
+/// Fails if a
+/// fork, a side, the crossing or the toggle sharing changes.
 #[test]
 fn balancer_4x4_sub_saturation() {
     let (b, lanes, kinds) = balancer_window(FEED, 2);
@@ -899,10 +909,10 @@ fn balancer_4x4_sub_saturation() {
     assert_eq!(
         kinds,
         [
-            [100, 0, 0, 100],
-            [0, 100, 100, 0],
-            [100, 100, 0, 0],
-            [0, 0, 100, 100]
+            [0, 0, 0, 200],
+            [0, 0, 200, 0],
+            [200, 0, 0, 0],
+            [0, 200, 0, 0]
         ],
         "[stone, iron, wood, coal] per output"
     );

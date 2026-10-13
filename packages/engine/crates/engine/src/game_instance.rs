@@ -1875,9 +1875,12 @@ fn line_structures_json<G: Game>(replica: &crate::client::Replica<G>, dropped: u
             Output::Merge { line, at } => {
                 format!("{{\"kind\":\"Merge\",\"line\":{},\"at\":{at}}}", line.0)
             }
-            Output::Fork { a, b } => {
-                format!("{{\"kind\":\"Fork\",\"a\":{},\"b\":{}}}", a.0, b.0)
-            }
+            Output::Fork { a, b, partner } => format!(
+                "{{\"kind\":\"Fork\",\"a\":{},\"b\":{},\"partner\":{}}}",
+                a.0,
+                b.0,
+                partner.map_or("null".to_string(), |p| p.0.to_string())
+            ),
         };
         let _ = write!(
             s,

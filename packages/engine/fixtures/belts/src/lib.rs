@@ -42,6 +42,8 @@
 //! **Merge and fork (M44b).** `Merge { line, into, at }` and `Fork { line, a, b }` are `set_out`
 //! with M44's `Output::Merge`/`Output::Fork` (rules: 0079 §15); a refusal (`a == b`, a self-target,
 //! a fork target shorter than the feeder's speed, a missing line) is dropped like every other op's.
+//! `ForkPair { line, a, b, partner }` (M61) pairs two inputs of one fork (`partner` already a
+//! `Fork` onto `a` and `b`): the engine's input turn and shared toggle.
 //! `Destroy { line }` runs `destroy` and counts the deleted items in one [`Thing::Destroyed`] on
 //! the `"destroyed"` active list (the property tests' conservation needs it). `Speed { line,
 //! speed }` (M46) is `set_speed`, for the netcode scenario's structure changes.
@@ -281,6 +283,11 @@ pub enum Op {
         speed: u16,
         item: u16,
     },
+    /// `set_out(line, Fork { a, b, partner })` (M61): a splitter lane's input paired with
+    /// `partner`, which must already fork onto `a` and `b` (a `Fork` op first, then this one: the
+    /// engine links the partner back). The two take turns and share one toggle. Appended last, so
+    /// no encoded op moved.
+    ForkPair { line: u8, a: u8, b: u8, partner: u8 },
 }
 
 impl Op {
@@ -306,6 +313,12 @@ impl Op {
             Op::Insert { line, item, .. } => idx(line) && item != 0,
             Op::Merge { line, into, .. } => idx(line) && idx(into),
             Op::Fork { line, a, b } => idx(line) && idx(a) && idx(b),
+            Op::ForkPair {
+                line,
+                a,
+                b,
+                partner,
+            } => idx(line) && idx(a) && idx(b) && idx(partner),
             Op::Destroy { line } => idx(line),
             Op::Speed { line, speed } => idx(line) && speed >= 1,
             // The far end tile too: `execute` computes its centre in `i32` (M48b review).
@@ -684,7 +697,14 @@ impl Belts {
             }
             Op::Fork { line, a, b } => {
                 let (a, b) = (g.line(u32::from(a)), g.line(u32::from(b)));
-                let _ = t.set_out(g.line(u32::from(line)), Output::Fork { a, b });
+                let _ = t.set_out(
+                    g.line(u32::from(line)),
+                    Output::Fork {
+                        a,
+                        b,
+                        partner: None,
+                    },
+                );
             }
             Op::Destroy { line } => {
                 if let Ok(n) = t.destroy(g.line(u32::from(line)), &mut |_| {})
@@ -695,6 +715,20 @@ impl Belts {
             }
             Op::Speed { line, speed } => {
                 let _ = t.set_speed(g.line(u32::from(line)), speed);
+            }
+            Op::ForkPair {
+                line,
+                a,
+                b,
+                partner,
+            } => {
+                let [a, b, partner] = [a, b, partner].map(|i| g.line(u32::from(i)));
+                let fork = Output::Fork {
+                    a,
+                    b,
+                    partner: Some(partner),
+                };
+                let _ = t.set_out(g.line(u32::from(line)), fork);
             }
             Op::Belt {
                 from,

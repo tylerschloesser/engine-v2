@@ -270,6 +270,7 @@ fn wire_lines_round_trip() {
             Output::Fork {
                 a: LineId(1),
                 b: LineId(3),
+                partner: Some(LineId(4)),
             },
             &[east(0, 3, 8)],
         )),
@@ -467,6 +468,37 @@ fn replica_store(max_lines: u32) -> Transport {
     t
 }
 
+/// M61: a fork's turn bit is host item state, like its toggle: a fork pair's input structure put
+/// carries the `partner` but is the same bytes whatever the bit (and the toggle) hold, and the
+/// replica that applies it answers the turn `Unknown`.
+#[test]
+fn replica_never_holds_the_fork_turn() {
+    let mut t = Transport::new(8, 64);
+    let ids: Vec<LineId> = (0..4).map(|_| t.create(2048, 24).unwrap()).collect();
+    for (k, &l) in ids.iter().enumerate() {
+        t.set_segments(l, &[east(0, k as i32, 8)]).unwrap();
+    }
+    let (x, p) = (ids[2], ids[3]);
+    for (l, q) in [(x, None), (p, None), (x, Some(p))] {
+        let fork = Output::Fork {
+            a: ids[0],
+            b: ids[1],
+            partner: q,
+        };
+        t.set_out(l, fork).unwrap();
+    }
+    let before = t.structure(x).unwrap();
+    t.insert_at(x, 0, Item(1)).unwrap();
+    t.advance();
+    assert_eq!((t.fork_yield(x), t.toggle(x)), (Ok(true), Ok(true)));
+    let after = t.structure(x).unwrap();
+    assert_eq!(encode(&[p_(after)]), encode(&[p_(before)]), "no item state");
+    let mut r = replica_store(4);
+    r.apply_structure(Record::Put(&after)).unwrap();
+    assert_eq!(r.out(x), t.out(x), "the partner replicates");
+    assert_eq!(r.fork_yield(x), Err(Unknown), "the turn never does");
+}
+
 /// A put creates or replaces a held line with no items and indexes its tiles; a gone removes it;
 /// item reads are `Unknown`; a put the store cannot hold or that breaks its rules changes nothing.
 #[test]
@@ -491,13 +523,15 @@ fn replica_apply_structure_put_and_gone() {
     t.lines_at(TilePos::new(33, 0), &mut |l, o| at.push((l, o)))
         .unwrap();
     assert_eq!(at, [(LineId(7), 3 * 256 - 128)], "tile 33's first position");
-    // M47: items come from the forecasts (none yet); the sink count and the fork toggle never do.
+    // M47: items come from the forecasts (none yet); the sink count and the fork toggle never do,
+    // nor M61's fork turn.
     assert_eq!(t.count(LineId(7)), Ok(0));
     assert_eq!(t.front(LineId(7)), Ok(None));
     assert_eq!(t.items_in(LineId(7), &mut |_, _| {}), Ok(()));
     for r in [
         t.sunk(LineId(7)).map(|_| ()),
         t.toggle(LineId(7)).map(|_| ()),
+        t.fork_yield(LineId(7)).map(|_| ()),
     ] {
         assert_eq!(r, Err(Unknown), "no forecast carries them");
     }

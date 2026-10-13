@@ -39,9 +39,31 @@
 //! `Merge` and `Fork` (M44, 0076 §1): the front item has no leader (`p = pos - speed`); when
 //! `p < 0` (overshoot `o = -p`) it tries to transfer. `Merge { line, at }`: landing
 //! `clamp(at - o, 0, line.len - 1)`, transferred iff `SPACING` is clear on both sides there on the
-//! target (`insert_at`'s rule and code path). `Fork { a, b }`: the preferred target (the toggle)
-//! if its plain hand-off landing `target.len - o` has room (`tail + SPACING <= landing`), else the
-//! other, else none; the toggle flips only on a preferred delivery. A transferred item leaves no
+//! target (`insert_at`'s rule and code path). `Fork { a, b, partner }`: the preferred target
+//! (the toggle), else the other, else none; the toggle flips only on a preferred delivery. A
+//! fork's hand-off follows `Next`'s leader rule (M61): it lands at
+//! `max(target.len - o, tail + SPACING)` and is refused only past `len - 1`, so a waiting item
+//! lands exactly `SPACING` behind the tail (no whole-tick quantum).
+//!
+//! The input turn (M61): a splitter lane's two inputs name each other as `partner` (a mutual link
+//! over the same `{a, b}`: `set_out`, decode) and share one toggle (after any delivery the partner
+//! takes this line's; Factorio's per-splitter alternation). The line that delivered last has its
+//! `FORK_YIELD` bit set. When it is due again it waits (its item at 0, as if refused) while its
+//! partner has not advanced yet this tick and the partner's front item is due: below its
+//! `speed` (the brief's "front position <= its step" read as "will try to cross this tick": an
+//! item at exactly `speed` reaches 0 without trying) and not a landing across a cut. Two
+//! exceptions keep the output's full rate: (1) the partner already advanced this tick (it cannot
+//! deliver again, so "due" means nothing): the line delivers, room permitting, and takes the turn;
+//! (2) its landing leaves one of its targets room for another as the target stands (`leaves_room`;
+//! a target that has not advanced yet is read before its move: an estimate of the room its move
+//! frees could over-estimate and starve the partner, so a lost slot is the rule's cost in a
+//! mixed-speed cycle instead, `fork_pair_in_a_cycle_keeps_the_slot`): it delivers "ahead"
+//! (`FORK_AHEAD`), the turn still owed, and the partner's delivery later this tick repays the
+//! credit without passing the turn. Every other delivery takes the turn (sets this line's bit,
+//! clears the partner's). `FORK_AHEAD` is scratch: cleared by the line's own `advance_line`
+//! before it reads anything, and read across lines only when its holder advanced this tick
+//! (`adv_mark == epoch`), so a credit left unpaid (the partner refused) is unreadable after the
+//! tick and a save/load cannot see it. A transferred item leaves no
 //! leader behind (the next item is free again); a refused one waits at 0 and the walk squashes the
 //! items behind it. Several items cross in one tick front to back, each against the target as the
 //! previous landing left it. A merge landing in the middle of a target that has not advanced yet
@@ -49,7 +71,7 @@
 //! moved its feeder's full `speed`, so it is `target.speed - feeder.speed`, 0 at equal speeds).
 
 use super::forecast::{ROUTE_FORK, ROUTE_MERGE, ROUTE_NEXT};
-use super::line::{NIL, NO_CAP, Run, opt as opt_node};
+use super::line::{FORK_AHEAD, FORK_TOGGLE, FORK_YIELD, NIL, NO_CAP, Run, opt as opt_node};
 use super::{Output, SPACING, Transport, TransportError};
 
 const SP: i64 = SPACING as i64;
@@ -271,6 +293,7 @@ impl Transport {
         self.lines[l as usize].fresh_runs = 0;
         self.lines[l as usize].fresh_mid = 0;
         self.lines[l as usize].fresh_cap = NO_CAP;
+        self.lines[l as usize].fork &= !FORK_AHEAD;
         let Some(mut h) = self.first(l) else {
             self.lines[l as usize].held = false;
             return;
@@ -337,7 +360,7 @@ impl Transport {
                 self.cut_moved = pos0 - p;
                 let taken = match out {
                     Output::Merge { at, .. } => self.merge_land(target, at, -p, r.item),
-                    Output::Fork { .. } => self.fork_land(l, target, line.alt_slot, -p, r.item),
+                    Output::Fork { .. } => self.fork_cross(l, target, line.alt_slot, -p, r.item),
                     _ => true,
                 };
                 if !taken {
@@ -609,30 +632,112 @@ impl Transport {
         true
     }
 
+    /// A `Fork` crossing from slot `l` with overshoot `o` (module doc): the input turn, then
+    /// [`Transport::fork_land`]; `true` if the item landed.
+    fn fork_cross(&mut self, l: u32, a: u32, b: u32, o: i64, item: u16) -> bool {
+        let rec = &self.lines[l as usize];
+        let ps = rec.partner_slot;
+        // The partner has not advanced yet this tick: only then can it still deliver.
+        let pending = ps != NIL && self.lines[ps as usize].adv_mark != self.epoch;
+        let owes = pending && rec.fork & FORK_YIELD != 0 && self.partner_due(ps);
+        let ahead = owes && self.leaves_room(l, a, b, o);
+        let taken = (!owes || ahead) && self.fork_land(l, a, b, o, item);
+        if taken && ps != NIL {
+            let toggle = self.lines[l as usize].fork & FORK_TOGGLE;
+            let p = &self.lines[ps as usize];
+            if ahead {
+                // Delivered on credit: the turn stays owed until the partner's delivery repays it.
+                self.lines[l as usize].fork |= FORK_AHEAD;
+            } else if !pending && p.fork & FORK_AHEAD != 0 {
+                // The partner went ahead earlier this tick: this delivery repays it.
+                self.lines[ps as usize].fork &= !FORK_AHEAD;
+            } else {
+                self.lines[l as usize].fork |= FORK_YIELD;
+                self.lines[ps as usize].fork &= !FORK_YIELD;
+            }
+            // The pair's one output toggle (the link is mutual, so the partner is a fork).
+            let p = &mut self.lines[ps as usize];
+            debug_assert!(matches!(p.out, Output::Fork { .. }), "a mutual fork pair");
+            p.fork = (p.fork & !FORK_TOGGLE) | toggle;
+        }
+        taken
+    }
+
+    /// Whether a fork hand-off from slot `l` with overshoot `o` would still leave one of its
+    /// targets room for another landing (fix round 1: an input that owes the turn goes anyway
+    /// when its delivery cannot take its partner's slot, so a pair fills an output at its full
+    /// rate even when it takes two items in one tick). Reads only.
+    fn leaves_room(&self, l: u32, a: u32, b: u32, o: i64) -> bool {
+        let toggle = self.lines[l as usize].fork & FORK_TOGGLE != 0;
+        let (pref, other) = if toggle { (b, a) } else { (a, b) };
+        match (self.hand_off_pos(pref, o), self.hand_off_pos(other, o)) {
+            (Some(_), Some(_)) => true,
+            (Some(q), None) => self.room_behind(pref, q),
+            (None, Some(q)) => self.room_behind(other, q),
+            (None, None) => false,
+        }
+    }
+
+    /// Whether another landing fits behind an item landing at `q` on slot `t`, the target as it
+    /// stands (fix round 4: a target that has not advanced yet is read before its move, never with
+    /// an estimate of the room the move frees, which can over-estimate and starve the partner).
+    fn room_behind(&self, t: u32, q: i64) -> bool {
+        q + SP < i64::from(self.lines[t as usize].len)
+    }
+
+    /// Where a fork hand-off with overshoot `o` lands on slot `t`, `None` without room
+    /// ([`Transport::try_hand_off`]'s rule).
+    fn hand_off_pos(&self, t: u32, o: i64) -> Option<i64> {
+        let tl = &self.lines[t as usize];
+        let len = i64::from(tl.len);
+        let pos = if tl.items > 0 {
+            (len - o).max(i64::from(tl.tail_pos) + SP)
+        } else {
+            len - o
+        };
+        (pos < len).then_some(pos)
+    }
+
+    /// Whether slot `p` (a partner that has not advanced yet this tick) will try to hand its front
+    /// item off when it advances (module doc): below its `speed` and not a landing across a cut,
+    /// which moves at most its budget and never crosses. Reads only.
+    fn partner_due(&self, p: u32) -> bool {
+        let rec = &self.lines[p as usize];
+        let Some(h) = self.first(p) else {
+            return false;
+        };
+        let r = self.get(h);
+        r.count != 0 && rec.fresh_runs < rec.runs && r.gap < i32::from(rec.speed)
+    }
+
     /// A `Fork` transfer from slot `l` with overshoot `o` (module doc): the preferred target, else
     /// the other; `true` if the item landed. Flips `l`'s toggle on a preferred delivery only.
     fn fork_land(&mut self, l: u32, a: u32, b: u32, o: i64, item: u16) -> bool {
-        let toggle = self.lines[l as usize].toggle;
+        let toggle = self.lines[l as usize].fork & FORK_TOGGLE != 0;
         let (pref, other) = if toggle { (b, a) } else { (a, b) };
         if self.try_hand_off(pref, o, item) {
-            self.lines[l as usize].toggle = !toggle;
+            self.lines[l as usize].fork ^= FORK_TOGGLE;
             return true;
         }
         self.try_hand_off(other, o, item)
     }
 
-    /// The plain hand-off landing `target.len - o` on slot `t` if it has room behind the target's
-    /// rearmost item (`tail + SPACING <= landing`, the rule `Next`'s leader enforces).
+    /// A fork's hand-off onto slot `t` with overshoot `o` by the leader rule `Next` uses (M61 fix
+    /// round 1): the landing `target.len - o`, or right behind the target's rearmost item
+    /// (`tail + SPACING`) when that is further back, so a stream through a fork stays compressed
+    /// at exactly `SPACING`; refused only when even `tail + SPACING` is past `len - 1` (the item
+    /// would not cross). A landing pushed back moved less on its feeder: `cut_moved` follows.
     fn try_hand_off(&mut self, t: u32, o: i64, item: u16) -> bool {
-        let tl = &self.lines[t as usize];
-        let pos = i64::from(tl.len) - o;
+        let len = i64::from(self.lines[t as usize].len);
         debug_assert!(
-            (0..i64::from(tl.len)).contains(&pos),
+            (0..len).contains(&(len - o)),
             "a fork target is at least the feeder's speed long (set_out)"
         );
-        if tl.items > 0 && i64::from(tl.tail_pos) + SP > pos {
+        let Some(pos) = self.hand_off_pos(t, o) else {
             return false;
-        }
+        };
+        self.cut_moved -= pos - (len - o);
+        let tl = &self.lines[t as usize];
         self.last_land = (t, pos as u32);
         let fresh = tl.adv_mark != self.epoch;
         self.land(t, item, pos as u32, fresh);

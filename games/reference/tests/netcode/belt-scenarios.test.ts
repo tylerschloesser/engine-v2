@@ -104,26 +104,35 @@ test('reference_balancer_two_clients_exact @slow', async () => {
     ).toEqual([10, 76, HIDDEN])
     // Measured (the same twice), exact on the virtual clock: the late client's ticks 196 to 596
     // (it trails the host by its latency); on every one of them its 72 held lines carried the host's
-    // items at that tick (28,800 (line, tick) pairs, 88,800 items).
+    // items at that tick (28,800 (line, tick) pairs, 88,787 items; 88,800 before M61: the splitter
+    // pairs' turn and shared toggle pass the inputs straight through in lockstep and compressed
+    // landings sit right behind the tail, so which items cross which fork, and when, moved, and the
+    // lines hold 13 fewer item-ticks over the window).
     expect([t0, t1], "the late client's window").toEqual([196, 596])
     expect(
       [seen.ticks.size, seen.compared, seen.items],
       'ticks, (line, tick) pairs and items compared',
-    ).toEqual([400, 28_800, 88_800])
-    // Every `Arrival` is a fork crossing or an item surfacing at an exit: 3,000 in the window, the
-    // host's 3,000 crossings onto the 16 splitter output lines and emergences onto the 4 exit lines
+    ).toEqual([400, 28_800, 88_787])
+    // Every `Arrival` is a fork crossing or an item surfacing at an exit: 2,999 in the window (3,000
+    // before M61: the same 7.5 a tick, the window's phase against the lockstep flow taking one), the
+    // host's 2,999 crossings onto the 16 splitter output lines and emergences onto the 4 exit lines
     // over the same ticks (7.5 a tick: each item crosses two forks, and S_a's half of them one
     // underground). No list after the join (72, one per held line), no State, nothing late.
     expect(c1.arrivalsApplied - c0.arrivalsApplied, 'arrivals = fork crossings + emergences').toBe(
       (events.get(t1) ?? -1) - (events.get(t0) ?? -1),
     )
-    expect(c1.arrivalsApplied - c0.arrivalsApplied, 'arrivals in the window').toBe(3_000)
+    expect(c1.arrivalsApplied - c0.arrivalsApplied, 'arrivals in the window').toBe(2_999)
+    // M61 (the input turn, compressed fork landings, the shared toggle): 36 States, all corrections
+    // (32 while the flow builds up before the window, 4 in it), each a splitter input's front held
+    // or released where its forecast had it move (a front waiting its turn, a landing pushed right
+    // behind the tail); they cost bytes, never exactness (every compared pair above is equal).
+    expect(c1.stateMessagesApplied - c0.stateMessagesApplied, 'States in the window').toBe(4)
     expect(c1, "the late client's forecast counters").toEqual({
       forecastsApplied: 72,
-      stateMessagesApplied: 0,
-      arrivalsApplied: 3_389,
+      stateMessagesApplied: 36,
+      arrivalsApplied: 3_386,
       forecastSeenLate: 0,
-      corrections: 0,
+      corrections: 36,
       listsUnknown: 0,
       recordsUnheld: 0,
     })
@@ -162,16 +171,18 @@ test('reference_balancer_arrival_bytes @slow', async () => {
       lists: b.f.forecastsApplied - a.f.forecastsApplied,
     }
     // Measured (the same twice), exact on the virtual clock: over 20 s (400 ticks) of steady flow
-    // the balancer costs 27,850 bytes of sections 12 and 13, all `Forecasts` (no structure changes):
-    // 3,000 `Arrival`s (16 fork outputs and 4 underground exits, 7.5 a tick) at 9.3 B each with the
-    // section framing, no State, no list. That is 1,392.5 B/s: 8.5 % of 0078 A5's 16,384 B/s
+    // the balancer costs 27,791 bytes of sections 12 and 13, all `Forecasts` (no structure changes):
+    // 2,999 `Arrival`s (16 fork outputs and 4 underground exits, 7.5 a tick) at 9.27 B each with the
+    // section framing, no State, no list. That is 1,389.55 B/s (M61; before it 27,850 B, 3,000
+    // arrivals, 1,392.5 B/s: one arrival less to the window's phase against the lockstep flow, the
+    // other 50 B in the records' encodings, measured): 8.5 % of 0078 A5's 16,384 B/s
     // ceiling and 35 % of A9's gated saturated-viewport cell (3,946 B/s, `fx-belts`' straight
     // lines); per saturated lane through the balancer 174 B/s, against A14's 148 B/s per saturated
     // underground pair (both lanes). Recorded as a 0078 amendment (M56).
     expect(window, 'sections 12 and 13 over 20 s').toEqual({
       structs: 0,
-      forecasts: 27_850,
-      arrivals: 3_000,
+      forecasts: 27_791,
+      arrivals: 2_999,
       states: 0,
       lists: 0,
     })

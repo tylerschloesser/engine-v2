@@ -21,8 +21,8 @@ enum Out {
     Sink,
     /// M44: `(target, at)` (the reference test only; the rule table has none).
     Merge(u32, u32),
-    /// M44: `(a, b)`.
-    Fork(u32, u32),
+    /// M44: `(a, b)`; M61: `partner`, the other input that takes turns with this one.
+    Fork(u32, u32, Option<u32>),
 }
 
 #[derive(Clone)]
@@ -599,7 +599,14 @@ fn transport_full_at_caps() {
     assert_eq!(u.set_speed(l, 25), Err(TransportError::BadSpeed));
     assert_eq!(u.insert_back(l, Item(0)), Err(TransportError::BadItem));
     assert_eq!(
-        u.set_out(l, Output::Fork { a: l, b: l }),
+        u.set_out(
+            l,
+            Output::Fork {
+                a: l,
+                b: l,
+                partner: None
+            }
+        ),
         Err(TransportError::Unsupported),
         "a fork into itself"
     );
@@ -622,7 +629,7 @@ struct Reference {
     /// Items that crossed a cycle cut (non-vacuity of the cut rule).
     cut_landings: u64,
     /// M44 non-vacuity counts, see [`Stat`].
-    stats: [u64; 8],
+    stats: [u64; 10],
     /// What the item crossing now moved on its feeder this tick.
     moved: i64,
 }
@@ -637,6 +644,10 @@ enum Stat {
     ForkPreferred,
     ForkDiverted,
     ForkWaited,
+    /// M61: an item that waited at its fork because its partner's front item was due (the turn).
+    ForkYielded,
+    /// Fix round 1: a delivery on credit (the turn owed, room left for the partner).
+    ForkAhead,
     /// A tick in which one merge or fork line transferred two or more items.
     BigStep,
     /// A fork or merge landing across a cut.
@@ -648,6 +659,11 @@ struct RefLine {
     speed: i64,
     out: Out,
     toggle: bool,
+    /// M61: the input turn: this line delivered at its fork last and its partner has not since.
+    yields: bool,
+    /// Fix round 1: this tick it delivered while owing the turn (its landing left its partner
+    /// room); the partner's delivery this tick repays it without passing the turn.
+    ahead: bool,
     items: Vec<(u16, i64)>,
     /// Positions of the items that crossed a cut onto this line this tick: they move at most
     /// `cap` more (0079 §11 as amended in M44: an item moves at most `speed` in one tick).
@@ -670,7 +686,7 @@ impl Reference {
             lines: Vec::new(),
             sunk: 0,
             cut_landings: 0,
-            stats: [0; 8],
+            stats: [0; 10],
             moved: 0,
         }
     }
@@ -689,6 +705,8 @@ impl Reference {
             speed,
             out: Out::DeadEnd,
             toggle: false,
+            yields: false,
+            ahead: false,
             items: Vec::new(),
             fresh: Vec::new(),
             fresh_back: 0,
@@ -699,7 +717,7 @@ impl Reference {
     fn succs(&self, l: usize) -> Vec<usize> {
         match self.line(l).out {
             Out::Next(t) | Out::Merge(t, _) => vec![t as usize],
-            Out::Fork(a, b) => vec![a as usize, b as usize],
+            Out::Fork(a, b, _) => vec![a as usize, b as usize],
             Out::DeadEnd | Out::Sink => vec![],
         }
     }
@@ -856,6 +874,7 @@ impl Reference {
             let fresh = std::mem::take(&mut self.line_mut(l).fresh);
             let fresh_back = std::mem::take(&mut self.line_mut(l).fresh_back);
             let cap = self.line_mut(l).cap.take().unwrap_or(0);
+            self.line_mut(l).ahead = false;
             let mut transfers = 0;
             let mut k = 0;
             while k < self.line(l).items.len() {
@@ -968,20 +987,68 @@ impl Reference {
         true
     }
 
-    /// The preferred target's plain hand-off landing, else the other's, else none; the toggle
-    /// flips on a preferred delivery only.
-    fn fork(&mut self, l: usize, o: i64, item: u16, advanced: &[bool]) -> bool {
-        let Out::Fork(a, b) = self.line(l).out else {
+    /// M61's input turn, written from the `Output::Fork` doc: a partner that has not advanced
+    /// yet this tick is due when its front item (not one that crossed a cut this tick) sits below
+    /// its `speed`.
+    fn due(&self, p: usize) -> bool {
+        let line = self.line(p);
+        let Some(&(_, pos)) = line.items.first() else {
+            return false;
+        };
+        line.fresh_back < line.items.len() && !line.fresh.contains(&pos) && pos < line.speed
+    }
+
+    /// Where a fork hand-off with overshoot `o` lands on `t` (fix round 1: `Next`'s leader rule,
+    /// right behind the rearmost item when that is further back than `len - o`), `None` past the
+    /// line's end.
+    fn hand_off_pos(&self, t: usize, o: i64) -> Option<i64> {
+        let tl = self.line(t);
+        let plain = tl.len - o;
+        let pos = tl.items.last().map_or(plain, |&(_, q)| plain.max(q + SP));
+        (pos < tl.len).then_some(pos)
+    }
+
+    /// Fix round 1: whether `l`'s hand-off would leave one of its targets room for another
+    /// landing (then an input that owes the turn goes anyway: its partner keeps a slot).
+    fn leaves_room(&self, l: usize, o: i64) -> bool {
+        let Out::Fork(a, b, _) = self.line(l).out else {
             unreachable!()
         };
+        let (pref, other) = if self.line(l).toggle { (b, a) } else { (a, b) };
+        let (pref, other) = (pref as usize, other as usize);
+        // Fix round 4: the target as it stands, advanced or not.
+        let behind = |t: usize, q: i64| q + SP < self.line(t).len;
+        match (self.hand_off_pos(pref, o), self.hand_off_pos(other, o)) {
+            (Some(_), Some(_)) => true,
+            (Some(q), None) => behind(pref, q),
+            (None, Some(q)) => behind(other, q),
+            (None, None) => false,
+        }
+    }
+
+    /// The input turn (M61), then the preferred target's plain hand-off landing, else the other's,
+    /// else none; the toggle flips on a preferred delivery only; a delivery takes the turn.
+    fn fork(&mut self, l: usize, o: i64, item: u16, advanced: &[bool]) -> bool {
+        let Out::Fork(a, b, partner) = self.line(l).out else {
+            unreachable!()
+        };
+        // Fix round 2: only a partner that has not advanced yet can still deliver this tick.
+        let pending = partner.is_some_and(|p| !advanced[p as usize]);
+        let owes = pending && self.line(l).yields && self.due(partner.expect("pending") as usize);
+        let ahead = owes && self.leaves_room(l, o);
+        if owes && !ahead {
+            self.stats[Stat::ForkYielded as usize] += 1;
+            return false;
+        }
         let toggle = self.line(l).toggle;
         let (pref, other) = if toggle { (b, a) } else { (a, b) };
         for (k, t) in [pref as usize, other as usize].into_iter().enumerate() {
-            let tl = self.line(t);
-            let pos = tl.len - o;
-            if tl.items.last().is_some_and(|&(_, q)| q + SP > pos) {
+            // Fix round 1: `Next`'s leader rule, right behind the rearmost item when that is
+            // further back than `len - o`; refused only past the line's end.
+            let Some(pos) = self.hand_off_pos(t, o) else {
                 continue;
-            }
+            };
+            self.moved -= pos - (self.line(t).len - o);
             self.line_mut(t).items.push((item, pos));
             if !advanced[t] {
                 self.line_mut(t).fresh_back += 1;
@@ -993,6 +1060,20 @@ impl Reference {
                 self.stats[Stat::ForkPreferred as usize] += 1;
             } else {
                 self.stats[Stat::ForkDiverted as usize] += 1;
+            }
+            if let Some(p) = partner {
+                let toggle = self.line(l).toggle;
+                if ahead {
+                    self.line_mut(l).ahead = true;
+                    self.stats[Stat::ForkAhead as usize] += 1;
+                } else if !pending && self.line(p as usize).ahead {
+                    self.line_mut(p as usize).ahead = false;
+                } else {
+                    self.line_mut(l).yields = true;
+                    self.line_mut(p as usize).yields = false;
+                }
+                // Fix round 1: a pair shares one output toggle (the link is mutual).
+                self.line_mut(p as usize).toggle = toggle;
             }
             return true;
         }
@@ -1042,7 +1123,8 @@ impl Reference {
 
     /// `set_out`'s refusals, written from the rule: no output into itself, a fork's two targets
     /// distinct, `Next` and fork targets at least `speed` long (the hand-off bound; a merge
-    /// landing is clamped). A new output clears the toggle.
+    /// landing is clamped), a fork's partner not the line itself (M61). A new output clears the
+    /// toggle and the turn.
     fn set_out(&mut self, l: usize, out: Out) -> Result<(), TransportError> {
         let speed = self.line(l).speed;
         let short = |t: u32| self.line(t as usize).len < speed;
@@ -1050,18 +1132,47 @@ impl Reference {
             Out::Next(t) | Out::Merge(t, _) if t as usize == l => {
                 return Err(TransportError::Unsupported);
             }
-            Out::Fork(a, b) if a as usize == l || b as usize == l || a == b => {
+            Out::Fork(a, b, p)
+                if a as usize == l || b as usize == l || a == b || p == Some(l as u32) =>
+            {
+                return Err(TransportError::Unsupported);
+            }
+            // Fix round 2: the partner forks onto the same targets, lone or naming this line.
+            Out::Fork(a, b, Some(p))
+                if !matches!(self.line(p as usize).out,
+                    Out::Fork(pa, pb, pp) if pa == a && pb == b
+                        && (pp.is_none() || pp == Some(l as u32))) =>
+            {
                 return Err(TransportError::Unsupported);
             }
             Out::Next(t) if short(t) => return Err(TransportError::BadSpeed),
-            Out::Fork(a, b) if short(a) || short(b) => return Err(TransportError::BadSpeed),
+            Out::Fork(a, b, _) if short(a) || short(b) => return Err(TransportError::BadSpeed),
             _ => {}
         }
-        let line = self.line_mut(l);
-        if line.out != out {
-            line.out = out;
-            line.toggle = false;
+        if self.line(l).out == out {
+            return Ok(());
         }
+        // A replaced pair's partner is a lone fork again; a lone partner is linked back.
+        if let Out::Fork(_, _, Some(op)) = self.line(l).out {
+            let ol = self.line_mut(op as usize);
+            if let Out::Fork(a, b, Some(_)) = ol.out {
+                ol.out = Out::Fork(a, b, None);
+                ol.yields = false;
+            }
+        }
+        let mut shared = false;
+        if let Out::Fork(_, _, Some(p)) = out {
+            let pl = self.line_mut(p as usize);
+            if let Out::Fork(a, b, None) = pl.out {
+                pl.out = Out::Fork(a, b, Some(l as u32));
+                pl.yields = false;
+            }
+            shared = pl.toggle;
+        }
+        let line = self.line_mut(l);
+        line.out = out;
+        line.toggle = shared;
+        line.yields = false;
         Ok(())
     }
 
@@ -1070,7 +1181,7 @@ impl Reference {
         let short = |t: u32| self.line(t as usize).len < speed;
         let short_target = match line.out {
             Out::Next(t) => short(t),
-            Out::Fork(a, b) => short(a) || short(b),
+            Out::Fork(a, b, _) => short(a) || short(b),
             _ => false,
         };
         if speed >= line.len || short_target {
@@ -1086,9 +1197,15 @@ impl Reference {
         for line in self.lines.iter_mut().flatten() {
             match line.out {
                 Out::Next(t) | Out::Merge(t, _) if t == l => line.out = Out::DeadEnd,
-                Out::Fork(a, b) if a == l || b == l => {
+                Out::Fork(a, b, _) if a == l || b == l => {
                     line.out = Out::Next(if a == l { b } else { a });
                     line.toggle = false;
+                    line.yields = false;
+                }
+                // M61: a partner that is gone leaves a lone fork.
+                Out::Fork(a, b, Some(p)) if p == l => {
+                    line.out = Out::Fork(a, b, None);
+                    line.yields = false;
                 }
                 _ => {}
             }
@@ -1108,7 +1225,7 @@ impl Reference {
         let l = l as u32;
         match x.out {
             Out::Next(t) => t == l,
-            Out::Fork(a, b) => a == l || b == l,
+            Out::Fork(a, b, _) => a == l || b == l,
             _ => false,
         }
     }
@@ -1127,8 +1244,15 @@ impl Reference {
     }
 
     /// Every output naming `from` names `to`; a merge's entry point maps through `at_map` (`None`:
-    /// it stays on `from`); a fork left with one target twice becomes `Next`.
-    fn redirect(&mut self, from: usize, to: usize, at_map: impl Fn(u32) -> Option<u32>) {
+    /// it stays on `from`); a fork left with one target twice becomes `Next`. M61: a fork's
+    /// partner is no target: `from` gone (`join`) leaves the fork lone, a split one keeps it.
+    fn redirect(
+        &mut self,
+        from: usize,
+        to: usize,
+        from_gone: bool,
+        at_map: impl Fn(u32) -> Option<u32>,
+    ) {
         let (from, to) = (from as u32, to as u32);
         for x in self.lines.iter_mut().flatten() {
             match x.out {
@@ -1138,7 +1262,7 @@ impl Reference {
                         x.out = Out::Merge(to, at);
                     }
                 }
-                Out::Fork(a, b) if a == from || b == from => {
+                Out::Fork(a, b, p) if a == from || b == from => {
                     let (a, b) = (
                         if a == from { to } else { a },
                         if b == from { to } else { b },
@@ -1146,11 +1270,19 @@ impl Reference {
                     if a == b {
                         x.out = Out::Next(a);
                         x.toggle = false;
+                        x.yields = false;
                     } else {
-                        x.out = Out::Fork(a, b);
+                        x.out = Out::Fork(a, b, p);
                     }
                 }
                 _ => {}
+            }
+            if let Out::Fork(a, b, Some(p)) = x.out
+                && from_gone
+                && p == from
+            {
+                x.out = Out::Fork(a, b, None);
+                x.yields = false;
             }
         }
     }
@@ -1167,12 +1299,14 @@ impl Reference {
         let back = line.items.split_off(k);
         line.len = at;
         let cut = at as u32;
-        self.redirect(l, n, |m| m.checked_sub(cut));
+        self.redirect(l, n, false, |m| m.checked_sub(cut));
         self.lines.push(Some(RefLine {
             len: len - at,
             speed,
             out: Out::Next(l as u32),
             toggle: false,
+            yields: false,
+            ahead: false,
             items: back.into_iter().map(|(i, p)| (i, p - at)).collect(),
             fresh: Vec::new(),
             fresh_back: 0,
@@ -1188,7 +1322,7 @@ impl Reference {
         let b = back as u32;
         let feeds_back = match self.line(front).out {
             Out::Next(t) | Out::Merge(t, _) => t == b,
-            Out::Fork(x, y) => x == b || y == b,
+            Out::Fork(x, y, _) => x == b || y == b,
             _ => false,
         };
         if feeds_back {
@@ -1200,7 +1334,7 @@ impl Reference {
         f.items
             .extend(gone.items.into_iter().map(|(i, p)| (i, p + flen)));
         f.len += gone.len;
-        self.redirect(back, front, |m| Some(m.saturating_add(flen as u32)));
+        self.redirect(back, front, true, |m| Some(m.saturating_add(flen as u32)));
         Ok(())
     }
 
@@ -1281,9 +1415,10 @@ fn to_output(out: Out) -> Output {
             line: LineId(t + 1),
             at,
         },
-        Out::Fork(a, b) => Output::Fork {
+        Out::Fork(a, b, p) => Output::Fork {
             a: LineId(a + 1),
             b: LineId(b + 1),
+            partner: p.map(|p| LineId(p + 1)),
         },
     }
 }
@@ -1365,10 +1500,28 @@ fn transport_matches_per_item_reference() {
         .into_iter()
         .map(|(len, speed)| create(&mut t, &mut r, len, speed))
         .collect();
-    set_out(&mut t, &mut r, fk[0], Out::Fork(fk[1] as u32, fk[2] as u32)).unwrap();
+    set_out(
+        &mut t,
+        &mut r,
+        fk[0],
+        Out::Fork(fk[1] as u32, fk[2] as u32, None),
+    )
+    .unwrap();
     set_out(&mut t, &mut r, fk[1], Out::Next(fk[0] as u32)).unwrap();
     set_out(&mut t, &mut r, fk[2], Out::Merge(fk[1] as u32, 300)).unwrap();
-    let protected: Vec<usize> = [&c[..], &m[..], &fk[..]].concat();
+    // M61: a splitter's lane: two saturated inputs at speeds 72 and 24 take turns at one fork
+    // onto a sink at speed 72 (room for two in some ticks: the credit) and a dead end that fills
+    // (the blocked output).
+    let sp: Vec<usize> = [(512, 72), (512, 24), (512, 72), (768, 24)]
+        .into_iter()
+        .map(|(len, speed)| create(&mut t, &mut r, len, speed))
+        .collect();
+    set_out(&mut t, &mut r, sp[0], Out::Sink).unwrap();
+    for (x, p) in [(sp[2], None), (sp[3], None), (sp[2], Some(sp[3] as u32))] {
+        let fork = Out::Fork(sp[0] as u32, sp[1] as u32, p);
+        set_out(&mut t, &mut r, x, fork).unwrap();
+    }
+    let protected: Vec<usize> = [&c[..], &m[..], &fk[..], &sp[..]].concat();
     // Eight feeders into the chains (`set_out` may refuse a fork onto a short line: compared).
     let chains: Vec<usize> = (0..60).collect();
     for k in 0..8 {
@@ -1380,11 +1533,13 @@ fn transport_matches_per_item_reference() {
         let out = if k % 2 == 0 {
             Out::Merge(a, orng.below(len + 128))
         } else {
-            Out::Fork(a, b)
+            Out::Fork(a, b, None)
         };
         let _ = set_out(&mut t, &mut r, l, out);
     }
     let mut out_changes = [0u32; 2]; // merges and forks set by the random `set_out`
+    // M61: partners for the random forks, on their own stream (the M44 draws stay as they were).
+    let mut prng = engine::rng::SimRng::new(61);
 
     let live = |r: &Reference| -> Vec<usize> {
         (0..r.lines.len())
@@ -1406,6 +1561,15 @@ fn transport_matches_per_item_reference() {
                 t.insert_back(LineId(l as u32 + 1), Item(item)),
                 r.insert_back(l, item),
                 "tick {tick}: cycle feed {l}"
+            );
+        }
+        // M61: the splitter lane's inputs are fed every tick (a refusal when full is compared).
+        for &l in &sp[2..] {
+            let item = 1 + prng.below(3) as u16;
+            assert_eq!(
+                t.insert_back(LineId(l as u32 + 1), Item(item)),
+                r.insert_back(l, item),
+                "tick {tick}: M61 splitter feed {l}"
             );
         }
         for cycle in [&m, &fk] {
@@ -1430,7 +1594,19 @@ fn transport_matches_per_item_reference() {
             let len = r.line(a as usize).len as u32;
             let out = match orng.below(6) {
                 0 | 1 => Out::Merge(a, orng.below(len + 128)),
-                2 | 3 => Out::Fork(a, b),
+                2 | 3 => {
+                    // M61: half of them paired: with a random line (`Unsupported` unless it is a
+                    // fork on the same targets, lone or naming this line) or, more often, onto a
+                    // lone fork's own targets (linked back). Fix round 2's contract.
+                    let all = live(&r);
+                    let p = all[prng.below(all.len() as u32) as usize];
+                    match (prng.below(4), r.line(p).out) {
+                        (0, _) => Out::Fork(a, b, Some(p as u32)),
+                        (1, Out::Fork(pa, pb, None)) => Out::Fork(pa, pb, Some(p as u32)),
+                        (2, Out::Fork(pa, pb, _)) => Out::Fork(pa, pb, Some(p as u32)),
+                        _ => Out::Fork(a, b, None),
+                    }
+                }
                 4 => Out::Next(a),
                 _ => [Out::DeadEnd, Out::Sink][orng.below(2) as usize],
             };
@@ -1595,7 +1771,18 @@ fn transport_matches_per_item_reference() {
                 }
             }
         }
+        // M61 fix round 2: a save/load before every tick changes nothing (no scratch bit survives
+        // a tick observably): the restored store advances to the same bytes.
+        let mut u = Transport::new(512, 1 << 16);
+        u.read_canonical(&mut ByteReader::new(&encode(&t)))
+            .expect("decodes");
         t.advance();
+        u.advance();
+        assert_eq!(
+            encode(&u),
+            encode(&t),
+            "tick {tick}: advance after a save/load"
+        );
         r.advance();
         for l in live(&r) {
             let want: Vec<(u16, u32)> = r
@@ -1613,6 +1800,11 @@ fn transport_matches_per_item_reference() {
                 t.toggle(LineId(l as u32 + 1)),
                 Ok(r.line(l).toggle),
                 "tick {tick}: toggle {l}"
+            );
+            assert_eq!(
+                t.fork_yield(LineId(l as u32 + 1)),
+                Ok(r.line(l).yields),
+                "tick {tick}: turn {l}"
             );
             assert_eq!(
                 t.out(LineId(l as u32 + 1)),
@@ -1648,6 +1840,8 @@ fn transport_matches_per_item_reference() {
         (Stat::ForkPreferred, 50),
         (Stat::ForkDiverted, 10),
         (Stat::ForkWaited, 10),
+        (Stat::ForkYielded, 50),
+        (Stat::ForkAhead, 10),
         (Stat::BigStep, 10),
         (Stat::CutTransfer, 20),
     ];
@@ -1667,28 +1861,32 @@ fn transport_matches_per_item_reference() {
 }
 
 /// 0079 §5: the arena `Host::init`'s memory-split check counts, at literal sizes: a line costs
-/// 104 B (record; M44 added the fork's second target slot, its toggle and the cut's mid-line
+/// 112 B (record; M44 added the fork's second target slot, its toggle and the cut's mid-line
 /// landing count; M46's queued bit fills its padding; M53's schedule, 0079 §21, adds 16 B: 13 B
-/// of state and alignment, the pause flag the `Option`'s niche) + 8 (index) + 4 (order) + 4
+/// of state and alignment, the pause flag the `Option`'s niche; M61's fork `partner` grows
+/// `Output` from 12 B to 16 B and its cached `partner_slot` takes the other 4 B of the 8 B
+/// alignment step, its turn bit sharing the toggle's byte: 104 B -> 112 B) + 8 (index) + 4 (order) + 4
 /// (structure version, M46) + 17 (Tarjan scratch) + 4 x 32 (segment pool, M43) + 8 x 16 (tile
-/// index, M43) = 393 B, M53's scheduled-slot list 4 B per two lines (rounded up), the
+/// index, M43) = 401 B (393 B before M61), M53's scheduled-slot list 4 B per two lines (rounded up), the
 /// structure-change list a quarter of the lines x 4 B (M46, rounded up), a run node 16 B plus one spare node (none at 0 items), and the tile index's merge room, `MAX_LINE_TILES`
 /// x 16 = 65,536 B (none at 0 lines). M47's forecast tracker adds 64 B a line (a 44 B track, 4 B
 /// of due heap, 4 B of dirty list, a 12 B message), 8 B per four lines (a
 /// changed `Next` output, M47 review 2), 48 B per two lines (a 20 B hand-off log entry
 /// and a 28 B spawner entry, half the lines each, rounded up) and a 16 B model segment per line
-/// plus one per four items plus one (none at 0 items). At the recommended caps: 32,768 x 393 +
-/// 8,192 x 4 + 16,384 x 4 + 262,145 x 16 + 65,536 = 17,235,984 B, plus 32,768 x 64 + 16,384 x 48 +
-/// 8,192 x 8 + 98,305 x 16 = 4,522,000 B: 21,757,984 B (21,168,160 before M53). A replica reserves
+/// plus one per four items plus one (none at 0 items). At the recommended caps: 32,768 x 401 +
+/// 8,192 x 4 + 16,384 x 4 + 262,145 x 16 + 65,536 = 17,498,128 B, plus 32,768 x 64 + 16,384 x 48 +
+/// 8,192 x 8 + 98,305 x 16 = 4,522,000 B: 22,020,128 B (21,757,984 before M61: + 32,768 x 8;
+/// 21,168,160 before M53). A replica reserves
 /// no update order, Tarjan scratch, change list, scheduled-slot list, run nodes or tracker, and
-/// the follower instead (48 B a line, 16 B a run node per item plus one): 18,022,416 B at the
-/// recommended caps (`Transport::replica_reserved_bytes`; 17,498,128 before M53).
+/// the follower instead (48 B a line, 16 B a run node per item plus one): 18,284,560 B at the
+/// recommended caps (`Transport::replica_reserved_bytes`; 18,022,416 before M61,
+/// 17,498,128 before M53).
 #[test]
 fn transport_reserved_bytes_at_the_defaults() {
     assert_eq!(Transport::reserved_bytes(0, 0), 0);
     assert_eq!(
         Transport::reserved_bytes(1, 0),
-        393 + 4 + 4 + 65_536 + 64 + 48 + 8
+        401 + 4 + 4 + 65_536 + 64 + 48 + 8
     );
     assert_eq!(Transport::reserved_bytes(0, 1), 32 + 16);
     assert_eq!(
@@ -1696,14 +1894,14 @@ fn transport_reserved_bytes_at_the_defaults() {
             engine::transport::DEFAULT_MAX_LINES,
             engine::transport::DEFAULT_MAX_ITEMS
         ),
-        21_757_984
+        22_020_128
     );
     assert_eq!(
         Transport::replica_reserved_bytes(
             engine::transport::DEFAULT_MAX_LINES,
             engine::transport::DEFAULT_MAX_ITEMS
         ),
-        18_022_416
+        18_284_560
     );
 }
 

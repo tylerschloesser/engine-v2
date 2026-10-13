@@ -532,7 +532,15 @@ fn world_fork() {
         let a = line(t, 10, 12, 6, 24);
         let b = line(t, 10, 13, 6, 24);
         t.set_out(s, Output::Next(f)).unwrap();
-        t.set_out(f, Output::Fork { a, b }).unwrap();
+        t.set_out(
+            f,
+            Output::Fork {
+                a,
+                b,
+                partner: None,
+            },
+        )
+        .unwrap();
         t.set_out(a, Output::Sink).unwrap();
     });
     spawner(0, 256, 3, 1);

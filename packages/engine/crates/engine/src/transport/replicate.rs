@@ -156,7 +156,7 @@ impl Transport {
     }
 
     /// The replica's write (M46, 0078 §1): a `Put` creates the line with no items or replaces its
-    /// `len`, `speed`, `out` (its fork toggle stays `false`: item state) and segments, and
+    /// `len`, `speed`, `out` (its fork bits stay clear: item state) and segments, and
     /// re-indexes its tiles; a `Gone` removes it (an unknown id is a no-op). Feeders are never
     /// redirected here: the host sends their own puts. `Full` at `max_lines` or out of geometry
     /// room (the replica reserves the world's caps), `BadSpeed`/`BadSegments`/`TooLong` for a put
@@ -201,7 +201,8 @@ impl Transport {
         rec.out = put.out;
         rec.next_slot = NIL;
         rec.alt_slot = NIL;
-        rec.toggle = false;
+        rec.partner_slot = NIL;
+        rec.fork = 0;
         if let Err(e) = self.set_segments_line(put.id, segs) {
             match old {
                 Some(o) => {

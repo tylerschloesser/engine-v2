@@ -574,7 +574,8 @@ pub trait Instance: Sized + 'static {
     /// structures as UTF-8 JSON into `Tx`, returning the byte count (`0` when `Tx` is too small):
     /// `{"structsDropped":n,"lines":[{"id","len","speed","out","segments"}]}`, ascending by id
     /// (`out` is `{"kind":"DeadEnd"|"Sink"}`, `{"kind":"Next","line"}`, `{"kind":"Merge","line",
-    /// "at"}` or `{"kind":"Fork","a","b"}`; a segment is `{"len","kind":"Straight","from":[x,y],
+    /// "at"}` or `{"kind":"Fork","a","b","partner"}`, `partner` an id or `null` (M61: an added field of a test-only dump, not an ABI break, so no
+    /// `ABI_VERSION` bump); a segment is `{"len","kind":"Straight","from":[x,y],
     /// "to":[x,y]}` or `{"len","kind":"Arc","centre":[x,y],"radiusQ8","startTurnQ8","sweepQ8"}`).
     fn client_line_structures(&mut self, _tx: &mut [u8]) -> usize {
         0

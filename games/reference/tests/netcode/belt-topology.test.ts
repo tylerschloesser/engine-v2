@@ -147,6 +147,8 @@ test('reference_splitter_topology_converges', async () => {
           kind: 'Fork',
           a: at(OUT, rows[0][k]).id,
           b: at(OUT, rows[1][k]).id,
+          // M61: the other half's input lane k, which takes turns with this one.
+          partner: at(IN, rows[half === 0 ? 1 : 0][k]).id,
         })
         expect(at(OUT, rows[half][k]).out, `half ${half} lane ${k}: into its belt`).toEqual({
           kind: 'Next',

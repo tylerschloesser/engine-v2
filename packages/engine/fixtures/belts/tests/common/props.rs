@@ -172,6 +172,11 @@ impl World {
         self.sim.authority().transport().toggle(l).expect("line")
     }
 
+    /// M61: the line's fork turn bit; `false` for a line gone.
+    pub fn fork_yield(&self, l: LineId) -> bool {
+        self.sim.authority().transport().fork_yield(l) == Ok(true)
+    }
+
     /// The whole world's ledger: live and sunk over every line alive now, plus the final sunk
     /// counts of the lines that died; the schedules' inserts, the tally and the destroyed counter.
     pub fn ledger(&self) -> Ledger {

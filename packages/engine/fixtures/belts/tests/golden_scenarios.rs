@@ -998,7 +998,14 @@ fn belts_op_fork() {
     ]]);
     let tr = sim.authority().transport();
     let (i, a, b) = (line(&sim, 0), line(&sim, 1), line(&sim, 2));
-    assert_eq!(tr.out(i), Ok(Output::Fork { a, b }));
+    assert_eq!(
+        tr.out(i),
+        Ok(Output::Fork {
+            a,
+            b,
+            partner: None
+        })
+    );
     assert_eq!(items(&sim, a), [(1, 488)], "the first item went to a");
     assert_eq!(items(&sim, b), []);
     assert_eq!(items(&sim, i), [(2, 40)]);
@@ -1231,6 +1238,72 @@ fn belts_golden_fork_50_50() {
     engine::testing::assert_golden_named(
         env!("CARGO_MANIFEST_DIR"),
         "golden-fork-50-50.json",
+        &[hash],
+    );
+}
+
+/// `fork-pair` (M61): two saturated inputs (chains 0 and 1, kinds 1 and 2, `period` 256) are a
+/// fork pair onto chain 2 (`Sink`) and chain 3, a dead end that fills (blocked) until tick 400
+/// makes it a `Sink`. After every tick: conservation, the pair's toggles equal (one per splitter)
+/// and never both turn bits set. While chain 3 is blocked the open output carries the two inputs
+/// strictly alternately at the full rate; after it opens both outputs sink, each input's items
+/// straight through to one output. Pinned with the hash.
+#[test]
+fn belts_golden_fork_pair() {
+    let mut checked = 0;
+    let mut sunk_at_400 = 0;
+    let mut end = (0, 0);
+    let mut kinds_end = (Vec::new(), Vec::new());
+    let hash = run("scenario-fork-pair.json", &mut |sim| {
+        let t = sim.tick().0;
+        let (x, p, a, b) = (line(sim, 0), line(sim, 1), line(sim, 2), line(sim, 3));
+        let tr = sim.authority().transport();
+        let (live, sunk_all, spawned) = census(sim);
+        assert_eq!(spawned, live + sunk_all, "tick {t}: conservation");
+        if t >= 2 {
+            assert_eq!(tr.toggle(x), tr.toggle(p), "tick {t}: one toggle");
+            let turns = (tr.fork_yield(x).expect("x"), tr.fork_yield(p).expect("p"));
+            assert!(turns != (true, true), "tick {t}: one turn");
+        }
+        if (150..400).contains(&t) {
+            let k: Vec<u16> = items(sim, a).into_iter().map(|(i, _)| i).collect();
+            assert!(
+                k.windows(2).all(|w| w[0] != w[1]),
+                "tick {t}: alternate {k:?}"
+            );
+            assert_eq!(items(sim, b).len(), 8, "tick {t}: b full");
+            checked += 1;
+        }
+        if t == 400 {
+            sunk_at_400 = sunk(sim, a);
+        }
+        end = (sunk(sim, a), sunk(sim, b));
+        let k = |l| {
+            items(sim, l)
+                .into_iter()
+                .map(|(i, _)| i)
+                .collect::<Vec<u16>>()
+        };
+        kinds_end = (k(a), k(b));
+    });
+    assert_eq!(checked, 250);
+    // Chain 2 sinks at its full rate throughout: 3/8 a tick, 135 by tick 400 and 135 + 600 x 3/8
+    // = 360 by 1,000; chain 3 sinks 226 once open (its 8 held items and the pair's share,
+    // measured). Then the pair passes straight through (one shared toggle, alternate deliveries):
+    // chain 2 carries only kind 2 and chain 3 only kind 1.
+    assert_eq!(
+        (sunk_at_400, end),
+        (135, (360, 226)),
+        "sunk on 2 at 400; on 2 and 3 at 1,000"
+    );
+    assert_eq!(
+        kinds_end,
+        (vec![2; 8], vec![1; 8]),
+        "pass-through once both are open"
+    );
+    engine::testing::assert_golden_named(
+        env!("CARGO_MANIFEST_DIR"),
+        "golden-fork-pair.json",
         &[hash],
     );
 }

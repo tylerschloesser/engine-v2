@@ -551,17 +551,18 @@ const RESTORE_SPAWNED: u64 = 297;
 /// whose arena fits the slack in the larger of a host's and a replica's reserve (a phone may host
 /// or join) are pinned here as literals with their bytes (a record growth moves them): milestone
 /// 57's phone candidates, and an upper bound, not a usable cap: 0007 §8's 8 MiB line is "lists,
-/// timers, players, and slack", which this pair leaves 188,384 B of (the host's 8,200,224; a
-/// replica reserves 6,799,376). M47's forecast tracker (106 B a line and 4 B an item at these
+/// timers, players, and slack", which this pair leaves 90,080 B of (the host's 8,298,528; a
+/// replica reserves 6,897,680). M47's forecast tracker (106 B a line and 4 B an item at these
 /// caps) moved the pair from (16,384, 131,072), which reserved 8,355,856 B before it and would now
 /// reserve 10,911,776 B on a host and 9,043,984 B on a replica. M53's schedule (0079 §21: 16 B on
 /// the line record, 2 B a line of scheduled-slot list on a host) kept the pair and took 221,184 B
-/// of its slack (409,568 B before).
+/// of its slack (409,568 B before). M61's fork partner (8 B on the line record, 104 B -> 112 B)
+/// kept it and took 98,304 B more (188,384 B before; the 16,384 pair 131,072 B more on both).
 #[test]
 fn transport_phone_caps_fit_split() {
     const SLACK: u64 = 8 * MIB;
     const LINES: u32 = 12_288;
-    const BYTES: u64 = 8_200_224;
+    const BYTES: u64 = 8_298_528;
     let mut found = None;
     let mut lines = engine::transport::DEFAULT_MAX_LINES;
     while lines > 0 {
@@ -586,7 +587,7 @@ fn transport_phone_caps_fit_split() {
     );
     assert_eq!(
         Transport::replica_reserved_bytes(LINES, 8 * LINES),
-        6_799_376
+        6_897_680
     );
     assert!(Transport::max_role_bytes(LINES + 1_024, 8 * (LINES + 1_024)) > SLACK);
     assert_eq!(
@@ -594,18 +595,18 @@ fn transport_phone_caps_fit_split() {
             engine::transport::DEFAULT_MAX_LINES,
             engine::transport::DEFAULT_MAX_ITEMS
         ),
-        21_757_984,
-        "0079 §16's figure at the recommended caps, plus M46's 5 B a line, M47's tracker and \
-         M53's schedule"
+        22_020_128,
+        "0079 §16's figure at the recommended caps, plus M46's 5 B a line, M47's tracker, \
+         M53's schedule and M61's fork partner"
     );
     assert_eq!(
         Transport::reserved_bytes(16_384, 131_072),
-        10_911_776,
+        11_042_848,
         "M46's phone pair"
     );
     assert_eq!(
         Transport::replica_reserved_bytes(16_384, 131_072),
-        9_043_984
+        9_175_056
     );
 }
 

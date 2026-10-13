@@ -488,6 +488,10 @@ impl RefScenario {
                             Ok(Output::Fork {
                                 a: lanes[0].output[k],
                                 b: lanes[1].output[k],
+                                // M61: the other half's input lane k.
+                                partner: Some(
+                                    lanes[usize::from(s.input[k] == lanes[0].input[k])].input[k]
+                                ),
                             }),
                             "{h:?} lane {k}: the input fork"
                         );

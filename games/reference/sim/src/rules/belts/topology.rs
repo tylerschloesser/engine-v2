@@ -26,9 +26,11 @@
 //! [`splitter_halves`]) and per lane, an input line from the half's midline back to its back edge
 //! and an output line from its front edge to the midline, [`SPLITTER_LEN`] (128) each, straight,
 //! on the lane's usual cross position (the edge rule as for a run). Each input line's output is
-//! `Fork { a: the left half's output lane k, b: the right half's }` (one sub-splitter per input lane
-//! with the engine's toggle: `a`, the left half, is preferred first; Factorio's "first item goes
-//! right" is not copied). A belt behind a half facing the same way feeds that half's input lanes
+//! `Fork { a: the left half's output lane k, b: the right half's, partner: the other half's input
+//! lane k }` (one sub-splitter per lane: `a`, the left half, is preferred first; Factorio's "first
+//! item goes right" is not copied). M61: lane k's two inputs are a pair, so they take turns at the
+//! outputs and share one toggle (the engine's input turn, `transport/advance.rs`; README, splitter
+//! input fairness); `create_splitter` sets both lone, then pairs them. A belt behind a half facing the same way feeds that half's input lanes
 //! (`Next`, lane for lane); anything pointing into a long side, or head-on into its front, stops
 //! ([`Link::DeadEnd`]; measured `q15_splitter_long_side`). Each half's output feeds the tile in front
 //! like a belt's (C1-C4: `Next`, the sole side input of a curve, a side-load, or a dead end), and a
@@ -823,7 +825,16 @@ fn create_splitter(tr: Tx<'_>, b: Belt) {
             return;
         }
     }
-    for i in [0, 1, 4, 5] {
+    // M61: lane k's two inputs take turns (README, splitter input fairness): both set lone, then
+    // the left one paired with the right (the engine links the right one back).
+    for (i, partner) in [
+        (0, None),
+        (1, None),
+        (4, None),
+        (5, None),
+        (0, Some(4)),
+        (1, Some(5)),
+    ] {
         let k = i % 2;
         set_out(
             tr,
@@ -831,6 +842,7 @@ fn create_splitter(tr: Tx<'_>, b: Belt) {
             Output::Fork {
                 a: ids[2 + k],
                 b: ids[6 + k],
+                partner: partner.map(|p: usize| ids[p]),
             },
         );
     }
@@ -1615,12 +1627,19 @@ fn fix_output(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
         };
         let [l, r] = splitter_halves(&b).map(|h| splitter_lanes(tr, h));
         if let (Some(l), Some(r)) = (l, r) {
+            // M61: lane k's two inputs fork onto the halves' outputs as a pair. A pair whose
+            // forks do not match the outputs as read now (seen in `topology_random_edits_stay_
+            // canonical`: the halves' outputs swapped) is set lone on both inputs, then paired
+            // again (the engine's pairing contract: a partner forks onto the same `a` and `b`).
             for k in 0..2 {
-                let fork = Output::Fork {
-                    a: l.output[k],
-                    b: r.output[k],
-                };
-                set_out(tr, s.input[k], fork);
+                let (a, b) = (l.output[k], r.output[k]);
+                let fork = |partner| Output::Fork { a, b, partner };
+                let (x, p) = (l.input[k], r.input[k]);
+                if tr.out(x) != Ok(fork(Some(p))) || tr.out(p) != Ok(fork(Some(x))) {
+                    set_out(tr, x, fork(None));
+                    set_out(tr, p, fork(None));
+                    set_out(tr, x, fork(Some(p)));
+                }
             }
         }
         s.output

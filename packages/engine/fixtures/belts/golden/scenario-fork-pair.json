@@ -1,0 +1,186 @@
+{
+  "kind": "script",
+  "role": "sim",
+  "config": {
+    "arenaBytes": 100663296,
+    "game": {
+      "seed": "0xb",
+      "params": null,
+      "maxEntities": 4096,
+      "maxModifiedTiles": 4096,
+      "maxActionGrowth": 4096,
+      "maxLines": 16,
+      "maxItems": 512,
+      "cacheChunks": 1024
+    }
+  },
+  "encoderConfig": {
+    "arenaBytes": 50331648,
+    "game": {
+      "seed": "0xb",
+      "params": null,
+      "genWorkers": 1,
+      "cacheChunks": 1024
+    }
+  },
+  "genesis": true,
+  "checkpointAt": 1000,
+  "script": [
+    {
+      "tick": 1,
+      "connect": true,
+      "actions": [
+        {
+          "seq": 1,
+          "action": {
+            "Request": {
+              "Chain": {
+                "from": {
+                  "x": 0,
+                  "y": 0
+                },
+                "dir": "East",
+                "tiles": 2,
+                "speed": 24
+              }
+            }
+          }
+        },
+        {
+          "seq": 2,
+          "action": {
+            "Request": {
+              "Chain": {
+                "from": {
+                  "x": 0,
+                  "y": 0
+                },
+                "dir": "East",
+                "tiles": 2,
+                "speed": 24
+              }
+            }
+          }
+        },
+        {
+          "seq": 3,
+          "action": {
+            "Request": {
+              "Chain": {
+                "from": {
+                  "x": 2,
+                  "y": 0
+                },
+                "dir": "East",
+                "tiles": 2,
+                "speed": 24
+              }
+            }
+          }
+        },
+        {
+          "seq": 4,
+          "action": {
+            "Request": {
+              "Chain": {
+                "from": {
+                  "x": 2,
+                  "y": 0
+                },
+                "dir": "East",
+                "tiles": 2,
+                "speed": 24
+              }
+            }
+          }
+        },
+        {
+          "seq": 5,
+          "action": {
+            "Request": {
+              "Sink": {
+                "line": 2
+              }
+            }
+          }
+        },
+        {
+          "seq": 6,
+          "action": {
+            "Request": {
+              "Fork": {
+                "line": 0,
+                "a": 2,
+                "b": 3
+              }
+            }
+          }
+        },
+        {
+          "seq": 7,
+          "action": {
+            "Request": {
+              "Fork": {
+                "line": 1,
+                "a": 2,
+                "b": 3
+              }
+            }
+          }
+        },
+        {
+          "seq": 8,
+          "action": {
+            "Request": {
+              "ForkPair": {
+                "line": 0,
+                "a": 2,
+                "b": 3,
+                "partner": 1
+              }
+            }
+          }
+        },
+        {
+          "seq": 9,
+          "action": {
+            "Request": {
+              "Spawner": {
+                "line": 0,
+                "item": 1,
+                "period": 256
+              }
+            }
+          }
+        },
+        {
+          "seq": 10,
+          "action": {
+            "Request": {
+              "Spawner": {
+                "line": 1,
+                "item": 2,
+                "period": 256
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "tick": 400,
+      "actions": [
+        {
+          "seq": 11,
+          "action": {
+            "Request": {
+              "Sink": {
+                "line": 3
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

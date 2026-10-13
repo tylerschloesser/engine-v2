@@ -137,6 +137,8 @@ fn splitter_maps_eight_lines() {
                     Ok(Output::Fork {
                         a: l[0].output[k],
                         b: l[1].output[k],
+                        // M61: the two halves' input lane k name each other.
+                        partner: Some(l[usize::from(lanes.input[k] == l[0].input[k])].input[k]),
                     }),
                     "{dir:?} {half:?} lane {k}: fork (a the left half)"
                 );
@@ -350,11 +352,14 @@ fn splitter_blocked_side() {
 
 /// Two saturated inputs (iron behind the left half, coal behind the right, lane 0) with the right
 /// output dead-ended: the left output carries both inputs' items into an eight-tile run ending in a
-/// despawner. Question 11 (input fairness) is recorded, not built: in steady state the left input
-/// wins every slot on the shared output and the right one starves (the first coal items went left
-/// early, while the right output was still filling). Pinned exactly after 1,000 ticks: the run holds
-/// 36 iron and no coal, and coal is queued on the right half's input lane (the right input is fed and
-/// linked: its starvation is not a missing link). Fails if the fork, the feeders or the share change.
+/// despawner. Question 11 (input fairness, Tyler 2026-10-13: 50/50), built in M61: the two input
+/// lanes take turns at the shared output, so in steady state the run carries iron and coal
+/// alternately, 18 each (before M61 the left input won every slot: 36 iron and no coal). The run
+/// stays fully compressed (36 items at 64 apart on its 2,304 positions, as one saturated input
+/// fills it): a waiting item lands right behind the output's rearmost item (M61 fix round 1, the
+/// leader rule `Next` uses). Both input lanes stay full, two items each, waiting their turn.
+/// Pinned exactly after 1,000 ticks. Fails if the fork, the feeders, the turn, the compression or
+/// the share change.
 #[test]
 fn splitter_two_inputs() {
     let mut s = world();
@@ -387,12 +392,23 @@ fn splitter_two_inputs() {
     };
     let run = lanes(&s, TilePos::new(51, 50));
     let right_in = sp(&s, TilePos::new(50, 51)).input[0];
-    assert_eq!(kinds(run[0]), (36, 0), "the run in steady state: iron only");
-    // A full 128-position input line at spacing 64: two coal items, at rest.
+    let left_in = sp(&s, TilePos::new(50, 50)).input[0];
     assert_eq!(
-        kinds(right_in),
-        (0, 2),
-        "coal waits on the right half's input lane"
+        kinds(run[0]),
+        (18, 18),
+        "the run in steady state: half each"
+    );
+    let mut seq = Vec::new();
+    tr(&s).items_in(run[0], &mut |i, _| seq.push(i.0)).unwrap();
+    assert!(
+        seq.windows(2).all(|w| w[0] != w[1]),
+        "iron and coal alternate along the run: {seq:?}"
+    );
+    // Full 128-position input lines at spacing 64: two items each, at rest, waiting their turn.
+    assert_eq!(
+        (kinds(left_in), kinds(right_in)),
+        ((2, 0), (0, 2)),
+        "iron and coal wait on their halves' input lanes"
     );
     s.assert_topology();
 }

@@ -4,7 +4,8 @@
 //! 24, 72 and 96 (72 and 96 cross two items per tick), with literal positions (0069 §2): a merge
 //! lands at `clamp(at - o, 0, len - 1)` iff `SPACING` is clear on both sides there; a fork tries
 //! its preferred target's plain hand-off landing `len - o`, then the other, else the item waits;
-//! the toggle flips only on a preferred delivery.
+//! the toggle flips only on a preferred delivery. M61: a fork pair (two inputs naming each other
+//! as `partner`) takes turns: `fork_pair_*`.
 
 use engine::bytes::{ByteReader, SliceSink};
 use engine::codec::CodecError;
@@ -233,7 +234,15 @@ fn fork_world(s: u16, a: (u32, u16), b: (u32, u16)) -> (Transport, LineId, LineI
     let la = t.create(a.0, a.1).unwrap();
     let lb = t.create(b.0, b.1).unwrap();
     let f = t.create(1024, s).unwrap();
-    t.set_out(f, Output::Fork { a: la, b: lb }).unwrap();
+    t.set_out(
+        f,
+        Output::Fork {
+            a: la,
+            b: lb,
+            partner: None,
+        },
+    )
+    .unwrap();
     (t, la, lb, f)
 }
 
@@ -425,6 +434,7 @@ fn order_fork_feeds_both() {
         Output::Fork {
             a: LineId(3),
             b: LineId(4),
+            partner: None,
         },
     )
     .unwrap();
@@ -446,6 +456,7 @@ fn order_fork_feeds_both() {
         Output::Fork {
             a: LineId(4),
             b: LineId(3),
+            partner: None,
         },
     )
     .unwrap();
@@ -464,7 +475,15 @@ fn order_cycle_with_a_fork() {
     }
     let l = LineId;
     t.set_out(l(1), Output::Next(l(2))).unwrap();
-    t.set_out(l(2), Output::Fork { a: l(1), b: l(3) }).unwrap();
+    t.set_out(
+        l(2),
+        Output::Fork {
+            a: l(1),
+            b: l(3),
+            partner: None,
+        },
+    )
+    .unwrap();
     t.set_out(l(3), Output::Next(l(4))).unwrap();
     t.set_out(l(4), Output::Next(l(2))).unwrap();
     assert_eq!(order(&mut t), vec![1, 4, 3, 2]);
@@ -488,9 +507,10 @@ fn order_cycle_with_a_fork() {
     assert_eq!(encode(&back), encode(&t));
 }
 
-/// The toggle is state: encoded with the fork (its byte right after `b`), so a flipped toggle
-/// changes the bytes and the hash, and decodes as it was; a byte other than 0 or 1 is malformed.
-/// A merge round-trips with its `at`; malformed forks and merges are refused.
+/// The toggle is state: encoded with the fork (bit 0 of its byte right after `partner`, M61), so a
+/// flipped toggle changes the bytes and the hash, and decodes as it was; a byte above 3 (bit 1 is
+/// M61's turn, `fork_pair_yield_bit_round_trips`) is malformed. A merge round-trips with its `at`;
+/// malformed forks and merges are refused.
 #[test]
 fn codec_covers_toggle() {
     let (mut t, la, lb, f) = fork_world(24, OPEN, OPEN);
@@ -505,11 +525,12 @@ fn codec_covers_toggle() {
     assert_eq!(back.out(m).unwrap(), Output::Merge { line: la, at: 300 });
     assert_eq!(encode(&back), bytes);
     // Line 3 (`f`) is the third record: lines 1 and 2 are 27 bytes each (no items, no segments,
-    // `A` holds the delivered item: +8); then id, len, speed, tag, a, b: the toggle at +19.
-    let at = 4 + (27 + 8) + 27 + 19;
+    // `A` holds the delivered item: +8); then id, len, speed, tag, a, b, partner (M61, 0: none):
+    // the toggle at +23.
+    let at = 4 + (27 + 8) + 27 + 23;
     assert_eq!(
-        &bytes[at - 8..at],
-        &[la.0.to_le_bytes(), lb.0.to_le_bytes()].concat()[..]
+        &bytes[at - 12..at],
+        &[la.0.to_le_bytes(), lb.0.to_le_bytes(), [0; 4]].concat()[..]
     );
     assert_eq!(bytes[at], 1);
     let mut flipped = bytes.clone();
@@ -525,18 +546,18 @@ fn codec_covers_toggle() {
         "a flipped toggle changes the hash"
     );
     assert!(!decode(&flipped).unwrap().toggle(f).unwrap());
-    flipped[at] = 2;
+    flipped[at] = 4;
     assert_eq!(
         decode(&flipped).err(),
         Some(CodecError::Malformed),
-        "toggle 2"
+        "fork byte 4"
     );
     // A fork with a == b, and a merge into the line itself.
     let mut bad = bytes.clone();
-    bad[at - 4..at].copy_from_slice(&la.0.to_le_bytes());
+    bad[at - 8..at - 4].copy_from_slice(&la.0.to_le_bytes());
     assert_eq!(decode(&bad).err(), Some(CodecError::Malformed), "a == b");
     let mut bad = bytes.clone();
-    bad[at - 8..at - 4].copy_from_slice(&f.0.to_le_bytes());
+    bad[at - 12..at - 8].copy_from_slice(&f.0.to_le_bytes());
     assert_eq!(
         decode(&bad).err(),
         Some(CodecError::Malformed),
@@ -547,7 +568,15 @@ fn codec_covers_toggle() {
     let short = u.create(100, 8).unwrap();
     let long = u.create(1000, 8).unwrap();
     let fast = u.create(1000, 99).unwrap();
-    u.set_out(fast, Output::Fork { a: long, b: short }).unwrap();
+    u.set_out(
+        fast,
+        Output::Fork {
+            a: long,
+            b: short,
+            partner: None,
+        },
+    )
+    .unwrap();
     u.set_speed(fast, 100).unwrap();
     let mut b = encode(&u);
     // Lines 1 and 2 are 27 bytes each; line 3's speed sits after its id and len.
@@ -560,6 +589,685 @@ fn codec_covers_toggle() {
     );
 }
 
+/// M61: a fork pair, a splitter lane: inputs `X` (fed kind 1) and `P` (fed kind 2), `speed` `s`,
+/// 1024 long, each naming the other as `partner`, forking onto `a` and `b`. `p_first`: `P` takes
+/// the lower id, so it advances first.
+fn pair_world(
+    s: u16,
+    a: (u32, u16),
+    b: (u32, u16),
+    p_first: bool,
+) -> (Transport, LineId, LineId, LineId, LineId) {
+    let mut t = Transport::new(8, 512);
+    let la = t.create(a.0, a.1).unwrap();
+    let lb = t.create(b.0, b.1).unwrap();
+    let (first, second) = (t.create(1024, s).unwrap(), t.create(1024, s).unwrap());
+    let (x, p) = if p_first {
+        (second, first)
+    } else {
+        (first, second)
+    };
+    // Both lone, then `X` paired with `P` (the engine links `P` back: `set_out`'s contract).
+    for (l, q) in [(x, None), (p, None), (x, Some(p))] {
+        let fork = Output::Fork {
+            a: la,
+            b: lb,
+            partner: q,
+        };
+        t.set_out(l, fork).unwrap();
+    }
+    assert_eq!(
+        t.out(p),
+        Ok(Output::Fork {
+            a: la,
+            b: lb,
+            partner: Some(x)
+        }),
+        "linked back"
+    );
+    (t, la, lb, x, p)
+}
+
+/// A slow open collector: 4096 long at speed 8, so a fork delivers onto it once every 8 ticks and
+/// its items, front to back, are the delivery order.
+const COLLECT: (u32, u16) = (4096, 8);
+
+/// M61 (README, splitter input fairness): with both inputs saturated and `b` blocked, the open
+/// output (`a`, as fast as the inputs and sinking) takes items from the two inputs alternately
+/// whatever the update order (before M61 the input advanced first took every one), and at the full
+/// rate (fix round 1): over ticks 100-700 it receives exactly what it receives from one saturated
+/// input alone (225, 675 and 900 at speeds 24, 72 and 96), because a waiting item lands right
+/// behind `a`'s rearmost item (spacing 64), not at `len - o` a whole tick later (spacing 72 at
+/// speed 24: 1/3 a tick instead of 3/8), and an input that owes the turn still goes when its
+/// landing leaves room for its partner's (two landings in one tick at 72 and 96).
+#[test]
+fn fork_pair_alternates_inputs() {
+    let delivered =
+        |t: &Transport, la: LineId| t.sunk(la).unwrap() + u64::from(t.count(la).unwrap());
+    for s in SPEEDS {
+        let mut alone = 0;
+        for (p_first, fed) in [(false, false), (false, true), (true, true)] {
+            let (mut t, la, lb, x, p) = pair_world(s, (4096, s), (256, 8), p_first);
+            t.set_out(la, Output::Sink).unwrap();
+            put(&mut t, lb, 9, &JAMMED);
+            // Two inserts a tick: at speeds 72 and 96 an input carries more than one item a tick.
+            // Each input's deliveries in the window: its accepted inserts less its growth.
+            let (mut start, mut ins, mut held) = (0, [0u64; 2], [0u64; 2]);
+            for tick in 0..700 {
+                if tick == 100 {
+                    start = delivered(&t, la);
+                    held = [x, p].map(|l| u64::from(t.count(l).unwrap()));
+                }
+                for _ in 0..2 {
+                    ins[0] += u64::from(t.insert_back(x, Item(1)).is_ok() && tick >= 100);
+                    if fed {
+                        ins[1] += u64::from(t.insert_back(p, Item(2)).is_ok() && tick >= 100);
+                    }
+                }
+                t.advance();
+            }
+            let each = [x, p].map(|l| u64::from(t.count(l).unwrap()));
+            let each = [0, 1].map(|k| ins[k] + held[k] - each[k]);
+            assert_eq!(
+                kinds(&t, lb),
+                vec![9; 4],
+                "speed {s} {p_first}: b stays blocked"
+            );
+            if !fed {
+                alone = delivered(&t, la) - start;
+                continue;
+            }
+            assert_eq!(
+                delivered(&t, la) - start,
+                alone,
+                "speed {s} {p_first}: the full rate of one saturated input"
+            );
+            // Fix round 2: each input's share over the whole window, exactly (225, 675 and 900
+            // split within one).
+            let want = match s {
+                24 => [113, 112],
+                72 => [338, 337],
+                _ => [450, 450],
+            };
+            // The input with the lower id (it advances first) has the one more.
+            let want = if p_first { [want[1], want[0]] } else { want };
+            assert_eq!(
+                each, want,
+                "speed {s} {p_first}: each input's deliveries, ticks 100-700"
+            );
+            let got = kinds(&t, la);
+            let n = |k: u16| got.iter().filter(|&&i| i == k).count();
+            assert!(got.len() >= 20, "speed {s} {p_first}: {got:?}");
+            // At 24 strictly; at 72 and 96 an output takes two in some ticks, both inputs' in turn
+            // (the update order then puts one twice in a row, never three times), so a sample
+            // of the items on `a` may be off by two.
+            assert!(
+                got.windows(if s == 24 { 2 } else { 3 })
+                    .all(|w| w.iter().any(|&k| k != w[0])),
+                "speed {s} {p_first}: the inputs alternate: {got:?}"
+            );
+            assert!(
+                n(1).abs_diff(n(2)) <= if s == 24 { 1 } else { 2 },
+                "speed {s} {p_first}: {} and {}",
+                n(1),
+                n(2)
+            );
+        }
+    }
+}
+
+/// M61 fix round 1: a pair shares one output toggle (Factorio's per-splitter alternation): after
+/// a delivery from either side both lines' toggle bits are equal, `set_out` with a fork partner
+/// starts on the partner's toggle, and both bits round-trip through the codec. With both outputs
+/// open and both inputs saturated the pair passes straight through in lockstep: one input's items
+/// all go to `a`, the other's all to `b`.
+#[test]
+fn fork_pair_shared_toggle() {
+    for s in SPEEDS {
+        for p_first in [false, true] {
+            let (mut t, la, lb, x, p) = pair_world(s, (4096, s), (4096, s), p_first);
+            for _ in 0..200 {
+                let _ = t.insert_back(x, Item(1));
+                let _ = t.insert_back(p, Item(2));
+                t.advance();
+                assert_eq!(t.toggle(x), t.toggle(p), "speed {s} {p_first}: one toggle");
+            }
+            let (ka, kb) = (kinds(&t, la), kinds(&t, lb));
+            assert!(ka.len() >= 20 && kb.len() >= 20, "speed {s}: {ka:?} {kb:?}");
+            let one = |v: &[u16]| v.iter().all(|&k| k == v[0]);
+            assert!(
+                one(&ka) && one(&kb) && ka[0] != kb[0],
+                "speed {s} {p_first}: lockstep pass-through: {ka:?} {kb:?}"
+            );
+            let back = decode(&encode(&t)).unwrap();
+            assert_eq!(
+                (
+                    back.toggle(x),
+                    back.toggle(p),
+                    back.fork_yield(x),
+                    back.fork_yield(p)
+                ),
+                (t.toggle(x), t.toggle(p), t.fork_yield(x), t.fork_yield(p)),
+                "speed {s}: both lines' bits round-trip"
+            );
+        }
+    }
+    // `set_out` with a fork partner copies its toggle.
+    let (mut t, la, lb, x, p) = pair_world(24, OPEN, OPEN, false);
+    t.insert_at(p, 0, Item(2)).unwrap();
+    t.advance();
+    assert_eq!(
+        (t.toggle(x), t.toggle(p)),
+        (Ok(true), Ok(true)),
+        "P's delivery flipped both"
+    );
+    // `X` set lone leaves `P` lone with its toggle; a new input paired with `P` starts on it.
+    let lone = Output::Fork {
+        a: la,
+        b: lb,
+        partner: None,
+    };
+    t.set_out(x, lone).unwrap();
+    let fresh = t.create(1024, 24).unwrap();
+    let fork = Output::Fork {
+        a: la,
+        b: lb,
+        partner: Some(p),
+    };
+    t.set_out(fresh, fork).unwrap();
+    assert_eq!(
+        t.toggle(fresh),
+        Ok(true),
+        "a new input starts on its partner's toggle"
+    );
+}
+
+/// M61, 0079 §23 (c)'s shape on the engine: two fork pairs in series, each with its other output
+/// blocked. Stage 1: `X1` (kind 1) and `P1` (kind 2) fork onto `O1`; stage 2: `Q` (kind 3, the
+/// lower id) and `O1` fork onto the collector. Before M61 `Q` took every slot and kinds 1 and 2
+/// never arrived; now `Q` and `O1` take turns and `O1` carries `X1`'s and `P1`'s in turn.
+#[test]
+fn fork_pair_no_starvation_through_two_forks() {
+    let mut t = Transport::new(16, 1024);
+    let collect = t.create(COLLECT.0, COLLECT.1).unwrap();
+    let [j2, j1] = [0; 2].map(|_| t.create(256, 8).unwrap());
+    let [q, o1, x1, p1] = [0; 4].map(|_| t.create(1024, 24).unwrap());
+    for j in [j1, j2] {
+        put(&mut t, j, 9, &JAMMED);
+    }
+    for (l, partner, a, b) in [
+        (x1, None, o1, j1),
+        (p1, None, o1, j1),
+        (q, None, collect, j2),
+        (o1, None, collect, j2),
+        (x1, Some(p1), o1, j1),
+        (q, Some(o1), collect, j2),
+    ] {
+        let fork = Output::Fork { a, b, partner };
+        t.set_out(l, fork).unwrap();
+    }
+    for _ in 0..400 {
+        for (l, k) in [(x1, 1), (p1, 2), (q, 3)] {
+            let _ = t.insert_back(l, Item(k));
+        }
+        t.advance();
+    }
+    // Until `O1`'s first item reaches its front (1024 / 24 ticks), `Q` delivers alone; from then
+    // on stage 2 alternates `Q` and `O1`, and `O1` carries stage 1's two inputs in turn.
+    let got = kinds(&t, collect);
+    let first = got.iter().position(|&k| k != 3).expect("stage 1 delivers");
+    let steady = &got[first..];
+    assert!(first <= 8 && steady.len() >= 30, "{got:?}");
+    let (o, q): (Vec<u16>, Vec<u16>) = (
+        steady.iter().step_by(2).copied().collect(),
+        steady.iter().skip(1).step_by(2).copied().collect(),
+    );
+    assert!(q.iter().all(|&k| k == 3), "stage 2 takes turns: {got:?}");
+    assert!(
+        o.windows(2).all(|w| w[0] != w[1] && w[0] != 3 && w[1] != 3),
+        "stage 1 takes turns: {got:?}"
+    );
+}
+
+/// M61: a partner that holds no items is never due, so an input with one delivers exactly as a
+/// lone fork does (the M44 rule), tick for tick, though its turn bit is set.
+#[test]
+fn fork_pair_single_input_unchanged() {
+    for s in SPEEDS {
+        let (mut t, la, lb, x, p) = pair_world(s, COLLECT, (4096, 24), false);
+        let mut u = Transport::new(8, 512);
+        let ua = u.create(COLLECT.0, COLLECT.1).unwrap();
+        let ub = u.create(4096, 24).unwrap();
+        let ux = u.create(1024, s).unwrap();
+        u.create(1024, s).unwrap();
+        let lone = Output::Fork {
+            a: ua,
+            b: ub,
+            partner: None,
+        };
+        u.set_out(ux, lone).unwrap();
+        for tick in 0..300 {
+            let _ = t.insert_back(x, Item(1));
+            let _ = u.insert_back(ux, Item(1));
+            t.advance();
+            u.advance();
+            for (l, ul) in [(la, ua), (lb, ub), (x, ux)] {
+                assert_eq!(items(&t, l), items(&u, ul), "speed {s} tick {tick}");
+            }
+            assert_eq!(t.toggle(x), u.toggle(ux), "speed {s} tick {tick}");
+        }
+        assert_eq!(t.count(p), Ok(0));
+        assert!(
+            t.count(la).unwrap() + t.count(lb).unwrap() > 30,
+            "speed {s}"
+        );
+        assert_eq!(t.fork_yield(x), Ok(true), "speed {s}: the turn was taken");
+        assert_eq!(t.fork_yield(p), Ok(false));
+    }
+}
+
+/// M61: the turn bit is state: bit 1 of the fork byte (bit 0 the toggle), after the record's
+/// `partner` id; it changes the bytes and the hash and decodes as it was; a byte above 3, a
+/// partner naming the line itself or a missing line are malformed. `set_out` refuses the same
+/// partners, and destroying the partner leaves a lone fork with its turn cleared.
+#[test]
+fn fork_pair_yield_bit_round_trips() {
+    let (mut t, la, lb, x, p) = pair_world(24, OPEN, OPEN, false);
+    t.insert_at(x, 0, Item(1)).unwrap();
+    t.advance();
+    assert_eq!(t.count(la), Ok(1), "delivered to a");
+    assert_eq!((t.fork_yield(x), t.fork_yield(p)), (Ok(true), Ok(false)));
+    let bytes = encode(&t);
+    let back = decode(&bytes).unwrap();
+    assert_eq!(encode(&back), bytes);
+    assert_eq!((back.fork_yield(x), back.toggle(x)), (Ok(true), Ok(true)));
+    assert_eq!(back.out(x), t.out(x), "the partner round-trips");
+    // `X` is the third record: lines 1 and 2 are 27 bytes each, `A` holding the item (+8); then
+    // id, len, speed, tag, a, b, partner: the fork byte at +23.
+    let at = 4 + (27 + 8) + 27 + 23;
+    assert_eq!(&bytes[at - 4..at], &p.0.to_le_bytes());
+    assert_eq!(bytes[at], 3, "toggle and turn");
+    let mut flipped = bytes.clone();
+    flipped[at] = 1;
+    let hash = |b: &[u8]| {
+        let mut h = Fnv64::new();
+        h.write(b);
+        h.finish()
+    };
+    assert_ne!(hash(&flipped), hash(&bytes), "the turn changes the hash");
+    let back = decode(&flipped).unwrap();
+    assert_eq!((back.fork_yield(x), back.toggle(x)), (Ok(false), Ok(true)));
+    flipped[at] = 4;
+    assert_eq!(
+        decode(&flipped).err(),
+        Some(CodecError::Malformed),
+        "byte 4"
+    );
+    for (bad_partner, what) in [(x.0, "itself"), (99, "missing")] {
+        let mut bad = bytes.clone();
+        bad[at - 4..at].copy_from_slice(&bad_partner.to_le_bytes());
+        assert_eq!(
+            decode(&bad).err(),
+            Some(CodecError::Malformed),
+            "a partner {what}"
+        );
+    }
+    let fork = |partner| Output::Fork {
+        a: la,
+        b: lb,
+        partner: Some(partner),
+    };
+    assert_eq!(t.set_out(x, fork(x)), Err(TransportError::Unsupported));
+    assert_eq!(t.set_out(x, fork(LineId(99))), Err(TransportError::NoLine));
+    t.destroy(p, &mut |_| {}).unwrap();
+    assert_eq!(
+        t.out(x),
+        Ok(Output::Fork {
+            a: la,
+            b: lb,
+            partner: None
+        }),
+        "a lone fork"
+    );
+    assert_eq!((t.fork_yield(x), t.toggle(x)), (Ok(false), Ok(true)));
+}
+
+/// A pair in a cycle (M61 fix round 2, the review's probe): `P` forks onto `a` and `j`, `a` forks
+/// onto `r` and a sink `s`, `r` runs back into `P`, and `X` (outside the cycle, saturated) forks
+/// onto `a` and `j` paired with `P`. `P` is the cycle's cut, so it advances before its own target
+/// `a`, and `X` comes last (order `[j, s, P, r, a, X]` up to ids). Random ids, speeds and lengths
+/// from `seed`; `None` if a `set_out` refuses (a target shorter than a feeder's speed).
+fn cycle_world(seed: u64, paired: bool) -> Option<(Transport, [LineId; 6], bool)> {
+    let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut below = |n: u64| {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x % n
+    };
+    let mut t = Transport::new(64, 8192);
+    let speeds = [8u16, 16, 24, 32, 48, 72, 96];
+    let s_in = speeds[below(7) as usize];
+    let s_x = if below(2) == 0 {
+        s_in
+    } else {
+        speeds[below(7) as usize]
+    };
+    let mut roles = [0usize, 1, 2, 3, 4, 5];
+    for i in (1..6).rev() {
+        roles.swap(i, below(i as u64 + 1) as usize);
+    }
+    let mut ids = [LineId(0); 6];
+    for &role in &roles {
+        let (len, speed) = match role {
+            0 => (256 + 64 * below(8) as u32, s_in),
+            1 => (256 + 64 * below(8) as u32, s_x),
+            2 => (128 + 32 * below(8) as u32, speeds[below(7) as usize]),
+            3 => (256, 8),
+            4 => (256 + 64 * below(8) as u32, speeds[below(7) as usize]),
+            _ => (512, speeds[below(7) as usize]),
+        };
+        ids[role] = t.create(len.max(200), speed).unwrap();
+    }
+    let [p, xl, a, j, r, s] = ids;
+    if below(2) == 0 {
+        t.set_out(j, Output::Sink).unwrap();
+    }
+    t.set_out(s, Output::Sink).unwrap();
+    let lone = |a, b| Output::Fork {
+        a,
+        b,
+        partner: None,
+    };
+    t.set_out(a, lone(r, s)).ok()?;
+    t.set_out(r, Output::Next(p)).ok()?;
+    t.set_out(p, lone(a, j)).ok()?;
+    t.set_out(xl, lone(a, j)).ok()?;
+    if paired {
+        let fork = Output::Fork {
+            a,
+            b: j,
+            partner: Some(p),
+        };
+        t.set_out(xl, fork).unwrap();
+    }
+    Some((t, ids, below(2) == 0))
+}
+
+/// M61 fix round 2 (the review's HIGH finding): advancing a store and advancing its encoded and
+/// decoded copy reach the same bytes, every tick, for a pair in a cycle over 399 random worlds
+/// (seeds 16, 151 and 369 diverged at tick 22 when a credit left unpaid survived the tick).
+#[test]
+fn fork_pair_in_a_cycle_restores_exactly() {
+    let mut worlds = 0;
+    for seed in 1..400u64 {
+        let Some((mut t, ids, feed_p)) = cycle_world(seed, true) else {
+            continue;
+        };
+        worlds += 1;
+        for tick in 0..600 {
+            let _ = t.insert_back(ids[1], Item(1));
+            if feed_p && tick < 100 {
+                let _ = t.insert_back(ids[0], Item(2));
+            }
+            let mut u = decode(&encode(&t)).unwrap();
+            t.advance();
+            u.advance();
+            assert_eq!(encode(&u), encode(&t), "seed {seed} tick {tick}");
+        }
+    }
+    assert!(worlds > 300, "only {worlds} worlds built");
+}
+
+/// M61 fix rounds 2-4 (the reviews' lost slots): `P`, the cut of a cycle through `a`, advances
+/// before `a` (order `P, r, a, X`), so it sees `a`'s tail before `a` moves. Every delivery onto
+/// `a` is counted (each item carries its own kind; one on `a` that was not there the tick before
+/// is a delivery) over ticks 200-700 for the pair and for two lone forks:
+/// - `P` refused on the stale tail, `X` owing the turn: `P` already advanced, so `X` takes the slot
+///   (round 2): 187 = 187 at speed 24; 562 = 562 (`a`'s full rate, 500 x 72 / 64) with `a` at 72,
+///   `X` at 96 and `r` fed. There `X` fills `a` and `P` never delivers (never holds the turn), as
+///   two lone forks: `P` sees no room before `a` moves.
+/// - The rule's cost, measured (fix round 4 keeps it rather than risk starvation,
+///   `fork_pair_never_starves_in_a_cycle`): with `X` at 24 and due while `P` owes, `P` goes ahead
+///   only when its landing leaves `a` room as `a` stands, before its move. `a` at 72 with `P` at
+///   72, `a` at 96 with `P` at 48: 375 against two lone forks' 499; `a` at 72 with `P` at 48: 374
+///   against 417. `P` yields to the due `X`, its waiting item loses its tick and it is held to
+///   `X`'s rate (187 + 187, or 188), while lone forks let `P` use the room `X` leaves. Round 3
+///   counted the room `a`'s move frees (499 = 499 in the first two), but that estimate can
+///   over-estimate (a blocked tail, a collapsed cut budget) and starve `X`; it was reverted.
+/// - The reference game has one speed: there the pair and lone forks agree (187 = 187).
+#[test]
+fn fork_pair_in_a_cycle_keeps_the_slot() {
+    let run = |paired: bool, (sa, sx, sr, ss, feed_r): (u16, u16, u16, u16, bool)| -> (u64, u32) {
+        let mut t = Transport::new(16, 4096);
+        let p = t.create(512, sr).unwrap();
+        let a = t.create(512, sa).unwrap();
+        let r = t.create(512, sr).unwrap();
+        let x = t.create(512, sx).unwrap();
+        let j = t.create(256, 8).unwrap();
+        let s = t.create(512, ss).unwrap();
+        put(&mut t, j, 9, &JAMMED);
+        t.set_out(s, Output::Sink).unwrap();
+        let lone = |a, b| Output::Fork {
+            a,
+            b,
+            partner: None,
+        };
+        t.set_out(a, lone(r, s)).unwrap();
+        t.set_out(r, Output::Next(p)).unwrap();
+        t.set_out(p, lone(a, j)).unwrap();
+        t.set_out(x, lone(a, j)).unwrap();
+        if paired {
+            let fork = Output::Fork {
+                a,
+                b: j,
+                partner: Some(p),
+            };
+            t.set_out(x, fork).unwrap();
+        }
+        let o = order(&mut t);
+        let at = |l: LineId| o.iter().position(|&i| i == l.0).unwrap();
+        assert!(
+            at(p) < at(r) && at(r) < at(a) && at(a) < at(x),
+            "order {o:?}"
+        );
+        let mut seen: Vec<u16> = Vec::new();
+        let (mut kind, mut delivered, mut owed) = (1u16, 0u64, 0u32);
+        for tick in 0..700 {
+            for l in [Some(x), feed_r.then_some(r)].into_iter().flatten() {
+                for _ in 0..2 {
+                    if t.insert_back(l, Item(kind)).is_ok() {
+                        kind += 1;
+                    }
+                }
+            }
+            t.advance();
+            if tick >= 200 && t.fork_yield(p) == Ok(true) {
+                owed += 1;
+            }
+            let now = kinds(&t, a);
+            if tick >= 200 {
+                delivered += now.iter().filter(|k| !seen.contains(k)).count() as u64;
+            }
+            seen = now;
+        }
+        (delivered, owed)
+    };
+    // `(a, X, P and r, s, r fed)` speeds; the pair's and two lone forks' deliveries onto `a`,
+    // and the ticks `P` held the turn.
+    let cases = [
+        ((24, 24, 24, 24, false), 187, 187, 0),
+        ((72, 96, 24, 96, true), 562, 562, 0),
+        ((72, 24, 72, 96, true), 375, 499, 125),
+        ((96, 24, 48, 96, true), 375, 499, 125),
+        ((72, 24, 48, 96, true), 374, 417, 125),
+    ];
+    for (case, pair, lone, owed) in cases {
+        assert_eq!(run(true, case), (pair, owed), "{case:?}: the pair");
+        assert_eq!(run(false, case).0, lone, "{case:?}: two lone forks");
+    }
+}
+
+/// M61 fix round 4 (review 3): no input of a pair starves in a mixed-speed cycle. The world of
+/// [`fork_pair_in_a_cycle_keeps_the_slot`] (`P` the cut of `P -> a -> r -> P`, advancing before
+/// `a`; `X` outside, after `a`; `r` fed so `P` stays busy), `(a, X, P and r, s)` speeds. Over ticks
+/// 200-700: every delivery onto `a` (a kind not on `a` the tick before) and `X`'s own (its accepted
+/// inserts less its growth). `X`'s share is at least the smaller of its supply (one item per
+/// `64 / speed` ticks, 187 at 24) and half the deliveries, and both inputs deliver. (a) The
+/// collapsed cut budget: `P` at 96 crosses two items in some ticks, whose landings on `a`
+/// (not moved yet) carry different budgets, so the second's is 0. (b) The blocked tail: a slower
+/// `s` backs `a` up, so a landing behind `a`'s rearmost item moves only as far as that item does.
+/// Round 3's estimate of the room `a`'s move frees over-estimated in (b) and starved `P`; the room
+/// is now read as `a` stands.
+#[test]
+fn fork_pair_never_starves_in_a_cycle() {
+    let run = |(sa, sx, sr, ss): (u16, u16, u16, u16), paired: bool| -> (u64, u64) {
+        let mut t = Transport::new(16, 4096);
+        let p = t.create(512, sr).unwrap();
+        let a = t.create(512, sa).unwrap();
+        let r = t.create(512, sr).unwrap();
+        let x = t.create(512, sx).unwrap();
+        let j = t.create(256, 8).unwrap();
+        let s = t.create(512, ss).unwrap();
+        put(&mut t, j, 9, &JAMMED);
+        t.set_out(s, Output::Sink).unwrap();
+        let fork = |a, b, partner| Output::Fork { a, b, partner };
+        t.set_out(a, fork(r, s, None)).unwrap();
+        t.set_out(r, Output::Next(p)).unwrap();
+        t.set_out(p, fork(a, j, None)).unwrap();
+        t.set_out(x, fork(a, j, None)).unwrap();
+        if paired {
+            t.set_out(x, fork(a, j, Some(p))).unwrap();
+        }
+        let o = order(&mut t);
+        let at = |l: LineId| o.iter().position(|&i| i == l.0).unwrap();
+        assert!(at(p) < at(a) && at(a) < at(x), "order {o:?}");
+        let mut seen: Vec<u16> = Vec::new();
+        let (mut kind, mut total, mut x_in, mut x_held) = (1u16, 0u64, 0u64, 0u64);
+        for tick in 0..700 {
+            if tick == 200 {
+                x_held = u64::from(t.count(x).unwrap());
+            }
+            for l in [x, r] {
+                for _ in 0..2 {
+                    if t.insert_back(l, Item(kind)).is_ok() {
+                        kind = kind.wrapping_add(1).max(1);
+                        x_in += u64::from(l == x && tick >= 200);
+                    }
+                }
+            }
+            t.advance();
+            let now = kinds(&t, a);
+            if tick >= 200 {
+                total += now.iter().filter(|k| !seen.contains(k)).count() as u64;
+            }
+            seen = now;
+        }
+        (total, x_in + x_held - u64::from(t.count(x).unwrap()))
+    };
+    // (a) the collapsed budget and (b) the blocked tail (`s` at 24 backs `a` up): (deliveries onto
+    // `a`, `X`'s), each input getting half. Round 3's estimate starves `P` in (b): (187, 187), as
+    // two lone forks do; (a) holds with it too (499, `X` 187) and stays as the pin.
+    for (case, want) in [
+        ((96, 24, 96, 96), (375, 187)),
+        ((72, 24, 72, 24), (375, 187)),
+    ] {
+        let (total, xs) = run(case, true);
+        assert_eq!((total, xs), want, "{case:?}: deliveries onto a, X's");
+        assert!(xs >= 187.min(total / 2), "{case:?}: X's share");
+        assert!(total - xs >= 187.min(total / 2), "{case:?}: P's share");
+    }
+    // The limit a turn cannot lift: with `s` at 8, `a` stays backed up and `P` (the cut, before
+    // `a` moves) never finds room as `a` stands, paired or lone: every delivery is `X`'s.
+    let limit = (72, 24, 72, 8);
+    assert_eq!(
+        (run(limit, true), run(limit, false)),
+        ((62, 62), (62, 62)),
+        "P sees no room"
+    );
+}
+
+/// M61 fix round 2: the pair link is mutual over the same `{a, b}`. `set_out` pairs only with a
+/// fork on the same targets, lone (linked back) or naming this line; a partner that is not a fork,
+/// forks onto other targets or another order, or is paired elsewhere is `Unsupported`. Replacing a
+/// paired fork (with `DeadEnd`, a lone fork, a fork onto other targets) leaves the partner a lone
+/// fork with its turn cleared. Decode rejects a one-sided link, a partner on other targets, a
+/// pair whose two turn bits are both set and (fix round 3) one whose two toggles differ.
+#[test]
+fn fork_pair_link_contract() {
+    let fork = |a, b, partner| Output::Fork { a, b, partner };
+    let un = Err(TransportError::Unsupported);
+    let (mut t, la, lb, x, p) = pair_world(24, OPEN, OPEN, false);
+    let z = t.create(1024, 24).unwrap();
+    assert_eq!(
+        t.set_out(z, fork(la, lb, Some(p))),
+        un,
+        "p is paired with x"
+    );
+    t.set_out(z, Output::DeadEnd).unwrap();
+    assert_eq!(t.set_out(x, fork(la, lb, Some(z))), un, "z is not a fork");
+    t.set_out(z, fork(lb, la, None)).unwrap();
+    assert_eq!(
+        t.set_out(x, fork(la, lb, Some(z))),
+        un,
+        "z forks the other way"
+    );
+    assert_eq!(
+        t.out(x),
+        Ok(fork(la, lb, Some(p))),
+        "refusals change nothing"
+    );
+    // A delivery by `P` sets its turn; replacing `X`'s fork in any way frees `P`.
+    let replacements = [
+        Output::DeadEnd,
+        fork(la, lb, None),
+        fork(lb, la, None),
+        Output::Next(la),
+    ];
+    for out in replacements {
+        let (mut t, _, _, x, p) = pair_world(24, OPEN, OPEN, false);
+        t.insert_at(p, 0, Item(2)).unwrap();
+        t.advance();
+        assert_eq!(t.fork_yield(p), Ok(true), "{out:?}: P owes");
+        t.set_out(x, out).unwrap();
+        assert_eq!(t.out(p), Ok(fork(la, lb, None)), "{out:?}: P is lone");
+        assert_eq!(
+            (t.fork_yield(p), t.toggle(p)),
+            (Ok(false), Ok(true)),
+            "{out:?}: its turn cleared, its toggle kept"
+        );
+    }
+    // Decode: `X` is the third record, `P` the fourth (no items: 27 + 4 + 1 B a fork record more
+    // than a plain one's 27: id, len, speed, tag, a, b, partner, fork byte, sunk, jam, runs).
+    let bytes = encode(&t);
+    let x_at = 4 + 27 + 27 + 23;
+    let p_at = x_at + 1 + 8 + 4 + 4 + 23;
+    assert_eq!(&bytes[p_at - 4..p_at], &x.0.to_le_bytes(), "P names X");
+    let mut one_sided = bytes.clone();
+    one_sided[p_at - 4..p_at].copy_from_slice(&0u32.to_le_bytes());
+    let mut both_owe = bytes.clone();
+    both_owe[x_at] |= 2;
+    both_owe[p_at] |= 2;
+    let mut toggles_differ = bytes.clone();
+    toggles_differ[p_at] ^= 1;
+    let mut other_targets = bytes.clone();
+    // `P` forks onto `b, a`.
+    other_targets[p_at - 12..p_at - 4]
+        .copy_from_slice(&[lb.0.to_le_bytes(), la.0.to_le_bytes()].concat());
+    assert!(decode(&bytes).is_ok());
+    for (bad, what) in [
+        (one_sided, "one-sided"),
+        (both_owe, "both owe"),
+        (toggles_differ, "toggles differ"),
+        (other_targets, "other targets"),
+    ] {
+        assert_eq!(decode(&bad).err(), Some(CodecError::Malformed), "{what}");
+    }
+    let mut one_owes = bytes.clone();
+    one_owes[p_at] |= 2;
+    assert!(decode(&one_owes).is_ok(), "one turn bit is legal");
+}
+
 /// `set_out` and `set_speed` refusals for the two outputs.
 #[test]
 fn outputs_refusals() {
@@ -569,27 +1277,63 @@ fn outputs_refusals() {
     let f = t.create(1000, 200).unwrap();
     let un = Err(TransportError::Unsupported);
     assert_eq!(t.set_out(f, Output::Merge { line: f, at: 0 }), un);
-    assert_eq!(t.set_out(f, Output::Fork { a: b, b }), un);
-    assert_eq!(t.set_out(f, Output::Fork { a: f, b }), un);
     assert_eq!(
         t.set_out(
             f,
             Output::Fork {
                 a: b,
-                b: LineId(99)
+                b,
+                partner: None
+            }
+        ),
+        un
+    );
+    assert_eq!(
+        t.set_out(
+            f,
+            Output::Fork {
+                a: f,
+                b,
+                partner: None
+            }
+        ),
+        un
+    );
+    assert_eq!(
+        t.set_out(
+            f,
+            Output::Fork {
+                a: b,
+                b: LineId(99),
+                partner: None,
             }
         ),
         Err(TransportError::NoLine)
     );
     assert_eq!(
-        t.set_out(f, Output::Fork { a: b, b: a }),
+        t.set_out(
+            f,
+            Output::Fork {
+                a: b,
+                b: a,
+                partner: None
+            }
+        ),
         Err(TransportError::BadSpeed),
         "a fork target shorter than the feeder's speed"
     );
     // A merge landing is clamped, so a short merge target is fine.
     assert_eq!(t.set_out(f, Output::Merge { line: a, at: 5_000 }), Ok(()));
     t.set_speed(f, 8).unwrap();
-    t.set_out(f, Output::Fork { a: b, b: a }).unwrap();
+    t.set_out(
+        f,
+        Output::Fork {
+            a: b,
+            b: a,
+            partner: None,
+        },
+    )
+    .unwrap();
     assert_eq!(t.set_speed(f, 101), Err(TransportError::BadSpeed));
     assert_eq!(t.set_speed(f, 100), Ok(()));
     // A changed output clears the toggle.
@@ -598,7 +1342,15 @@ fn outputs_refusals() {
         t.advance();
     }
     assert!(t.toggle(f).unwrap());
-    t.set_out(f, Output::Fork { a, b }).unwrap();
+    t.set_out(
+        f,
+        Output::Fork {
+            a,
+            b,
+            partner: None,
+        },
+    )
+    .unwrap();
     assert!(!t.toggle(f).unwrap());
 }
 
@@ -615,7 +1367,15 @@ fn outputs_same_set_out_is_a_no_op() {
     assert!(t.toggle(f).unwrap(), "one delivery to a");
     assert_eq!(t.count(f).unwrap(), 0);
     let recomputes = t.order_recomputes();
-    t.set_out(f, Output::Fork { a: la, b: lb }).unwrap();
+    t.set_out(
+        f,
+        Output::Fork {
+            a: la,
+            b: lb,
+            partner: None,
+        },
+    )
+    .unwrap();
     assert!(t.toggle(f).unwrap(), "the same fork keeps its toggle");
     t.advance();
     assert_eq!(
@@ -625,7 +1385,15 @@ fn outputs_same_set_out_is_a_no_op() {
     );
     assert_eq!(t.touched(f), Ok(false), "the line was not touched");
     // A real change still clears it, and recomputes the order once.
-    t.set_out(f, Output::Fork { a: lb, b: la }).unwrap();
+    t.set_out(
+        f,
+        Output::Fork {
+            a: lb,
+            b: la,
+            partner: None,
+        },
+    )
+    .unwrap();
     assert!(!t.toggle(f).unwrap());
     t.advance();
     assert_eq!(t.order_recomputes(), recomputes + 1);
@@ -646,7 +1414,15 @@ fn outputs_follow_surgery() {
     let m_back = t.create(512, 8).unwrap();
     let m_front = t.create(512, 8).unwrap();
     let n = t.create(512, 8).unwrap();
-    t.set_out(f, Output::Fork { a, b }).unwrap();
+    t.set_out(
+        f,
+        Output::Fork {
+            a,
+            b,
+            partner: None,
+        },
+    )
+    .unwrap();
     t.set_out(m_back, Output::Merge { line: c, at: 300 })
         .unwrap();
     t.set_out(m_front, Output::Merge { line: c, at: 50 })
@@ -671,7 +1447,15 @@ fn outputs_follow_surgery() {
     // A fork onto both halves of a joined pair becomes a plain hand-off.
     let g = t.create(512, 8).unwrap();
     let back = t.split(c, 256).unwrap();
-    t.set_out(g, Output::Fork { a: c, b: back }).unwrap();
+    t.set_out(
+        g,
+        Output::Fork {
+            a: c,
+            b: back,
+            partner: None,
+        },
+    )
+    .unwrap();
     t.join(c, back).unwrap();
     assert_eq!(t.out(g).unwrap(), Output::Next(c));
     // A join whose front side-loads onto its back would feed itself.
@@ -783,7 +1567,15 @@ fn merge_across_a_cut_stays_and_holds() {
         t.create(1024, 24).unwrap();
         t.set_out(l(1), Output::Next(l(3))).unwrap();
         t.set_out(l(2), Output::Merge { line: l(3), at }).unwrap();
-        t.set_out(l(3), Output::Fork { a: l(1), b: l(2) }).unwrap();
+        t.set_out(
+            l(3),
+            Output::Fork {
+                a: l(1),
+                b: l(2),
+                partner: None,
+            },
+        )
+        .unwrap();
         assert_eq!(order(&mut t), vec![1, 2, 3]);
         if feed_next {
             t.insert_at(l(1), 0, Item(1)).unwrap();
@@ -827,7 +1619,15 @@ fn merge_across_a_cut_joins_a_packed_block() {
             },
         )
         .unwrap();
-        t.set_out(l(3), Output::Fork { a: l(1), b: l(2) }).unwrap();
+        t.set_out(
+            l(3),
+            Output::Fork {
+                a: l(1),
+                b: l(2),
+                partner: None,
+            },
+        )
+        .unwrap();
         t
     };
     let mut t = build();
@@ -1003,7 +1803,15 @@ fn cut_merge_landing_moves_its_budget() {
         },
     )
     .unwrap();
-    t.set_out(l(3), Output::Fork { a: l(1), b: l(2) }).unwrap();
+    t.set_out(
+        l(3),
+        Output::Fork {
+            a: l(1),
+            b: l(2),
+            partner: None,
+        },
+    )
+    .unwrap();
     assert_eq!(order(&mut t), vec![1, 2, 3]);
     t.insert_at(l(2), 0, Item(2)).unwrap();
     put(&mut t, l(3), 5, &[500, 900]);
@@ -1098,7 +1906,15 @@ fn cut_caps_disagree_fall_to_zero() {
         },
     )
     .unwrap();
-    t.set_out(l(3), Output::Fork { a: l(1), b: l(2) }).unwrap();
+    t.set_out(
+        l(3),
+        Output::Fork {
+            a: l(1),
+            b: l(2),
+            partner: None,
+        },
+    )
+    .unwrap();
     assert_eq!(order(&mut t), vec![1, 2, 3]);
     t.insert_at(l(1), 30, Item(1)).unwrap();
     t.insert_at(l(2), 0, Item(2)).unwrap();

@@ -6,9 +6,10 @@
 //! per line: id u32 | len u32 | speed u16 | out | sunk u64 | jam u32 | run_count u32 | runs
 //!           [| seg_count u8 | segments] [| schedule]
 //!   out: tag u8 (0 DeadEnd, 1 Next + id u32, 2 Sink, 3 Merge + line u32 + at u32,
-//!     4 Fork + a u32 + b u32 + toggle u8), bit 7 (`SEGMENTS`) set when segments follow the runs
-//!     (M43), bit 6 (`SCHEDULE`) when the schedule ends the record (M53); the toggle (M44, 0 or
-//!     1) is encoded only with a fork, the one output that has one
+//!     4 Fork + a u32 + b u32 + partner u32 + fork u8), bit 7 (`SEGMENTS`) set when segments
+//!     follow the runs (M43), bit 6 (`SCHEDULE`) when the schedule ends the record (M53); the
+//!     fork's `partner` (M61) is 0 for none; the `fork` byte (M44's toggle in bit 0, M61's turn
+//!     in bit 1, 0 to 3) is encoded only with a fork, the one output that has one
 //!   jam: the cursor's run index from the front (>= 1), 0 = unknown, u32::MAX = "all packed"
 //!   run: item u16 | count u16 | dist u32
 //!     dist: the front run's first item position; for a later run, the distance from the item
@@ -23,8 +24,9 @@
 //! Decode rejects (`CodecError::Malformed`) `dist == 0` (two items at one position), a position
 //! past `len - 1`, a `count` of 0, `Item(0)`, `len` past `MAX_LEN`, `speed` outside `[1, len)`, ids
 //! not ascending or not below `next_id`, an output naming a missing line or itself, a `Next` or
-//! `Fork` target shorter than the feeder's `speed`, a `Fork` with `a == b` or a toggle byte other
-//! than 0 or 1, a `jam` index past the runs or one with
+//! `Fork` target shorter than the feeder's `speed`, a `Fork` with `a == b`, a `partner` naming a
+//! missing line or itself, or one that is not a `Fork` naming this line back on the same `a` and
+//! `b`, a pair whose two turn bits are both set or whose two toggles differ, a `fork` byte above 3, a `jam` index past the runs or one with
 //! a gapped run between it and the front run (the cursor's invariant), and segments `set_segments`
 //! would refuse (`seg_count` 0 with the bit set, more than `MAX_SEGMENTS`, lengths not summing to
 //! `len`, an arc field out of range, a path entering more than `MAX_LINE_TILES` tiles), and a
@@ -42,7 +44,7 @@
 use super::geometry::{
     Geometry, MAX_LINE_TILES, MAX_SEGMENTS, Segment, check_segments, count_tiles,
 };
-use super::line::{Line, LineSched, NIL, Run};
+use super::line::{FORK_STATE, FORK_TOGGLE, FORK_YIELD, Line, LineSched, NIL, Run};
 use super::{Item, LineId, MAX_LEN, MIN_PERIOD, Output, SPACING, Schedule, Transport};
 use crate::bytes::{ByteReader, ByteSink};
 use crate::codec::CodecError;
@@ -74,10 +76,11 @@ pub(crate) fn write_out(sink: &mut (impl ByteSink + ?Sized), out: Output, flags:
             sink.put_u32(line.0);
             sink.put_u32(at);
         }
-        Output::Fork { a, b } => {
+        Output::Fork { a, b, partner } => {
             sink.put_u8(4 | flags);
             sink.put_u32(a.0);
             sink.put_u32(b.0);
+            sink.put_u32(partner.unwrap_or(LineId::NONE).0);
         }
     }
 }
@@ -97,6 +100,7 @@ pub(crate) fn read_out(reader: &mut ByteReader) -> Result<(Output, u8), CodecErr
         4 => Output::Fork {
             a: LineId(reader.u32()?),
             b: LineId(reader.u32()?),
+            partner: Some(LineId(reader.u32()?)).filter(|&p| p != LineId::NONE),
         },
         _ => return Err(CodecError::Malformed),
     };
@@ -172,7 +176,7 @@ impl Transport {
             }
             write_out(sink, line.out, flag);
             if let Output::Fork { .. } = line.out {
-                sink.put_u8(u8::from(line.toggle));
+                sink.put_u8(line.fork & FORK_STATE);
             }
             sink.put_u64(line.sunk);
             sink.put_u32(self.jam_index(slot));
@@ -269,13 +273,12 @@ impl Transport {
             }
             let (out, flags) = read_out(reader)?;
             let has_segments = flags & SEGMENTS != 0;
-            let toggle = match out {
+            let fork = match out {
                 Output::Fork { .. } => match reader.u8()? {
-                    0 => false,
-                    1 => true,
+                    b if b & !FORK_STATE == 0 => b,
                     _ => return Err(bad),
                 },
-                _ => false,
+                _ => 0,
             };
             let sunk = reader.u64()?;
             let jam = reader.u32()?;
@@ -285,7 +288,7 @@ impl Transport {
             }
             let mut line = Line::new(LineId(id), len, speed);
             line.out = out;
-            line.toggle = toggle;
+            line.fork = fork;
             line.sunk = sunk;
             t.lines.push(line);
             t.struct_ver.push(0);
@@ -395,8 +398,8 @@ impl Transport {
             return Err(bad);
         }
         t.next_id = next_id;
-        // Resolve output targets to slots: a missing target, the line itself or a fork with
-        // `a == b` is malformed, and so is a `Next` or `Fork` target shorter than one tick's
+        // Resolve output targets (and a fork's partner) to slots: a missing target, the line
+        // itself or a fork with `a == b` is malformed, and so is a `Next` or `Fork` target shorter than one tick's
         // travel (`set_out`'s hand-off bound, 0079 §8).
         for slot in 0..t.lines.len() {
             let speed = u32::from(t.lines[slot].speed);
@@ -411,15 +414,42 @@ impl Transport {
                 Output::DeadEnd | Output::Sink => (NIL, NIL),
                 Output::Next(id) => (resolve(&t, id, true)?, NIL),
                 Output::Merge { line, .. } => (resolve(&t, line, false)?, NIL),
-                Output::Fork { a, b } => {
+                Output::Fork { a, b, .. } => {
                     if a == b {
                         return Err(bad);
                     }
                     (resolve(&t, a, true)?, resolve(&t, b, true)?)
                 }
             };
+            let partner_slot = match t.lines[slot].out {
+                Output::Fork {
+                    partner: Some(p), ..
+                } => resolve(&t, p, false)?,
+                _ => NIL,
+            };
             t.lines[slot].next_slot = next_slot;
             t.lines[slot].alt_slot = alt_slot;
+            t.lines[slot].partner_slot = partner_slot;
+        }
+        // M61 fix round 2: a pair is a mutual link over the same `{a, b}` (`set_out`'s contract),
+        // at most one of the two owes the turn, and (fix round 3) they share one toggle.
+        for slot in 0..t.lines.len() {
+            let line = &t.lines[slot];
+            let Output::Fork {
+                a,
+                b,
+                partner: Some(_),
+            } = line.out
+            else {
+                continue;
+            };
+            let p = &t.lines[line.partner_slot as usize];
+            let mutual = matches!(p.out, Output::Fork { a: pa, b: pb, partner: Some(back) }
+                if pa == a && pb == b && back == line.id);
+            let toggles_differ = (line.fork ^ p.fork) & FORK_TOGGLE != 0;
+            if !mutual || (line.fork & p.fork & FORK_YIELD) != 0 || toggles_differ {
+                return Err(bad);
+            }
         }
         t.graph_dirty = true;
         // Derived (never encoded): the tile index is rebuilt from the decoded segments.

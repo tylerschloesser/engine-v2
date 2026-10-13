@@ -24,7 +24,10 @@
 //! a merge (its landings fall in the middle of a line that has not advanced: the `fresh_mid`
 //! path; the ring forks back into the cut line and to a drain), each fed by its own spawner; the churn line created every 50 ticks takes a `Next`, a
 //! `Merge` or a `Fork` output in turn (the order recompute over two-target outputs). The test
-//! asserts merges landed and the fork's toggle flipped inside the window.
+//! asserts merges landed and the fork's toggle flipped inside the window. M61: a fork pair (two
+//! saturated feeders that name each other as `partner`, forking onto a slow drain and a fast one
+//! of their own)
+//! takes turns inside the window: the first feeder's turn bit flips there.
 //!
 //! `transport_forecast_tracker_no_alloc` (M47) runs the same world with the forecast tracker's
 //! paths all exercised inside the window (declared spawners, a toggled sink, the edits).
@@ -78,6 +81,9 @@ struct World {
     fork: LineId,
     transfers: u32,
     flips: u32,
+    /// M61: the fork pair's first input and its turn bit's flips seen inside the window.
+    pair: LineId,
+    turns: u32,
     /// M43: run surgery every 100 ticks; how many cuts, joins, rescales and segment sets ran.
     surgery: bool,
     /// M47: toggle the first sink lane's output every 20 ticks (halts and releases for the
@@ -107,7 +113,7 @@ fn build() -> World {
     // One extra chain at speed 72 (several items cross a front per tick), plus room for churn.
     belts.push(vec![8, 12, 6]);
     let line_count: u32 = belts.iter().map(|b| 2 * b.len() as u32).sum();
-    let mut t = Transport::new(line_count + 10, 8_192);
+    let mut t = Transport::new(line_count + 14, 8_192);
     let fast = belts.len() - 1;
     let mut lines = Vec::new();
     let mut spawners = Vec::new();
@@ -191,6 +197,7 @@ fn build() -> World {
         Output::Fork {
             a: drains[0],
             b: drains[1],
+            partner: None,
         },
     )
     .unwrap();
@@ -210,10 +217,41 @@ fn build() -> World {
         Output::Fork {
             a: cut,
             b: drains[1],
+            partner: None,
         },
     )
     .unwrap();
-    for (line, rate256) in [(merge, 64), (fork, 32), (ring, 32)] {
+    // M61: the fork pair: two saturated feeders onto a slow drain and a fast one of their own.
+    let (slow, quick) = (
+        t.create(8 * TILE, 8).unwrap(),
+        t.create(8 * TILE, 96).unwrap(),
+    );
+    for d in [slow, quick] {
+        t.set_out(d, Output::Sink).unwrap();
+        sunk_lines.push(d);
+    }
+    let pair = [
+        t.create(4 * TILE, SPEED).unwrap(),
+        t.create(4 * TILE, SPEED).unwrap(),
+    ];
+    for (x, p) in [(pair[0], None), (pair[1], None), (pair[0], Some(pair[1]))] {
+        t.set_out(
+            x,
+            Output::Fork {
+                a: slow,
+                b: quick,
+                partner: p,
+            },
+        )
+        .unwrap();
+    }
+    for (line, rate256) in [
+        (merge, 64),
+        (fork, 32),
+        (ring, 32),
+        (pair[0], 256),
+        (pair[1], 256),
+    ] {
         spawners.push(Spawner {
             line,
             rate256,
@@ -229,6 +267,8 @@ fn build() -> World {
         fork,
         transfers: 0,
         flips: 0,
+        pair: pair[0],
+        turns: 0,
         churn: Vec::with_capacity(4),
         ticks: 0,
         spawners,
@@ -319,7 +359,11 @@ fn tick(w: &mut World, leak: Option<&mut Vec<u64>>) {
                 line: into,
                 at: 300,
             },
-            _ if other != into => Output::Fork { a: into, b: other },
+            _ if other != into => Output::Fork {
+                a: into,
+                b: other,
+                partner: None,
+            },
             _ => Output::Next(into),
         };
         w.t.set_out(l, out).unwrap();
@@ -340,9 +384,11 @@ fn tick(w: &mut World, leak: Option<&mut Vec<u64>>) {
     }
     // Nothing feeds the merge feeder during `advance`: what it lost, it side-loaded.
     let before = (w.t.count(w.merge).unwrap(), w.t.toggle(w.fork).unwrap());
+    let turn = w.t.fork_yield(w.pair).unwrap();
     w.t.advance();
     w.transfers += before.0 - w.t.count(w.merge).unwrap();
     w.flips += u32::from(w.t.toggle(w.fork).unwrap() != before.1);
+    w.turns += u32::from(w.t.fork_yield(w.pair).unwrap() != turn);
     if let Some(v) = leak {
         v.push(u64::from(w.t.items_len()));
     }
@@ -353,8 +399,8 @@ fn run(leak: bool) -> (isize, isize, u64, u32) {
     run_with(leak, false).0
 }
 
-/// M44: merge transfers and fork toggle flips over a clean run.
-fn run_outputs() -> (isize, isize, u32, u32) {
+/// M44: merge transfers and fork toggle flips over a clean run; M61: the pair's turn flips.
+fn run_outputs() -> (isize, isize, u32, u32, u32) {
     let mut w = build();
     let pad = (thread_high_water_bytes() - thread_live_bytes()).max(0) as usize + 1;
     let _pad = vec![0u8; pad];
@@ -367,6 +413,7 @@ fn run_outputs() -> (isize, isize, u32, u32) {
         thread_high_water_bytes() - high0,
         w.transfers,
         w.flips,
+        w.turns,
     )
 }
 
@@ -403,12 +450,17 @@ fn transport_tick_no_alloc() {
     );
 }
 
-/// M44: the world's merges and fork ran inside the window (module doc), allocating nothing.
+/// M44: the world's merges and fork ran inside the window (module doc), allocating nothing. M61:
+/// so did the fork pair's input turn.
 #[test]
 fn transport_merge_fork_no_alloc() {
-    let (live, high, transfers, flips) = run_outputs();
+    let (live, high, transfers, flips, turns) = run_outputs();
     assert!(transfers > 100, "only {transfers} merge transfers");
     assert!(flips > 50, "the fork's toggle flipped only {flips} times");
+    assert!(
+        turns > 50,
+        "the fork pair's turn flipped only {turns} times"
+    );
     assert_eq!(
         (live, high),
         (0, 0),

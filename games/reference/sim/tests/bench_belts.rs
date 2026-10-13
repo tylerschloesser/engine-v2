@@ -126,7 +126,8 @@ fn bench_belts_builder_writes_the_layout() {
 }
 
 /// Tick 1 maps the whole field (no belt left unmapped, every spawner lane scheduled); pinned exact
-/// with the hash at tick 200 (the `.wasm` leg's).
+/// with the hash at tick 200 (the `.wasm` leg's). M61 moved the hash from `ee989193ed484d9e`: each
+/// splitter input's fork record now carries its partner (and the turn bit), the items unchanged.
 #[test]
 fn bench_belts_field_hash() {
     let mut sim = Sim::<RefGame>::genesis(params(1));
@@ -149,7 +150,7 @@ fn bench_belts_field_hash() {
             tr.items_len(),
             format!("{:016x}", sim.state_hash())
         ),
-        (200, 7_104, "ee989193ed484d9e".to_string()),
+        (200, 7_104, "2da20837c13a48b6".to_string()),
         "tick, items, state hash (bench-build's belt cell reads the same in Node)"
     );
     let again = {

@@ -11,7 +11,7 @@ Where it lives:
 ## The model
 
 - A line has `len` positions (1/256 tile), a `speed` in positions per tick (`1 <= speed < len`), an `Output` and its items front to back; position 0 is the front, items move toward it. `SPACING = 64` is the engine's constant minimum distance between items. `LineId` is host-allocated and never reused; `Item(u16)` is opaque, `0` reserved ([0076](../decisions/0076-transport-lines-engine-game-split.md) §1).
-- `Output::{DeadEnd, Next, Merge { line, at }, Fork { a, b }, Sink}`: what the front feeds. `Next` is a plain hand-off (a target at least the feeder's speed long, [0079](../decisions/0079-transport-core-decisions.md) §8); `Merge` a side-load into the middle of another line; `Fork` alternates between two targets on a one-bit toggle; `Sink` deletes and counts (`sunk`).
+- `Output::{DeadEnd, Next, Merge { line, at }, Fork { a, b, partner }, Sink}`: what the front feeds. `Next` is a plain hand-off (a target at least the feeder's speed long, [0079](../decisions/0079-transport-core-decisions.md) §8); `Merge` a side-load into the middle of another line; `Fork` alternates between two targets on a one-bit toggle, and two inputs sharing its targets that name each other as `partner` (a splitter's lane; a mutual link `set_out` keeps and decode checks) take turns on a one-bit turn and share one toggle (M61: one that delivered last waits while the other's front item is also due, unless the other already advanced this tick, or when its landing leaves the partner room as the target stands); a fork lands like `Next`, right behind the target's rearmost item, so an output fed in turn stays compressed; `Sink` deletes and counts (`sunk`).
 - Items are stored as gap-encoded runs `Run { item, count, gap }` in one arena, a doubly linked list per line; positions are prefix sums and never stored ([0077](../decisions/0077-transport-item-representation.md) A6, A6b). The encoded distance is `gap + SPACING` so decode can reject a spacing violation ([0079](../decisions/0079-transport-core-decisions.md) §2); a squashed pair (a reshape that cannot keep spacing) is a negative gap (§12). The bytes are `codec.rs`'s module doc.
 - The store lives in `Store<G>` beside entities: encoded, hashed and snapshotted, and the one part of `Store` not mutated through `Delta` ([0076](../decisions/0076-transport-lines-engine-game-split.md) §7). The state hash covers it once a line has ever existed ([0079](../decisions/0079-transport-core-decisions.md) §1).
 
@@ -30,7 +30,7 @@ The API is `TransportWrite` in `mod.rs` (each method's doc has its refusals): `c
 - `join`'s refusal of a scheduled front is `Unsupported`, per lane: a game joining a belt's two lanes one at a time checks both before the first, or it leaves a pair half-joined.
 - `set_caps` reserves the arenas once; a second call with other caps is `CapsFixed` ([0079](../decisions/0079-transport-core-decisions.md) §5).
 - Every structure change stamps the line's `structure_version` and queues its id in a change list of `max_lines / 4` entries, drained by `Host::seal`; past it the list is marked overflowed and the host reconciles every line once (`replicate.rs`, `host/lines.rs`).
-- A replica's store holds structures only and answers `sunk` and `toggle` `Unknown`.
+- A replica's store holds structures only and answers `sunk`, `toggle` and `fork_yield` (M61) `Unknown`.
 
 ## Geometry and the tile index
 

@@ -194,6 +194,7 @@ fn encode_decode_no_alloc() {
         p.out = Output::Fork {
             a: LineId(1),
             b: LineId(2),
+            partner: None,
         };
         p.seg_count = 2;
         p.segs[0] = Segment {

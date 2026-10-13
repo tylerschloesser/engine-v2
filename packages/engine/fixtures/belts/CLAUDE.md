@@ -16,7 +16,7 @@ from_line, to_line }` (`Next`), `Spawner { line, item, period }`, `Sink { line }
 `Thing::Spawner` on the `"spawner"` active list, which on the tick it joins gives its line the engine schedule once (M53, 0079 §21: `set_spawner(line, Schedule { period, acc, kinds, next })`) and is never written again: the engine runs the rule at the start of every `advance` (`acc += 256` a tick; at `acc >= period`, 1/256 ticks per item, `>= 256`, one `insert_back`, accepted `acc -= period`, refused `acc -= 256`: held, never a burst); the schedule is line state (saved, restored, carried to the back piece by surgery), `declare_spawners` stays the default, and the tests' conservation reads the engine's store-wide insert count (`Transport::scheduled_inserts_total`, not state). `Action::Noop` stays first; `SCHEMA_VERSION` 2. M43b adds `Cut`, `Join`, `Extend`, `Shrink`, `Rescale`, `Insert`, `Remove`,
 `TakeFront`, `Segments` and a `Thing::Tally` of accepted item requests; M44b `Merge`, `Fork`
 (`set_out`) and `Destroy` (counted in `Thing::Destroyed`); M46 `Speed` (`set_speed`, appended
-last so no encoded op moved); M48b `Belt` and `Action::Probe { tile }` (reads `lines_at` in `apply`, so `NotPredictable` on a client). Semantics: the `src/lib.rs` module doc.
+last so no encoded op moved); M61 `ForkPair` (a fork paired with a partner: the engine's input turn, appended last); M48b `Belt` and `Action::Probe { tile }` (reads `lines_at` in `apply`, so `NotPredictable` on a client). Semantics: the `src/lib.rs` module doc.
 
 **Goldens (M42b, `tests/golden_scenarios.rs`).** `pnpm golden belts` writes them from the `.wasm`
 under Node; the native tests parse the same scenario files (`connect` is `Joined` then `Connected`)
@@ -26,7 +26,7 @@ and assert a property after every tick besides the hash: `scenario.json`/`golden
 `-sideload-contested`, `-fork-50-50`, `-fork-blocked-side`, `-big-step-fork`, `-forty-actions`
 (M44b; 42 actions: `runScriptScenario` acks its encoder, so no 32-action cap) at `maxLines` 16,
 `maxItems` 512; `-mixed-speeds` (M56: four `Next`-linked chains at 24, 72, 96, 24, spacing held across
-every speed change, throughput the slowest line's). Each property is in its test's doc. `belts_op_*` run each op once;
+every speed change, throughput the slowest line's). `-fork-pair` (M61, `Op::ForkPair`: two saturated inputs paired on one fork, one output blocked until tick 400, then both open). Each property is in its test's doc. `belts_op_*` run each op once;
 `transport_request_is_deferred_to_tick` runs `Belts::apply` between steps and asserts no line until
 the next tick. Commands: `pnpm test rust -t belts_golden`, `-t belts_op`, `-t transport_request`;
 the `.wasm` replays the goldens under Node and Bun in `pnpm test wasm -t determinism` (the discovery
