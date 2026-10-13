@@ -20,9 +20,10 @@ test('reference_full_game_single', async ({ page }) => {
   // suite on Tyler's Mac, 7 s alone. The CI runner (4 vCPUs, software adapter) reads about 15x the
   // Mac's browser-suite time, so the spec reached the project's 30 s ceiling at step 67 on commit
   // 169af23a after passing on 24176ddc. CI only (`ENGINE_GPU=swiftshader`), as the `gc` project's
-  // 90 s is (`playwright.config.ts`): a hang ceiling, not a budget; locally the 30 s stands so a
-  // genuine hang still fails fast.
-  test.setTimeout(process.env.ENGINE_GPU === 'swiftshader' ? 120_000 : 30_000)
+  // 180 s is (`playwright.config.ts`): a hang ceiling, not a budget; locally the 30 s stands so a
+  // genuine hang still fails fast. 180 s, not 120 s, since 2026-10-13 (the slow tier swings about
+  // 1.4x run to run; the gc project's note).
+  test.setTimeout(process.env.ENGINE_GPU === 'swiftshader' ? 180_000 : 30_000)
   const golden = JSON.parse(readFileSync(GOLDEN, 'utf8')) as {
     checkpoints: Array<{ tick: number; hash: string }>
   }

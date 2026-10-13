@@ -95,8 +95,12 @@ const webkitGrep = process.platform === 'linux' ? /@engines/ : /@engines|@webkit
 // -- CI only (`ENGINE_GPU=swiftshader`), never locally, where a genuine hang must still fail fast.
 // 90 s: roughly 3x the worst *passing* CI duration (29.9 s), well above the timed-out test's own
 // likely true duration (its siblings, same page, same conditions, topped out at 29.9 s; a page
-// with no WebGPU at all has no reason to need dramatically more).
-const gcTimeoutMs = process.env.ENGINE_GPU === 'swiftshader' ? 90_000 : 30_000
+// with no WebGPU at all has no reason to need dramatically more). 180 s since 2026-10-13: the
+// slow tier's wall time swings about 1.4x run to run on the same tree (`connected-terrain neg burst
+// main @slow` read 66 s on run 38359813173 and timed out at 90 s on run 38398376800 with every gc
+// test 30-60 % slower), so Tyler relaxed every CI ceiling that day; still a hang ceiling, never a
+// budget, and locally the 30 s stands.
+const gcTimeoutMs = process.env.ENGINE_GPU === 'swiftshader' ? 180_000 : 30_000
 
 export default defineConfig({
   testDir: './tests/browser',

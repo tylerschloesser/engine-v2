@@ -112,8 +112,9 @@ test('determinism: release variants (plain, wasm-opt, +simd128) reproduce the go
   browserName,
 }) => {
   // Four fat-LTO builds per variant on a cold cache; the wasm suite's `feature-matrix` builds the same
-  // ones, so cargo is usually a no-op here.
-  test.setTimeout(600_000)
+  // ones, so cargo is usually a no-op here. 900 s since 2026-10-13: CI run 38398376800 read 382 s
+  // under `chromium` on a slow runner day (the gc project's note in `playwright.config.ts`).
+  test.setTimeout(900_000)
   const variants: VariantName[] = ['plain', 'wasm-opt', 'simd128']
   const built = new Map<string, Awaited<ReturnType<typeof buildVariant>>>()
   for (const v of variants)

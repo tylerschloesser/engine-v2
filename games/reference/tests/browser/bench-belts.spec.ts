@@ -114,7 +114,7 @@ async function scene(
   await page.waitForFunction(() => window.__bench !== undefined)
   await page.evaluate(() => window.__bench?.holdPan())
   await page.waitForFunction((t) => (window.__bench?.hud().tick ?? 0) >= t, fromTick, {
-    timeout: isSwiftShader ? 400_000 : 150_000,
+    timeout: isSwiftShader ? 600_000 : 150_000,
   })
   const read = async () => {
     const h = await hud(page)
@@ -128,7 +128,7 @@ async function scene(
   }
   const first = await read()
   await page.waitForFunction((t) => (window.__bench?.hud().tick ?? 0) >= t, first.tick + 20, {
-    timeout: isSwiftShader ? 30_000 : 10_000,
+    timeout: isSwiftShader ? 60_000 : 10_000,
   })
   const second = await read()
   // The items flow, so only the belt records and drops are compared across the two frames.
@@ -146,7 +146,7 @@ async function scene(
     ([s, ms, n]) =>
       performance.now() - s.t >= ms && (window.__bench?.framesRendered() ?? 0) - s.frames >= n,
     [start, WINDOW_MS + 500, WINDOW_FRAMES] as const,
-    { timeout: isSwiftShader ? 300_000 : 60_000 },
+    { timeout: isSwiftShader ? 450_000 : 60_000 },
   )
   return { held: first, window: await hud(page) }
 }
@@ -154,7 +154,7 @@ async function scene(
 test('bench_belts: the belt field at both zooms and upright, records pinned, no memory growth @slow', async ({
   page,
 }) => {
-  test.setTimeout(isSwiftShader ? 1_500_000 : 360_000)
+  test.setTimeout(isSwiftShader ? 2_400_000 : 360_000)
   const max = await scene(page, 'max', 200)
   const portrait = await scene(page, 'max', 200, { width: 390, height: 844 })
   const mid = await scene(page, 'mid', MID_FILLED_TICK)

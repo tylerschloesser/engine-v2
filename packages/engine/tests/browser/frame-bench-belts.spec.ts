@@ -118,8 +118,10 @@ type Replica = {
 const isSwiftShader = process.env.ENGINE_GPU === 'swiftshader'
 const WARMUP_FRAMES = isSwiftShader ? 5 : 120
 const TIMED_FRAMES = isSwiftShader ? 20 : 300
-/** The join at scale 1: genesis builds 294,912 items, then the view's chunks and 2,974 lines. */
-const JOIN_TIMEOUT_MS = 180_000
+/** The join at scale 1: genesis builds 294,912 items, then the view's chunks and 2,974 lines.
+ * 240 s under SwiftShader since 2026-10-13 (`bench.frame_belts @slow` read 333 s over its scenes
+ * on CI runs 38391953558 and 38398376800; every CI ceiling was relaxed that day). */
+const JOIN_TIMEOUT_MS = isSwiftShader ? 240_000 : 180_000
 /** Frames between the join and the held read: the items' forecasts settle. */
 const SETTLE_FRAMES = 60
 const WORKER_SAMPLE_FLOOR = 12
