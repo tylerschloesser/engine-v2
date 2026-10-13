@@ -63,7 +63,7 @@ Draft (2026-10-11): Factorio-inspired belts, planned in `PLAN.md` and decided in
 
 ### Not implemented
 
-The Belts section: belt, spawner and despawner entities with their placement, rotation and pick-up actions, art and transport caps are built (M51); construction-mode controls for them are built (M51b); placed belts are mapped onto transport lines with their shapes, curves, side-loads, joins and splits (M52; a rotation destroys the items on its tile, question 10's default); spawner configuration and items on belts M53, splitters M54, undergrounds M55 (`PLAN.md`). Every other requirement above is met by the code.
+The Belts section: belt, spawner and despawner entities with their placement, rotation and pick-up actions, art and transport caps are built (M51); construction-mode controls for them are built (M51b); placed belts are mapped onto transport lines with their shapes, curves, side-loads, joins and splits (M52; a rotation destroys the items on its tile, question 10's default); spawners are configured from the belt panel (item and rate per lane) and make items as the lane line's engine schedule, despawners delete them, and items are drawn on the belts (M53b: belts are playable); splitters M54, undergrounds M55 (`PLAN.md`). Every other requirement above is met by the code.
 
 ### Open questions
 

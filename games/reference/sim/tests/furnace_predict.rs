@@ -799,7 +799,8 @@ fn belt_tap_opens_and_closes() {
         Some(UiBelt {
             at: TileXY::from_tile(belt),
             dir: Dir::South,
-            kind: BeltKind::Spawner
+            kind: BeltKind::Spawner,
+            spawn: [None, None],
         })
     );
     assert_eq!(ui.furnace, None);

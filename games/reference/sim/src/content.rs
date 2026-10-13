@@ -261,6 +261,45 @@ pub const SPRITE_BELT_FRAMES: u32 = 8;
 /// item id is `ItemId + 1` and M53's `ItemStyle::sprite(item)` is `SPRITE_ITEM_FIRST + item - 1`.
 pub const SPRITE_ITEM_FIRST: u16 = 16;
 
+/// A spawner lane's rates (M53b, `SetSpawner::rate` indexes it): schedule periods in 1/256 tick, so
+/// 1, 2, 4 and 7.5 items a second per lane at 20 Hz; the last is the belt's saturation (24 positions
+/// a tick over a spacing of 64: 0.375 items a tick, `256 / 0.375` rounded up).
+pub const SPAWN_RATES: [u32; 4] = [5120, 2560, 1280, 683];
+
+/// `SetSpawner::item`'s "clear this lane" value (no item has it).
+pub const SPAWN_OFF: u8 = 255;
+
+/// The layer items are drawn on (M53b): the player's (1), above the belts and furnaces (0) and below
+/// the ghost (2). `extract` draws items before the players, and the DrawList's sort is stable, so the
+/// player circles still cover them.
+pub const LAYER_ITEM: u8 = 1;
+
+/// Below this many device pixels per tile no item is drawn (M50's finding, the fixture's value).
+pub const ITEM_MIN_PX_PER_TILE: f32 = 20.0;
+
+/// The reference game's item look (M53b): engine item `n` is `ItemId` `n - 1` (`Item(0)` is "none"),
+/// drawn as its square `SPRITE_ITEM_FIRST + n - 1` on [`LAYER_ITEM`], untinted (the colour is baked
+/// into the art).
+#[derive(Clone, Copy, Debug)]
+pub struct RefItemStyle;
+
+/// The one instance `RefClient::extract` passes to `transport::draw::draw_items`.
+pub const ITEM_STYLE: RefItemStyle = RefItemStyle;
+
+impl engine::transport::draw::ItemStyle for RefItemStyle {
+    fn sprite(&self, item: u16) -> engine::transport::draw::ItemSprite {
+        engine::transport::draw::ItemSprite {
+            sprite: engine::client::SpriteId(SPRITE_ITEM_FIRST + item.saturating_sub(1)),
+            layer: LAYER_ITEM,
+            color: rgba(0xff, 0xff, 0xff, 0xff),
+        }
+    }
+
+    fn min_px_per_tile(&self) -> f32 {
+        ITEM_MIN_PX_PER_TILE
+    }
+}
+
 /// Trait tables + entity prototypes (0007 §6, `Game::register`'s own doc comment): both waters are
 /// `NOT_BUILDABLE`; every resource id is `COLLECTABLE` and **not** `NOT_BUILDABLE` (R1: a furnace may
 /// stand on a resource); the furnace prototype is `NOT_BUILDABLE` (so one furnace refuses another

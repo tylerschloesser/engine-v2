@@ -330,8 +330,11 @@ impl RefScenario {
     /// that one faces the same way (one position block of 256 further from the front) and with the
     /// belt behind iff that one is a straight belt facing the same way; a curve is a line pair of its
     /// own (106 on the turn side, 295); the belt fronting a pair sets its output from its front tile
-    /// (`output_of`: `Next` lane for lane, `Merge` onto the near lane at +64 / +192, else `DeadEnd`);
-    /// every line has one segment, and the store holds exactly two lines per fronting belt.
+    /// (`output_of`: `Next` lane for lane, `Merge` onto the near lane at +64 / +192, `Sink` from a
+    /// despawner, else `DeadEnd`); every line has one segment, and the store holds exactly two lines
+    /// per fronting belt. M53b: a spawner joins nothing and nothing joins it in front; a despawner
+    /// joins nothing in front and no belt in front of it joins it; a spawner's lanes carry the
+    /// schedule its configuration asks (`topology::schedule_for`), and no other line has one.
     pub fn assert_topology(&self) {
         self.assert_topology_in(TileRect::new(
             TilePos::new(-200, -200),
@@ -348,11 +351,17 @@ impl RefScenario {
             0,
             "belts left unmapped by a full cap"
         );
+        assert_eq!(
+            reference_sim::rules::belts::topology::spawners_unscheduled(),
+            0,
+            "spawner lanes left unscheduled by a refused set_spawner"
+        );
         use engine::transport::Output;
-        use reference_sim::BeltShape;
         use reference_sim::rules::belts::topology::{Link, lanes_at, output_of, shape_of};
+        use reference_sim::{BeltKind, BeltShape};
         let w = self.read();
         let tr = w.transport();
+        let store = self.transport_store();
         let ahead = |t: TilePos, d: reference_sim::Dir, n: i32| {
             let (dx, dy) = match d {
                 reference_sim::Dir::East => (1, 0),
@@ -384,6 +393,21 @@ impl RefScenario {
             let shape = shape_of(w, t, b.dir).expect("host");
             assert_eq!(b.shape, shape, "{t:?}: stored shape");
             let m = lanes_at(tr, t).unwrap_or_else(|| panic!("{t:?} is not mapped"));
+            for lane in 0..2 {
+                let want = if b.kind == BeltKind::Spawner && m.off + 256 == m.len {
+                    reference_sim::rules::belts::topology::schedule_for(b.spawn[lane])
+                        .map(|s| (s.period, s.kinds, s.next))
+                } else {
+                    None
+                };
+                let got = store
+                    .schedule(m.lane[lane])
+                    .expect("line")
+                    .map(|(s, _)| (s.period, s.kinds, s.next));
+                if m.off + 256 == m.len {
+                    assert_eq!(got, want, "{t:?} lane {lane}: schedule");
+                }
+            }
             for l in m.lane {
                 let mut n = 0;
                 tr.segments(l, &mut |_| n += 1).expect("line");
@@ -401,9 +425,13 @@ impl RefScenario {
                     "{t:?}: curve"
                 );
             } else {
-                let front = live(ahead(t, b.dir, 1)).filter(|f| f.dir == b.dir);
+                let front = live(ahead(t, b.dir, 1)).filter(|f| {
+                    f.dir == b.dir && b.kind == BeltKind::Belt && f.kind != BeltKind::Spawner
+                });
                 let back = live(ahead(t, b.dir, -1)).filter(|k| {
                     k.dir == b.dir
+                        && b.kind != BeltKind::Spawner
+                        && k.kind == BeltKind::Belt
                         && shape_of(w, ahead(t, b.dir, -1), k.dir) == Ok(BeltShape::Straight)
                 });
                 // Joined to a same-way neighbour, unless the joined run would pass
@@ -443,6 +471,7 @@ impl RefScenario {
             let f = ahead(t, b.dir, 1);
             let want = match output_of(w, t, b).expect("host") {
                 Link::DeadEnd => [Output::DeadEnd; 2],
+                Link::Sink => [Output::Sink; 2],
                 Link::Next => {
                     let mf = lanes_at(tr, f).expect("front mapped");
                     [Output::Next(mf.lane[0]), Output::Next(mf.lane[1])]
@@ -468,6 +497,32 @@ impl RefScenario {
             2 * fronts,
             "two lines per fronting belt, no leak"
         );
+    }
+
+    /// The host's transport store itself (M53b: `Transport::schedule`, `scheduled_inserts_total`,
+    /// which the `TransportRead` a rule sees does not answer).
+    pub fn transport_store(&self) -> &engine::transport::Transport {
+        self.sim.authority().store().transport()
+    }
+
+    /// `SetSpawner { at, lane, item, rate }` for `who` (M53b).
+    pub fn set_spawner(
+        &mut self,
+        who: PlayerId,
+        at: TilePos,
+        lane: u8,
+        item: u8,
+        rate: u8,
+    ) -> Result<(), RefReject> {
+        self.dispatch(
+            who,
+            RefAction::SetSpawner {
+                at: TileXY::from_tile(at),
+                lane,
+                item,
+                rate,
+            },
+        )
     }
 
     /// Makes `w` x `h` tiles from `min` plain grass with no resource (native-test-only, like

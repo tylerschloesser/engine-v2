@@ -15,10 +15,14 @@ import type { BeltKind, Dir, DrawRec, RefUiState } from './game.js'
 export type Tile = { x: number; y: number }
 export type Resource = 'stone' | 'iron' | 'wood' | 'coal'
 export type DepositItem = 'iron' | 'coal' | 'wood'
+/** What a spawner lane can make (`content::ItemId`), or `off` (`content::SPAWN_OFF`). */
+export type SpawnItem = keyof typeof SLOT | 'off'
 
 /** `Ui.inventory` slot of each item (`content::ItemId`); `tests/helpers/game.ts::ITEM` has the same. */
 const SLOT = { stone: 0, iron: 1, wood: 2, coal: 3, furnace: 4, ingot: 5 } as const
 const WIRE_ITEM = { iron: 1, wood: 2, coal: 3 } as const
+/** `SetSpawner::item`'s wire value: the `ItemId`, or `content::SPAWN_OFF`. */
+const spawnWire = (item: SpawnItem): number => (item === 'off' ? 255 : SLOT[item])
 
 /** Where each resource is (`tests/fixtures/landmarks.json`, checked against worldgen by
  * `landmarks_fixture_current`). */
@@ -50,6 +54,7 @@ export type Step =
   | { op: 'placeBelt'; at: Tile; dir: Dir; kind: BeltKind }
   | { op: 'rotateBelt'; at: Tile }
   | { op: 'pickUpBelt'; at: Tile }
+  | { op: 'setSpawner'; at: Tile; lane: 0 | 1; item: SpawnItem; rate: number }
   | { op: 'waitTicks'; n: number }
   | { op: 'expectUi'; partial: unknown }
 
@@ -102,6 +107,11 @@ export class Script {
   pickUpBelt(at: Tile): this {
     return this.add({ op: 'pickUpBelt', at })
   }
+  /** M53b: configures lane `lane` of the spawner at `at` to make `item` at rate index `rate`
+   * (`content::SPAWN_RATES`; 3 is the belt's saturation), or clears it (`'off'`); waits for the ack. */
+  setSpawner(at: Tile, lane: 0 | 1, item: SpawnItem, rate = 3): this {
+    return this.add({ op: 'setSpawner', at, lane, item, rate })
+  }
   /** `n` sim ticks, nothing else. */
   waitTicks(n: number): this {
     return this.add({ op: 'waitTicks', n })
@@ -147,6 +157,7 @@ export interface ScriptDriver {
   placeBelt(at: Tile, dir: Dir, kind: BeltKind): Promise<void>
   rotateBelt(at: Tile): Promise<void>
   pickUpBelt(at: Tile): Promise<void>
+  setSpawner(at: Tile, lane: 0 | 1, item: SpawnItem, rate: number): Promise<void>
   waitTicks(n: number): Promise<void>
   ui(): Promise<RefUiState>
 }
@@ -221,6 +232,9 @@ export async function runScript(
         case 'pickUpBelt':
           await driver.pickUpBelt(step.at)
           break
+        case 'setSpawner':
+          await driver.setSpawner(step.at, step.lane, step.item, step.rate)
+          break
         case 'waitTicks':
           await driver.waitTicks(step.n)
           break
@@ -242,9 +256,11 @@ export async function runScript(
  * refused because fuel is left (`0003` Consequences' coverage list, M34b Scope); then (M52) a belt
  * line mapped onto transport lines (a 3-tile east run, a curve turning north, a 2-tile north run and
  * a feeder side-loading into it from the east; the feeder turned north, no longer feeding, then the
- * run's middle tile picked up, splitting it) and, since the belt tools and taps closed it, the last
+ * run's middle tile picked up, splitting it), then (M53b) a spawner filling a dead-ended run, picked
+ * up, and a despawner draining the run, picked up in turn, and, since the belt tools and taps closed it, the last
  * furnace's panel opened again (what `reference_full_game_single` reads at the end). Ends quiescent:
- * no timer, no craft, no collect, so the state hash does not depend on how many ticks the run took. */
+ * no timer, no craft, no collect, no spawner, no item moving, so the state hash does not depend on
+ * how many ticks the run took. */
 export function fullGame(): Script {
   const [A, B] = [FURNACE_A, FURNACE_B]
   // Stand five tiles west of a furnace: out of range of every resource, so no collect button sits
@@ -258,60 +274,86 @@ export function fullGame(): Script {
     furnace: number,
     ingot: number,
   ) => [stone, iron, wood, coal, furnace, ingot]
-  return script()
-    .expectUi({
-      spawn: LANDMARKS.land,
-      inventory: inv(0, 0, 0, 0, 0, 0),
-      unlocks: 0,
-      collecting: null,
-      crafting: null,
-      roster: [{ id: 1, online: true, me: true }],
-    })
-    .collect('stone', 5)
-    .expectUi({ inventory: inv(5, 0, 0, 0, 0, 0), unlocks: 1, collecting: null })
-    .craft(0)
-    .expectUi({ inventory: inv(0, 0, 0, 0, 1, 0), crafting: null, can_build: true })
-    .panTo(standBy(A))
-    .place(A)
-    .expectUi({ inventory: inv(0, 0, 0, 0, 0, 0) })
-    .openFurnace(A)
-    .pickUp(A)
-    .expectUi({ inventory: inv(0, 0, 0, 0, 1, 0), furnace: null })
-    .panTo(standBy(B))
-    .place(B)
-    .expectUi({ inventory: inv(0, 0, 0, 0, 0, 0) })
-    .collect('iron', 1)
-    .collect('coal', 1)
-    .expectUi({ inventory: inv(0, 1, 0, 1, 0, 0) })
-    .panTo(standBy(B))
-    .openFurnace(B)
-    .deposit(B, 'iron', 1)
-    .deposit(B, 'coal', 1)
-    .expectUi({ inventory: inv(0, 0, 0, 0, 0, 0) })
-    .waitTicks(110)
-    .takeAll(B)
-    .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1) })
-    .pickUp(B, { refused: true })
-    .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1) })
-    .panTo(BELTS_STAND)
-    .placeBelt({ x: 2, y: -12 }, 'East')
-    .placeBelt({ x: 3, y: -12 }, 'East')
-    .placeBelt({ x: 4, y: -12 }, 'East')
-    .placeBelt({ x: 5, y: -12 }, 'North')
-    .placeBelt({ x: 5, y: -13 }, 'North')
-    .placeBelt({ x: 5, y: -14 }, 'North')
-    .placeBelt({ x: 6, y: -13 }, 'West')
-    .rotateBelt({ x: 6, y: -13 })
-    .pickUpBelt({ x: 3, y: -12 })
-    .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1), belt: null })
-    .panTo(standBy(B))
-    .openFurnace(B)
+  return (
+    script()
+      .expectUi({
+        spawn: LANDMARKS.land,
+        inventory: inv(0, 0, 0, 0, 0, 0),
+        unlocks: 0,
+        collecting: null,
+        crafting: null,
+        roster: [{ id: 1, online: true, me: true }],
+      })
+      .collect('stone', 5)
+      .expectUi({ inventory: inv(5, 0, 0, 0, 0, 0), unlocks: 1, collecting: null })
+      .craft(0)
+      .expectUi({ inventory: inv(0, 0, 0, 0, 1, 0), crafting: null, can_build: true })
+      .panTo(standBy(A))
+      .place(A)
+      .expectUi({ inventory: inv(0, 0, 0, 0, 0, 0) })
+      .openFurnace(A)
+      .pickUp(A)
+      .expectUi({ inventory: inv(0, 0, 0, 0, 1, 0), furnace: null })
+      .panTo(standBy(B))
+      .place(B)
+      .expectUi({ inventory: inv(0, 0, 0, 0, 0, 0) })
+      .collect('iron', 1)
+      .collect('coal', 1)
+      .expectUi({ inventory: inv(0, 1, 0, 1, 0, 0) })
+      .panTo(standBy(B))
+      .openFurnace(B)
+      .deposit(B, 'iron', 1)
+      .deposit(B, 'coal', 1)
+      .expectUi({ inventory: inv(0, 0, 0, 0, 0, 0) })
+      .waitTicks(110)
+      .takeAll(B)
+      .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1) })
+      .pickUp(B, { refused: true })
+      .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1) })
+      .panTo(BELTS_STAND)
+      .placeBelt({ x: 2, y: -12 }, 'East')
+      .placeBelt({ x: 3, y: -12 }, 'East')
+      .placeBelt({ x: 4, y: -12 }, 'East')
+      .placeBelt({ x: 5, y: -12 }, 'North')
+      .placeBelt({ x: 5, y: -13 }, 'North')
+      .placeBelt({ x: 5, y: -14 }, 'North')
+      .placeBelt({ x: 6, y: -13 }, 'West')
+      .rotateBelt({ x: 6, y: -13 })
+      .pickUpBelt({ x: 3, y: -12 })
+      .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1), belt: null })
+      // M53b: a spawner fills a dead-ended run at the belt's saturation (iron left, coal right), is
+      // picked up once the run is full (its own tile's items go with it), a despawner placed at the
+      // run's front drains it (its `sunk` equals the run's count: `spawner_passage_drains`) and is
+      // picked up once the run is empty (the golden ends at the last logged action, so the drain must
+      // be over by then). Once full the spawner's state stands still and once drained nothing moves,
+      // so the hash does not depend on the drivers' waits.
+      .panTo(SPAWNER_STAND)
+      .placeBelt(SPAWNER_RUN, 'East', 'Spawner')
+      .placeBelt({ x: SPAWNER_RUN.x + 1, y: SPAWNER_RUN.y }, 'East')
+      .placeBelt({ x: SPAWNER_RUN.x + 2, y: SPAWNER_RUN.y }, 'East')
+      .setSpawner(SPAWNER_RUN, 0, 'iron', 3)
+      .setSpawner(SPAWNER_RUN, 1, 'coal', 3)
+      .waitTicks(100)
+      .pickUpBelt(SPAWNER_RUN)
+      .placeBelt({ x: SPAWNER_RUN.x + 3, y: SPAWNER_RUN.y }, 'East', 'Despawner')
+      .waitTicks(60)
+      .pickUpBelt({ x: SPAWNER_RUN.x + 3, y: SPAWNER_RUN.y })
+      .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1), belt: null })
+      .panTo(standBy(B))
+      .openFurnace(B)
+  )
 }
 
 /** Where `fullGame()`'s belt passage stands: no resource within collect range, the belts in view
  * (rows -14 to -12, columns 2 to 6 are free land at `world.json`'s seed), and outside the view of
  * `reference_late_join_sees_world`'s late joiner, which counts the sprites around the furnaces. */
 export const BELTS_STAND: Tile = { x: 4, y: -10 }
+
+/** M53b: the spawner of `fullGame()`'s spawner passage (row -16, columns 2 to 5: free land at
+ * `world.json`'s seed, beyond the late joiner's view) and where the passage stands (in view, its
+ * popover too, and no resource within collect range). */
+export const SPAWNER_RUN: Tile = { x: 2, y: -16 }
+export const SPAWNER_STAND: Tile = { x: 4, y: -13 }
 
 // ---------------------------------------------------------------------------------------------
 // Headless driver
@@ -442,6 +484,11 @@ export function headlessDriver(
     },
     async pickUpBelt(at) {
       await accepted('PickUpBelt', { PickUpBelt: { at: { x: at.x, y: at.y } } })
+    },
+    async setSpawner(at, lane, item, rate) {
+      await accepted('SetSpawner', {
+        SetSpawner: { at: { x: at.x, y: at.y }, lane, item: spawnWire(item), rate },
+      })
     },
     waitTicks: (n) => advance(n),
     async ui() {
@@ -596,6 +643,34 @@ export async function domDriver(page: Page): Promise<ScriptDriver> {
       await page.locator('[data-belt-pickup]').click()
       await untilBelts('PickUpBelt landed', (p) => p.length === before - 1)
       await g.pumpUntil(page, (u) => u?.belt === null)
+    },
+    // The spawner panel (`src/ui/belt.ts`): the lane's item button, then its rate button when the
+    // tap did not already give that rate (a lane that was off takes the saturation rate); each
+    // waits for `Ui.belt.spawn` to show it. Picking a tool or a tap elsewhere closes the popover.
+    async setSpawner(at, lane, item, rate) {
+      const want = item === 'off' ? null : { item: spawnWire(item), rate }
+      const shows = (u: RefUiState | null, cfg: { item: number; rate: number } | null) => {
+        const got = u?.belt?.spawn[lane]
+        return cfg === null ? got === null : got?.item === cfg.item && got?.rate === cfg.rate
+      }
+      const lane$ = `[data-spawn-lane="${lane}"]`
+      let ui = await openBelt(at)
+      if (!shows(ui, want)) {
+        const before = ui?.belt?.spawn[lane] ?? null
+        await page
+          .locator(`${lane$} [data-spawn-item="${item === 'off' ? 'off' : SLOT[item]}"]`)
+          .click()
+        await g.frame(page, 60) // the uplink is paced at 50 ms
+        await stepTicks(3)
+        const tapped = item === 'off' ? null : { item: SLOT[item], rate: before?.rate ?? 3 }
+        ui = await g.pumpUntil(page, (u) => shows(u, tapped))
+      }
+      if (!shows(ui, want)) {
+        await page.locator(`${lane$} [data-spawn-rate="${rate}"]`).click()
+        await g.frame(page, 60)
+        await stepTicks(3)
+        await g.pumpUntil(page, (u) => shows(u, want))
+      }
     },
     async waitTicks(n) {
       await stepTicks(n)

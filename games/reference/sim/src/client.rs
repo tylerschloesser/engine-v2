@@ -22,7 +22,7 @@ use crate::worldgen::terrain_at;
 use crate::{
     Belt, BeltKind, BeltShape, Dir, Inventory, MAX_IN_RANGE, RefEntity, RefGame, RefParams, TileXY,
     Tool, UiBelt, UiCollecting, UiCrafting, UiFurnace, UiInRange, UiPlacing, UiRecipe,
-    UiRosterEntry, WorldXY, content,
+    UiRosterEntry, UiSpawn, WorldXY, content,
 };
 
 /// `Presence` sketch from `0001-camera-and-presence.md` (Decision, `Presence` code block),
@@ -748,6 +748,12 @@ impl ClientSide<RefGame> for RefClient {
             d.flags |= ANCHOR_CURSOR_TILE;
         }
 
+        // Items on the belts (M53b): every held line's items at the item clock (0078 A12), on
+        // `content::LAYER_ITEM` above the belts; drawn before the players, so the circles cover
+        // them (the DrawList's layer sort is stable). Nothing below 20 px a tile or before the
+        // first forecast frame; no allocation (the DrawList is reserved once).
+        engine::transport::draw::draw_items(view, &content::ITEM_STYLE, out);
+
         let px_per_tile = view.px_per_tile();
         if px_per_tile > 0.0 && PLAYER_DIAMETER_TILES * px_per_tile < MIN_VISIBLE_PX {
             return;
@@ -884,10 +890,17 @@ impl ClientSide<RefGame> for RefClient {
                 if let Some(b) = e.as_live_belt()
                     && origin == at
                 {
+                    let lane = |k: usize| {
+                        b.spawn[k].map(|c| UiSpawn {
+                            item: c.item,
+                            rate: c.rate,
+                        })
+                    };
                     out.belt = Some(UiBelt {
                         at: TileXY::from_tile(origin),
                         dir: b.dir,
                         kind: b.kind,
+                        spawn: [lane(0), lane(1)],
                     });
                     break;
                 }

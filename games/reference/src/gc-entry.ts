@@ -2,7 +2,8 @@
 // criterion; `gc-test` skill "Production-topology pages", `gc-terrain.ts`'s own precedent): a real
 // `startGame` topology -- the exact device/renderer/collectUi/inventoryUi wiring `main.ts`/
 // `test-entry.ts` share -- driven through `asHarness` instead of a real frame loop, with two collect
-// buttons mounted, the camera panning and (M33) construction mode on with the pointer moving, for 600 stepped frames (0016 §3). Proves `RefClient::
+// buttons mounted, the camera panning, (M33) construction mode on with the pointer moving and (M53b)
+// items flowing from a spawner into a despawner, for 600 stepped frames (0016 §3). Proves `RefClient::
 // ui()`/`extract`, and the client worker's own ABI glue calling them every frame, allocate nothing.
 //
 // **Never imported by `main.ts`/`test-entry.ts`.** A separate entry, same reason `test-entry.ts`
@@ -11,13 +12,17 @@ import { createUploadDrain, RingConsumer, type UploadDrain } from 'engine/render
 import {
   asHarness,
   createManualClock,
+  type DrawRecord,
+  drawListRecords,
   installGcPage,
   parkWorkers,
   pumpUntilLive,
   resumeWorkers,
+  setViewport,
   stepFrame,
   stepTick,
 } from 'engine/test'
+import type { RefAction } from './bindings/RefAction.js'
 import { startGame } from './game.js'
 import { LOCAL } from './ui/build.js'
 
@@ -56,6 +61,11 @@ const { client, renderer, device, canvasFormat } = await startGame({
 await pumpUntilLive(client)
 
 const harness = asHarness(client)
+
+// M53b: a 1280 x 720 device-pixel viewport for every stepped frame (the canvas element's own size is
+// the default 300 x 150 here: 15 px a tile at `tilesAcross` 20, under the items' 20 px cutoff, so
+// `draw_items` would draw nothing). At 64 px a tile the items are drawn in the measured window.
+setViewport(client, 1280, 720)
 
 // The iron and stone landmarks near the origin (`tests/fixtures/landmarks.json`, `TEST_SEED`: iron
 // at `(0, 0)`, stone at `(-1, 2)`): both stay inside `RANGE` (3 tiles) of every camera position this
@@ -152,6 +162,51 @@ for (let i = 0; i < 10; i++) {
   stepFrame(client, 50)
   drainUploadsFully()
   await nextAnimationFrame()
+}
+
+// M53b: items on screen for the whole measured run. A spawner at (-3, -3) facing east makes iron
+// (left lane) and coal (right lane) at the belt's saturation into a six-tile run that ends in a
+// despawner at (4, -3) (free land at this seed, in view, outside every collect range), so items
+// appear, move and vanish every frame and `extract` runs `draw_items` over them (`tilesAcross` 20:
+// 64 px a tile on the 1280 px viewport set above, over `content::ITEM_MIN_PX_PER_TILE`). Dispatched and run to a
+// steady flow here, outside the measured window; the page refuses to get ready without items drawn.
+const BELT_Y = -3
+const beltActions: RefAction[] = [
+  { PlaceBelt: { at: { x: -3, y: BELT_Y }, dir: 'East', kind: 'Spawner' } },
+]
+for (let x = -2; x <= 3; x++) {
+  beltActions.push({ PlaceBelt: { at: { x, y: BELT_Y }, dir: 'East', kind: 'Belt' } })
+}
+beltActions.push(
+  { PlaceBelt: { at: { x: 4, y: BELT_Y }, dir: 'East', kind: 'Despawner' } },
+  { SetSpawner: { at: { x: -3, y: BELT_Y }, lane: 0, item: 1, rate: 3 } },
+  { SetSpawner: { at: { x: -3, y: BELT_Y }, lane: 1, item: 3, rate: 3 } },
+)
+for (const a of beltActions) client.dispatch(a)
+for (let i = 0; i < 4; i++) {
+  pinCamera()
+  stepFrame(client, 50)
+  drainUploadsFully()
+  await nextAnimationFrame()
+}
+await stepTick(client, 120)
+await resumeWorkers(client)
+drainUploadsFully()
+for (let i = 0; i < 4; i++) {
+  pinCamera()
+  stepFrame(client, 50)
+  drainUploadsFully()
+  await nextAnimationFrame()
+}
+/** `content::SPRITE_ITEM_FIRST + ItemId`: iron (left lane) and coal (right lane). Both must be drawn:
+ * a lane left unscheduled (two `SetSpawner`s split across ticks) fails the page here. */
+const IRON_SPRITE = 16 + 1
+const COAL_SPRITE = 16 + 3
+const records: DrawRecord[] = []
+drawListRecords(client, records)
+const drawn = (sprite: number) => records.some((r) => r.kind === 0 && r.spriteId === sprite)
+if (!drawn(IRON_SPRITE) || !drawn(COAL_SPRITE)) {
+  throw new Error('gc-reference: iron and coal are not both drawn after the belt priming')
 }
 
 // M33 (Budgets): construction mode on for the whole measured run,

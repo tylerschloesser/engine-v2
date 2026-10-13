@@ -59,14 +59,22 @@ export type RefUiState = {
   } | null
   /** Every player in the engine roster (`Ui.roster`), ascending id. */
   roster: Array<{ id: number; online: boolean; colour: [number, number, number]; me: boolean }>
-  /** M51b: the belt whose popover is open (`Ui.belt`), `null` when none. */
-  belt: { at: { x: number; y: number }; dir: Dir; kind: BeltKind } | null
+  /** M51b: the belt whose popover is open (`Ui.belt`), `null` when none; M53b: a spawner's
+   * configuration per lane (left, right), `null` for an unset lane or another kind. */
+  belt: {
+    at: { x: number; y: number }
+    dir: Dir
+    kind: BeltKind
+    spawn: [SpawnCfg | null, SpawnCfg | null]
+  } | null
 }
 
 /** A belt's direction of travel (`Dir`, `sim/src/lib.rs`). */
 export type Dir = 'East' | 'South' | 'West' | 'North'
 /** What a belt tile is (`BeltKind`). */
 export type BeltKind = 'Belt' | 'Spawner' | 'Despawner'
+/** A spawner lane's configuration (`UiSpawn`): an `ITEM` wire id and a `SPAWN_RATE` index. */
+export type SpawnCfg = { item: number; rate: number }
 
 /** A sprite (`kind` 0: furnace, belt, belt ghost) or the furnace ghost (`kind` 6) from the newest DrawList. */
 export type DrawRec = {
@@ -118,6 +126,13 @@ declare global {
     __dispatchPlaceBelt?: (x: number, y: number, dir: Dir, kind: BeltKind) => number
     __dispatchRotateBelt?: (x: number, y: number) => number
     __dispatchPickUpBelt?: (x: number, y: number) => number
+    __dispatchSetSpawner?: (
+      x: number,
+      y: number,
+      lane: number,
+      item: number,
+      rate: number,
+    ) => number
   }
 }
 
@@ -550,4 +565,44 @@ export async function pickTool(
   await page.locator(`[data-tool="${tool}"]`).click()
   await page.evaluate((d) => window.__stepFrame?.(d), 16) // drains the local-intent record
   return pumpUntil(page, (ui) => typeof ui?.tool?.tool === 'object' && ui.tool.tool.Belt === kind)
+}
+
+/** `content::SPAWN_RATES` by index (1, 2, 4, 7.5 items a second per lane); `saturation` is the belt's
+ * full rate. `content::SPAWN_OFF` clears a lane. */
+export const SPAWN_RATE = { one: 0, two: 1, four: 2, saturation: 3 } as const
+export const SPAWN_OFF = 255
+
+/** `content::SPRITE_ITEM_FIRST`: item `ITEM.x` draws as sprite `ITEM_SPRITE_FIRST + ITEM.x`. */
+export const ITEM_SPRITE_FIRST = 16
+
+/** The item sprites (`kind` 0, `ITEM_SPRITE_FIRST` to `+ 5`) of the newest DrawList. */
+export async function itemDraws(page: Page): Promise<DrawRec[]> {
+  return (await draws(page)).filter(
+    (r) =>
+      r.kind === KIND.sprite &&
+      r.spriteId >= ITEM_SPRITE_FIRST &&
+      r.spriteId < ITEM_SPRITE_FIRST + Object.keys(ITEM).length,
+  )
+}
+
+/** `setSpawner(page, at, lane, item, rate)` (M53b): dispatches `SetSpawner` (an `ITEM` wire id or
+ * `SPAWN_OFF`, a `SPAWN_RATE`), flushes the uplink and steps three ticks (the config draws nothing:
+ * the caller waits on what it expects, items or `Ui.belt.spawn`). */
+export async function setSpawner(
+  page: Page,
+  at: { x: number; y: number },
+  lane: number,
+  item: number,
+  rate: number,
+): Promise<void> {
+  await page.evaluate(([x, y, l, i, r]) => window.__dispatchSetSpawner?.(x, y, l, i, r), [
+    at.x,
+    at.y,
+    lane,
+    item,
+    rate,
+  ] as const)
+  await frame(page, 60)
+  await page.evaluate((k) => window.__stepTick?.(k), 3)
+  await frame(page)
 }

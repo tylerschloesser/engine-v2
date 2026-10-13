@@ -320,7 +320,12 @@ test('reference_belt_popover', async ({ page }) => {
     )
   }
   const opened = await tapBelt()
-  expect(opened?.belt).toEqual({ at: BELT_TILE.free, dir: 'East', kind: 'Belt' })
+  expect(opened?.belt).toEqual({
+    at: BELT_TILE.free,
+    dir: 'East',
+    kind: 'Belt',
+    spawn: [null, null],
+  })
   expect(opened?.furnace).toBeNull()
   await frame(page)
   await expect(popover).toBeVisible()

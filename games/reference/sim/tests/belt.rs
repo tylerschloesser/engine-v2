@@ -315,9 +315,20 @@ fn idle_belts_cost_nothing() {
                 .count();
         }
     }
+    // M53b re-pin (was 108, 778, 376, 1,248), derived from the world's pairs (kinds cycle belt,
+    // spawner, despawner by `i % 3`; measured once by a throwaway breakdown):
+    // - 497 belts point into the side of a belt. 164 of them are despawners (they feed nothing) and
+    //   84 more are plain belts pointing into a spawner (it refuses every input), leaving 249 that
+    //   feed: 130 side-load (260 merging lanes, was 778 = 389 feeders when every one fed) and 119
+    //   are the sole side input of a curve.
+    // - So 119 curves (82 plain belts, 37 despawners; a spawner never curves).
+    // - 67 belts inside a run: exactly the plain belts behind a same-way despawner (the despawner
+    //   fronts the run). No two same-way neighbours are both plain, a spawner joins nothing and a
+    //   despawner joins nothing in front, so every other same-way pair (of 410) stays apart.
+    // - 1,000 - 67 = 933 fronting belts, two lines each: 1,866.
     assert_eq!(
         (curves, merges, runs, s.read().transport().lines_len()),
-        (108, 778, 376, 1248),
+        (119, 260, 67, 1866),
         "curves, side-loading lanes, belts inside a run, lines"
     );
 

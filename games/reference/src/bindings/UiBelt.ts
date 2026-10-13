@@ -2,8 +2,10 @@
 import type { BeltKind } from "./BeltKind.js";
 import type { Dir } from "./Dir.js";
 import type { TileXY } from "./TileXY.js";
+import type { UiSpawn } from "./UiSpawn.js";
 
 /**
- * The belt whose popover is open (M51b, `RefClient`'s tapped belt): its tile, direction and kind.
+ * The belt whose popover is open (M51b, `RefClient`'s tapped belt): its tile, direction and kind;
+ * M53b: a spawner's configuration per lane (left, right; `None` on other kinds and unset lanes).
  */
-export type UiBelt = { at: TileXY, dir: Dir, kind: BeltKind, };
+export type UiBelt = { at: TileXY, dir: Dir, kind: BeltKind, spawn: [UiSpawn | null, UiSpawn | null], };

@@ -4,7 +4,7 @@
   "maxLines": 32768,
   "maxItems": 262144,
   "players": 1,
-  "ticks": 757,
+  "ticks": 966,
   "checkpoints": [
     {
       "tick": 10,
@@ -307,8 +307,92 @@
       "hash": "b8984a1676f32a05"
     },
     {
-      "tick": 757,
+      "tick": 760,
       "hash": "73f2d99a3a6c908d"
+    },
+    {
+      "tick": 770,
+      "hash": "73f2d99a3a6c908d"
+    },
+    {
+      "tick": 780,
+      "hash": "73f2d99a3a6c908d"
+    },
+    {
+      "tick": 790,
+      "hash": "03e2da58c2ac2850"
+    },
+    {
+      "tick": 800,
+      "hash": "9162a8e800a5fd5e"
+    },
+    {
+      "tick": 810,
+      "hash": "26b047623cccfa44"
+    },
+    {
+      "tick": 820,
+      "hash": "b0afcb62b1983380"
+    },
+    {
+      "tick": 830,
+      "hash": "03ea98d4f69f1348"
+    },
+    {
+      "tick": 840,
+      "hash": "1ea56baf3d6b37d4"
+    },
+    {
+      "tick": 850,
+      "hash": "1ea56baf3d6b37d4"
+    },
+    {
+      "tick": 860,
+      "hash": "1ea56baf3d6b37d4"
+    },
+    {
+      "tick": 870,
+      "hash": "1ea56baf3d6b37d4"
+    },
+    {
+      "tick": 880,
+      "hash": "1ea56baf3d6b37d4"
+    },
+    {
+      "tick": 890,
+      "hash": "1ea56baf3d6b37d4"
+    },
+    {
+      "tick": 900,
+      "hash": "222963b3e5757f1e"
+    },
+    {
+      "tick": 910,
+      "hash": "59864f286dfc5a83"
+    },
+    {
+      "tick": 920,
+      "hash": "e39d0b7df3186acf"
+    },
+    {
+      "tick": 930,
+      "hash": "0a5bd2682f05140f"
+    },
+    {
+      "tick": 940,
+      "hash": "979c81a6caaff64b"
+    },
+    {
+      "tick": 950,
+      "hash": "979c81a6caaff64b"
+    },
+    {
+      "tick": 960,
+      "hash": "979c81a6caaff64b"
+    },
+    {
+      "tick": 966,
+      "hash": "a76c8e348bb16383"
     }
   ]
 }

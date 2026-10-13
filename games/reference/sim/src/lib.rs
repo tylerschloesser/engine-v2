@@ -115,6 +115,17 @@ pub enum RefAction {
     PickUpBelt {
         at: TileXY,
     },
+    /// M53b: configure lane `lane` (0 the belt's left seen along `dir`, 1 its right) of the spawner
+    /// at `at` to make `item` (a `content::ItemId` wire id) at `content::SPAWN_RATES[rate]`, or
+    /// clear the lane with `item == content::SPAWN_OFF` (`rate` then ignored). One put; the tick sets
+    /// the lane line's engine schedule (README "Belts", Spawner; 0079 §21). Appended after the
+    /// shipped actions (the `test-hooks` action stays last).
+    SetSpawner {
+        at: TileXY,
+        lane: u8,
+        item: u8,
+        rate: u8,
+    },
     /// M52, `test-hooks` only (never shipped; appended last): insert `item` (an engine item id,
     /// nonzero) on lane `lane` of the belt at `at`, `pos` positions behind the tile's first position
     /// on its line, on the next tick (`rules::belts::topology::test_insert`). How native tests put
@@ -170,6 +181,12 @@ pub enum RefReject {
     ImplausiblePosition,
     /// `RotateBelt`/`PickUpBelt` (M51): no belt on the addressed tile (nothing there, or a furnace).
     NoBeltHere,
+    /// `SetSpawner` (M53b): the belt on the addressed tile is not a spawner.
+    NotASpawner,
+    /// `SetSpawner`: `lane` is not 0 or 1.
+    BadLane,
+    /// `SetSpawner`: `rate` is not an index into `content::SPAWN_RATES`.
+    BadRate,
 }
 
 impl From<Unknown> for RefReject {
@@ -329,16 +346,18 @@ pub enum BeltShape {
 }
 
 /// One lane's spawner configuration (README "Belts", Spawner): the item (a `content::ItemId` wire
-/// id) and the rate. No accumulator: the rule that writes no per-insert state is M53's (0079 §19 (e)).
+/// id) and the rate (an index into `content::SPAWN_RATES`). No accumulator here: the credit is the
+/// lane line's engine schedule (0079 §21), set by the tick from this configuration (M53b), so the
+/// entity is written once per configuration and never per insert (0079 §19 (e)).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct SpawnCfg {
     pub item: u8,
-    pub rate: u16,
+    pub rate: u8,
 }
 
 /// A one-tile belt entity (M51, `content::BELT_PROTO`): plain data, anchored at `origin`, never
 /// moved (0079 §20 (b): a rotate is a put with the same anchor). `spawn` is per lane, left then right
-/// (seen along `dir`), set by M53's panel; `None` on every placed belt. `removing` (M52): `apply
+/// (seen along `dir`), set by `SetSpawner` (M53b); `None` on every placed belt. `removing` (M52): `apply
 /// (PickUpBelt)` set it and the tick that follows the same `apply` unmaps the belt's lines and
 /// despawns it (a despawn wakes nothing); until then it occupies its tile, draws nothing and takes no
 /// action. On the host it never outlives its tick; a client sees it only as a prediction.
@@ -511,13 +530,24 @@ pub struct UiFurnace {
     pub smelt_done_at: Option<u32>,
 }
 
-/// The belt whose popover is open (M51b, `RefClient`'s tapped belt): its tile, direction and kind.
+/// One configured spawner lane as the belt panel shows it (M53b): the item (a `content::ItemId` wire
+/// id) and the rate index into `content::SPAWN_RATES`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, TS)]
+#[ts(export)]
+pub struct UiSpawn {
+    pub item: u8,
+    pub rate: u8,
+}
+
+/// The belt whose popover is open (M51b, `RefClient`'s tapped belt): its tile, direction and kind;
+/// M53b: a spawner's configuration per lane (left, right; `None` on other kinds and unset lanes).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, TS)]
 #[ts(export)]
 pub struct UiBelt {
     pub at: TileXY,
     pub dir: Dir,
     pub kind: BeltKind,
+    pub spawn: [Option<UiSpawn>; 2],
 }
 
 /// One roster entry as `Ui.roster` shows it (M34): the engine roster joined with
@@ -638,7 +668,7 @@ pub struct RefGame;
 impl Game for RefGame {
     // `test-hooks` (never shipped) reports one version higher: a save of the normal build is then
     // `SaveIncompatible` (M34b).
-    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 9 } else { 8 };
+    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 10 } else { 9 };
     //  3: `Furnace` entity, `PlaceFurnace`, resources `NOT_BUILDABLE` (M33).
     //  4: `FurnaceDeposit`, `FurnaceTake`, `FurnacePickUp` and their rejects (M33b).
     //  5: `RefGlobal { colours }`, written on `Joined` (M34).
@@ -648,6 +678,9 @@ impl Game for RefGame {
     //     `NoBeltHere` (M51). No migration: a schema 6 save is refused (0079 §6).
     //  8: `Belt.removing`; placed belts are mapped onto transport lines and their `shape` derived
     //     (M52). No migration: a schema 7 save is refused.
+    //  9: `SetSpawner` and `NotASpawner`/`BadLane`/`BadRate`; `SpawnCfg.rate` a `u8` rate index;
+    //     spawner lanes carry the engine schedule, despawners end in `Sink` (M53b; a `Belt.spawn_set`
+    //     field built during M53b never shipped). No migration: a schema 8 save is refused.
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;
@@ -736,6 +769,12 @@ impl Game for RefGame {
             RefAction::PlaceBelt { at, dir, kind } => rules::belt::place(w, at.tile(), *dir, *kind),
             RefAction::RotateBelt { at } => rules::belt::rotate(w, at.tile()),
             RefAction::PickUpBelt { at } => rules::belt::pick_up(w, at.tile()),
+            RefAction::SetSpawner {
+                at,
+                lane,
+                item,
+                rate,
+            } => rules::belt::set_spawner(w, at.tile(), *lane, *item, *rate),
             #[cfg(feature = "test-hooks")]
             RefAction::TestInsertItem {
                 at,
@@ -800,7 +839,8 @@ impl Game for RefGame {
             | RefAction::FurnacePickUp { .. }
             | RefAction::PlaceBelt { .. }
             | RefAction::RotateBelt { .. }
-            | RefAction::PickUpBelt { .. } => Ok(()),
+            | RefAction::PickUpBelt { .. }
+            | RefAction::SetSpawner { .. } => Ok(()),
             #[cfg(feature = "test-hooks")]
             RefAction::TestInsertItem { .. } => Ok(()),
         }

@@ -138,6 +138,15 @@ declare global {
     __dispatchPlaceBelt?: (x: number, y: number, dir: Dir, kind: BeltKind) => number
     __dispatchRotateBelt?: (x: number, y: number) => number
     __dispatchPickUpBelt?: (x: number, y: number) => number
+    /** M53b: `SetSpawner` straight through `client.dispatch` (the `setSpawner` helper and script
+     * step; the panel's buttons are exercised by `reference_belt_panel`). */
+    __dispatchSetSpawner?: (
+      x: number,
+      y: number,
+      lane: number,
+      item: number,
+      rate: number,
+    ) => number
     /** M33c: the centre pixel of a 32x32 frame centred on world point (x, y), drawn with the
      * drawables pass on and with it off, from the same newest DrawList slot. RGBA, 0..255. */
     __pixelAt?: (
@@ -586,6 +595,11 @@ window.__dispatchRotateBelt = (x, y) => {
 
 window.__dispatchPickUpBelt = (x, y) => {
   const action: RefAction = { PickUpBelt: { at: { x, y } } }
+  return client.dispatch(action)
+}
+
+window.__dispatchSetSpawner = (x, y, lane, item, rate) => {
+  const action: RefAction = { SetSpawner: { at: { x, y }, lane, item, rate } }
   return client.dispatch(action)
 }
 

@@ -7,14 +7,15 @@
 //! `belts::topology::on_wake` maps its lines (M52). `PlaceBelt` and `RotateBelt` write the edited
 //! tile's own shape, derived from its neighbours by reads only, so a predicted belt shows its curve at
 //! once; the neighbours' shapes are the tick's. `PickUpBelt` marks the belt `removing` (a despawn wakes
-//! nothing): the tick unmaps it and despawns it.
+//! nothing): the tick unmaps it and despawns it. `SetSpawner` (M53b) writes a spawner lane's
+//! configuration in one put; the tick that put wakes sets the lane line's engine schedule.
 
 use engine::game::{EntityId, WorldRead, WorldWrite};
 use engine::world::TilePos;
 
-use crate::rules::belts::topology::shape_of;
+use crate::rules::belts::topology::shape_of_kind;
 use crate::rules::place::can_place_belt;
-use crate::{Belt, BeltKind, Dir, RefEntity, RefGame, RefReject, TileXY};
+use crate::{Belt, BeltKind, Dir, RefEntity, RefGame, RefReject, SpawnCfg, TileXY, content};
 
 /// The belt at `at`, with its id: `NoBeltHere` when the tile is empty, holds a furnace or a belt
 /// being picked up (M52: `removing`).
@@ -37,7 +38,7 @@ pub fn place(
     if !can_place_belt(w, at)? {
         return Err(RefReject::NotBuildable);
     }
-    let shape = shape_of(w, at, dir)?;
+    let shape = shape_of_kind(w, at, dir, kind)?;
     w.spawn(RefEntity::Belt(Belt {
         shape,
         ..Belt::new(TileXY::from_tile(at), dir, kind)
@@ -49,7 +50,7 @@ pub fn place(
 pub fn rotate(w: &mut dyn WorldWrite<RefGame>, at: TilePos) -> Result<(), RefReject> {
     let (id, belt) = belt_at(w, at)?;
     let dir = belt.dir.cw();
-    let shape = shape_of(w, at, dir)?;
+    let shape = shape_of_kind(w, at, dir, belt.kind)?;
     w.put_entity(id, RefEntity::Belt(Belt { dir, shape, ..belt }));
     Ok(())
 }
@@ -65,5 +66,45 @@ pub fn pick_up(w: &mut dyn WorldWrite<RefGame>, at: TilePos) -> Result<(), RefRe
             ..belt
         }),
     );
+    Ok(())
+}
+
+/// `apply(SetSpawner)` (M53b): `NoBeltHere`, `NotASpawner`, `BadLane` (not 0 or 1), `BadItem` (not a
+/// `content::ItemId` wire id nor [`content::SPAWN_OFF`]), `BadRate` (not an index into
+/// [`content::SPAWN_RATES`]; ignored when clearing), then one put of the lane's configuration (the
+/// tick re-sets both lanes' schedules: `topology::schedule`). A configuration equal to the lane's is `Ok` with no write (the lane's
+/// credit is kept). Validated before the one write (`.claude/rules/prediction.md`).
+pub fn set_spawner(
+    w: &mut dyn WorldWrite<RefGame>,
+    at: TilePos,
+    lane: u8,
+    item: u8,
+    rate: u8,
+) -> Result<(), RefReject> {
+    let (id, belt) = belt_at(w, at)?;
+    if belt.kind != BeltKind::Spawner {
+        return Err(RefReject::NotASpawner);
+    }
+    if lane > 1 {
+        return Err(RefReject::BadLane);
+    }
+    let cfg = if item == content::SPAWN_OFF {
+        None
+    } else {
+        if content::ItemId::from_wire(item).is_none() {
+            return Err(RefReject::BadItem);
+        }
+        if usize::from(rate) >= content::SPAWN_RATES.len() {
+            return Err(RefReject::BadRate);
+        }
+        Some(SpawnCfg { item, rate })
+    };
+    let k = usize::from(lane);
+    if belt.spawn[k] == cfg {
+        return Ok(());
+    }
+    let mut spawn = belt.spawn;
+    spawn[k] = cfg;
+    w.put_entity(id, RefEntity::Belt(Belt { spawn, ..belt }));
     Ok(())
 }

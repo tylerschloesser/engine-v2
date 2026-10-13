@@ -11,6 +11,16 @@
 //! near lane ([`Link::SideLoad`], R7); anything else (nothing, a furnace, a head-on belt) stops at the
 //! front ([`Link::DeadEnd`]).
 //!
+//! **Spawners and despawners** (M53b, the game's rule; README "Belts", Spawner and despawner). A
+//! spawner accepts no input (its back is its lines' back, where the engine inserts: 0079 §21), so it
+//! is always straight, a belt pointing into it dead-ends, and it is never joined into a run: its two
+//! lines are its own, linked to its front by its output like a curve's. The tick sets each lane
+//! line's engine schedule from `Belt.spawn` whenever the tile's lines are (re)created (both lanes)
+//! or a `SetSpawner` woke it (both lanes again), and nothing per insert (0079
+//! §19 (e)). A despawner feeds nothing: its lines end in `Output::Sink` whatever stands in front
+//! ([`Link::Sink`]), it never joins the run in front (it is always a run's front) and it is no input
+//! of the tile in front; it takes inputs, curves and side-loads like a plain belt.
+//!
 //! **Lines.** One engine line is one lane (0076 §1). Lane 0 is the lane on the belt's left seen along
 //! `dir`, lane 1 its right; lanes keep their index through `Next` (C2) and a curve. One line per lane
 //! per maximal straight run (straight tiles of one direction, each feeding the next from behind),
@@ -49,15 +59,15 @@
 //! twice, or two edits in one tick, end in the same structure. No `HashMap`, no float, no allocation.
 
 use engine::game::{EntityId, TickCx, Unknown, WorldRead, WorldWrite};
-#[cfg(feature = "test-hooks")]
-use engine::transport::Item;
 use engine::transport::{
     Geometry, LineId, MAX_LINE_TILES, Output, Segment, TransportError, TransportRead,
     TransportWrite,
 };
 use engine::world::{TilePos, WorldPos};
 
-use crate::{Belt, BeltShape, Dir, RefEntity, RefGame};
+use engine::transport::{Item, Schedule};
+
+use crate::{Belt, BeltKind, BeltShape, Dir, RefEntity, RefGame, content};
 
 /// Belt speed in positions per tick (README "Belts", Numbers).
 pub const SPEED: u16 = 24;
@@ -82,6 +92,7 @@ pub const SIDE_FRONT: u32 = 64;
 thread_local! {
     static OPS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
     static UNMAPPED: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+    static UNSCHEDULED: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
 }
 
 /// Transport writes (`create`, `destroy`, `split`, `join`, `extend_*`, `rescale`, `set_segments`,
@@ -103,6 +114,23 @@ pub fn belts_unmapped() -> u64 {
     return UNMAPPED.with(core::cell::Cell::get);
     #[cfg(not(debug_assertions))]
     0
+}
+
+/// Spawner lanes whose `set_spawner` was refused on this thread (M53b fix round 1: `Full` at the
+/// forecast tracker's pool, or any other error): the lane shows as configured but makes nothing.
+/// A zero / non-zero signal like [`belts_unmapped`]; every test but a cap test reads 0
+/// (`debug_assertions` only; 0 otherwise).
+pub fn spawners_unscheduled() -> u64 {
+    #[cfg(debug_assertions)]
+    return UNSCHEDULED.with(core::cell::Cell::get);
+    #[cfg(not(debug_assertions))]
+    0
+}
+
+#[inline]
+fn unscheduled() {
+    #[cfg(debug_assertions)]
+    UNSCHEDULED.with(|c| c.set(c.get() + 1));
 }
 
 #[inline]
@@ -218,6 +246,8 @@ pub enum Link {
     /// The side of a straight front belt: both lanes onto its lane `near` (0 when this belt is on
     /// the target's left), the lane `near` of this belt at +64 and the other at +192 (C3).
     SideLoad { near: u8 },
+    /// A despawner (M53b): its lines delete what leaves their front (`Output::Sink`).
+    Sink,
 }
 
 /// The live belt on `at` (not `removing`), if any.
@@ -228,17 +258,38 @@ pub fn live_belt(w: &dyn WorldRead<RefGame>, at: TilePos) -> Result<Option<Belt>
     Ok(w.entity(id)?.and_then(RefEntity::as_live_belt).copied())
 }
 
+/// A live belt on `from` whose front is `into` and which hands items on (a despawner sinks them).
 fn feeds(w: &dyn WorldRead<RefGame>, from: TilePos, into: TilePos) -> Result<bool, Unknown> {
-    Ok(live_belt(w, from)?.is_some_and(|b| ahead(from, b.dir, 1) == into))
+    Ok(live_belt(w, from)?
+        .is_some_and(|b| b.kind != BeltKind::Despawner && ahead(from, b.dir, 1) == into))
 }
 
-/// [`Inputs`] of a belt facing `dir` on `at` (whatever stands on `at` itself).
-pub fn inputs(w: &dyn WorldRead<RefGame>, at: TilePos, dir: Dir) -> Result<Inputs, Unknown> {
+/// The kind of the live belt on `at`, a plain belt when there is none (placement asks for the tile
+/// it is about to fill: [`shape_of_kind`]).
+fn kind_on(w: &dyn WorldRead<RefGame>, at: TilePos) -> Result<BeltKind, Unknown> {
+    Ok(live_belt(w, at)?.map_or(BeltKind::Belt, |b| b.kind))
+}
+
+/// [`Inputs`] of a belt of `kind` facing `dir` on `at`: none for a spawner (M53b).
+pub fn inputs_of(
+    w: &dyn WorldRead<RefGame>,
+    at: TilePos,
+    dir: Dir,
+    kind: BeltKind,
+) -> Result<Inputs, Unknown> {
+    if kind == BeltKind::Spawner {
+        return Ok(Inputs::default());
+    }
     Ok(Inputs {
         back: feeds(w, ahead(at, opposite(dir), 1), at)?,
         left: feeds(w, ahead(at, ccw(dir), 1), at)?,
         right: feeds(w, ahead(at, dir.cw(), 1), at)?,
     })
+}
+
+/// [`Inputs`] of a belt facing `dir` on `at`, of the kind standing there (a plain belt if none).
+pub fn inputs(w: &dyn WorldRead<RefGame>, at: TilePos, dir: Dir) -> Result<Inputs, Unknown> {
+    inputs_of(w, at, dir, kind_on(w, at)?)
 }
 
 /// R1-R5: the shape an input set gives.
@@ -250,17 +301,34 @@ pub const fn shape_for(i: Inputs) -> BeltShape {
     }
 }
 
-/// The shape of a belt facing `dir` on `at`.
+/// The shape of a belt facing `dir` on `at`, of the kind standing there (a plain belt if none).
 pub fn shape_of(w: &dyn WorldRead<RefGame>, at: TilePos, dir: Dir) -> Result<BeltShape, Unknown> {
     Ok(shape_for(inputs(w, at, dir)?))
 }
 
-/// The output of the belt `b` standing on `at` (C1-C4, R6, R7).
+/// The shape of a belt of `kind` facing `dir` on `at` (`apply`'s, before the belt stands there).
+pub fn shape_of_kind(
+    w: &dyn WorldRead<RefGame>,
+    at: TilePos,
+    dir: Dir,
+    kind: BeltKind,
+) -> Result<BeltShape, Unknown> {
+    Ok(shape_for(inputs_of(w, at, dir, kind)?))
+}
+
+/// The output of the belt `b` standing on `at` (C1-C4, R6, R7; M53b: a despawner sinks, a spawner
+/// in front accepts nothing).
 pub fn output_of(w: &dyn WorldRead<RefGame>, at: TilePos, b: Belt) -> Result<Link, Unknown> {
+    if b.kind == BeltKind::Despawner {
+        return Ok(Link::Sink);
+    }
     let front = ahead(at, b.dir, 1);
     let Some(f) = live_belt(w, front)? else {
         return Ok(Link::DeadEnd);
     };
+    if f.kind == BeltKind::Spawner {
+        return Ok(Link::DeadEnd);
+    }
     if f.dir == b.dir {
         return Ok(Link::Next);
     }
@@ -481,7 +549,7 @@ struct Want {
 
 fn want(w: &dyn WorldRead<RefGame>, at: TilePos) -> Option<Want> {
     let b = live_belt(w, at).ok()??;
-    let shape = shape_of(w, at, b.dir).ok()?;
+    let shape = shape_of_kind(w, at, b.dir, b.kind).ok()?;
     let straight = shape == BeltShape::Straight;
     let same = |t: TilePos| live_belt(w, t).ok().flatten().filter(|o| o.dir == b.dir);
     let back = ahead(at, opposite(b.dir), 1);
@@ -492,10 +560,15 @@ fn want(w: &dyn WorldRead<RefGame>, at: TilePos) -> Option<Want> {
         } else {
             Form::Curve(b.dir, shape)
         },
+        // A spawner joins nothing, in front or behind; a despawner is no run's back part (it feeds
+        // nothing) and joins nothing in front (module doc).
         join_back: straight
-            && same(back).is_some()
+            && b.kind != BeltKind::Spawner
+            && same(back).is_some_and(|k| k.kind == BeltKind::Belt)
             && shape_of(w, back, b.dir).ok() == Some(BeltShape::Straight),
-        join_front: straight && same(ahead(at, b.dir, 1)).is_some(),
+        join_front: straight
+            && b.kind == BeltKind::Belt
+            && same(ahead(at, b.dir, 1)).is_some_and(|f| f.kind != BeltKind::Spawner),
     })
 }
 
@@ -639,6 +712,7 @@ const fn around(p: TilePos) -> [TilePos; 5] {
 pub fn on_wake(cx: &mut TickCx<'_, RefGame>, id: EntityId, belt: Belt) {
     let p = belt.origin.tile();
     let near = around(p);
+    let before = mapped(cx.transport(), p).map(|m| m.lane);
     for t in near {
         cut(cx, t);
     }
@@ -678,6 +752,47 @@ pub fn on_wake(cx: &mut TickCx<'_, RefGame>, id: EntityId, belt: Belt) {
     }
     if belt.removing {
         cx.despawn(id);
+    } else if belt.kind == BeltKind::Spawner
+        && let Some(tr) = tx(cx)
+        && let Some(m) = mapped(tr, p)
+        && before == Some(m.lane)
+    {
+        // Lines kept: a `SetSpawner` woke it (lines `reform` re-created were scheduled there).
+        schedule(tr, m.lane, belt);
+    }
+}
+
+/// The engine schedule `cfg` asks of a spawner lane (`None`: the lane makes nothing). A rate index
+/// past [`content::SPAWN_RATES`] (refused by `SetSpawner`) makes nothing.
+pub fn schedule_for(cfg: Option<crate::SpawnCfg>) -> Option<Schedule> {
+    let cfg = cfg?;
+    let period = *content::SPAWN_RATES.get(usize::from(cfg.rate))?;
+    Some(Schedule {
+        period,
+        acc: 0,
+        kinds: 0,
+        next: Item(u16::from(cfg.item) + 1),
+    })
+}
+
+/// A spawner's lane schedules (M53b), both lanes from `b.spawn` (`None` for an unset lane): run by
+/// `reform` whenever it (re)creates a spawner's lines (placed, rotated, or re-mapped beside an edit
+/// after a full cap dropped them) and by `on_wake` when a `SetSpawner` woke a spawner whose lines
+/// stayed. Both lanes every time (the entity does not say which lane changed, and two `SetSpawner`s
+/// in one tick give one wake): the unchanged lane restarts at `acc` 0 and loses at most one period of
+/// credit. A refusal (`Full` at the forecast tracker's pool, or anything else) leaves the lane making
+/// nothing and is counted ([`spawners_unscheduled`]); one other than `Full` is a bug (debug assert).
+fn schedule(tr: Tx<'_>, lane: [LineId; 2], b: Belt) {
+    for (k, &line) in lane.iter().enumerate() {
+        bump();
+        let r = tr.set_spawner(line, schedule_for(b.spawn[k]));
+        debug_assert!(
+            matches!(r, Ok(()) | Err(TransportError::Full)),
+            "topology: set_spawner: {r:?}"
+        );
+        if r.is_err() {
+            unscheduled();
+        }
     }
 }
 
@@ -711,7 +826,23 @@ fn cut(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
 /// new belt, rescaled for a reshape (items kept), destroyed and re-created for a rotation.
 fn reform(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
     let w = want(cx, at);
+    let spawner = live_belt(cx, at)
+        .ok()
+        .flatten()
+        .filter(|b| b.kind == BeltKind::Spawner);
     let Some(tr) = tx(cx) else { return };
+    let before = mapped(tr, at).map(|m| m.lane);
+    reform_lines(tr, at, w);
+    // A spawner whose lines this made afresh gets its schedules now (its own wake or a neighbour's).
+    if let Some(b) = spawner
+        && let Some(m) = mapped(tr, at)
+        && before != Some(m.lane)
+    {
+        schedule(tr, m.lane, b);
+    }
+}
+
+fn reform_lines(tr: Tx<'_>, at: TilePos, w: Option<Want>) {
     match (w, mapped(tr, at)) {
         (None, None) => {}
         (None, Some(m)) => destroy(tr, m),
@@ -876,6 +1007,7 @@ fn fix_output(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
         {
             [Output::Next(t.lane[0]), Output::Next(t.lane[1])]
         }
+        (Link::Sink, _) => [Output::Sink; 2],
         (Link::SideLoad { near }, Some(t)) => {
             let line = t.lane[usize::from(near)];
             let at_of = |lane: u8| t.off + if lane == near { SIDE_FRONT } else { SIDE_BACK };
@@ -909,7 +1041,7 @@ fn put_shape(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
     else {
         return;
     };
-    let Ok(shape) = shape_of(cx, at, b.dir) else {
+    let Ok(shape) = shape_of_kind(cx, at, b.dir, b.kind) else {
         return;
     };
     if shape != b.shape {

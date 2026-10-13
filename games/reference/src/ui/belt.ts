@@ -7,14 +7,24 @@
 // `PickUpBelt` then emits `CLOSE_PANEL`. Every dispatch and emit happens inside a button's own click
 // handler, never inside `onUi`.
 //
+// M53b, a spawner's panel: per lane (`[data-spawn-lane="0|1"]`, 0 the belt's left seen along its
+// direction) one button per item (`[data-spawn-item="0".."5"]`, the `content::ItemId` wire ids, and
+// `[data-spawn-item="off"]`) and one per rate (`[data-spawn-rate="0".."3"]`, `content::SPAWN_RATES`),
+// each dispatching `SetSpawner`; buttons only, no text field (the `R` key has no focus guard). The
+// lane's item and rate show as `.is-on` from `Ui.belt.spawn`; a rate needs an item, so the rate
+// buttons are disabled while the lane is off and an item keeps the lane's rate (the saturation rate,
+// the last, when the lane was off: one tap makes a lane run at full belt).
+//
 // DOM identity: root `.belt-popover` (`data-belt="x,y"`, `data-dir`, `data-kind`);
-// `[data-belt-rotate]`, `[data-belt-pickup]`.
+// `[data-belt-rotate]`, `[data-belt-pickup]`; `.belt-spawn` (hidden unless a spawner) with the lane
+// rows above.
 import type { ActionOutcome, Client } from 'engine'
 import type { RefAction } from '../bindings/RefAction.js'
 import type { RefReject } from '../bindings/RefReject.js'
 import type { RefUi } from '../bindings/RefUi.js'
 import { LOCAL } from './build.js'
 import { el } from './dom.js'
+import { ITEM_LABELS } from './inventory.js'
 
 type AnchorHandle = ReturnType<Client['overlay']['anchor']>
 type BeltState = NonNullable<RefUi['belt']>
@@ -26,6 +36,15 @@ export type BeltUi = {
   onActionResult(seq: number, result: ActionOutcome<RefReject>): void
 }
 
+/** `content::SPAWN_RATES`' items a second per lane (`sim/src/content.rs`): change both together. */
+const SPAWN_RATE_LABELS = ['1/s', '2/s', '4/s', '7.5/s'] as const
+
+/** The rate an item tap gives a lane that was off: the saturation rate (`SPAWN_RATES`' last). */
+const FIRST_RATE = SPAWN_RATE_LABELS.length - 1
+
+/** `content::SPAWN_OFF`: `SetSpawner`'s "clear this lane" item. */
+const SPAWN_OFF = 255
+
 const STYLE_ID = 'reference-belt-styles'
 
 function installBeltStyles(doc: Document): void {
@@ -35,6 +54,7 @@ function installBeltStyles(doc: Document): void {
   style.textContent = [
     '.belt-popover {',
     '  display: flex;',
+    '  flex-direction: column;',
     '  gap: 4px;',
     '  padding: 4px;',
     '  border: 1px solid #345;',
@@ -43,6 +63,12 @@ function installBeltStyles(doc: Document): void {
     '  white-space: nowrap;',
     '}',
     '.belt-popover[hidden] { display: none; }',
+    '.belt-popover .belt-actions, .belt-popover .spawn-row { display: flex; gap: 4px; }',
+    '.belt-popover .belt-spawn { display: flex; flex-direction: column; gap: 4px; }',
+    '.belt-popover .spawn-lane { color: #9ab; font: 11px sans-serif; align-self: center; }',
+    '.belt-popover button.is-on { background: #2a6; border-color: #5c8; }',
+    '.belt-popover button:disabled { opacity: 0.4; cursor: default; }',
+    '.belt-popover .belt-spawn[hidden] { display: none; }',
     '.belt-popover button {',
     '  padding: 2px 6px;',
     '  border: 1px solid #345;',
@@ -75,7 +101,60 @@ export function createBeltUi(client: Client, doc: Document = document): BeltUi {
   const pickUp = el('button', 'belt-pickup')
   pickUp.dataset.beltPickup = ''
   pickUp.textContent = 'Pick up'
-  root.append(rotate, pickUp)
+  const actions = el('div', 'belt-actions')
+  actions.append(rotate, pickUp)
+
+  // The spawner panel: per lane, the six items and Off, then the four rates.
+  const spawn = el('div', 'belt-spawn')
+  spawn.hidden = true
+  const laneItems: [HTMLButtonElement[], HTMLButtonElement[]] = [[], []]
+  const laneRates: [HTMLButtonElement[], HTMLButtonElement[]] = [[], []]
+  for (const lane of [0, 1] as const) {
+    const items = el('div', 'spawn-row')
+    items.dataset.spawnLane = String(lane)
+    const name = el('span', 'spawn-lane')
+    name.textContent = lane === 0 ? 'Left' : 'Right'
+    items.append(name)
+    const itemButtons = laneItems[lane]
+    ITEM_LABELS.forEach((label, id) => {
+      const b = el('button', 'spawn-item')
+      b.dataset.spawnItem = String(id)
+      b.textContent = label
+      b.addEventListener('click', () => {
+        if (state === null) return
+        const cur = state.spawn[lane]
+        send({ SetSpawner: { at: state.at, lane, item: id, rate: cur?.rate ?? FIRST_RATE } }, b)
+      })
+      itemButtons.push(b)
+      items.append(b)
+    })
+    const off = el('button', 'spawn-item')
+    off.dataset.spawnItem = 'off'
+    off.textContent = 'Off'
+    off.addEventListener('click', () => {
+      if (state !== null)
+        send({ SetSpawner: { at: state.at, lane, item: SPAWN_OFF, rate: 0 } }, off)
+    })
+    itemButtons.push(off)
+    items.append(off)
+    const rates = el('div', 'spawn-row')
+    rates.dataset.spawnLane = String(lane)
+    const rateButtons = laneRates[lane]
+    SPAWN_RATE_LABELS.forEach((label, rate) => {
+      const b = el('button', 'spawn-rate')
+      b.dataset.spawnRate = String(rate)
+      b.textContent = label
+      b.addEventListener('click', () => {
+        const cur = state?.spawn[lane]
+        if (state === null || cur == null) return
+        send({ SetSpawner: { at: state.at, lane, item: cur.item, rate } }, b)
+      })
+      rateButtons.push(b)
+      rates.append(b)
+    })
+    spawn.append(items, rates)
+  }
+  root.append(actions, spawn)
 
   let state: BeltState | null = null
   /** `seq -> the button that sent it`, for the rejection flash. */
@@ -106,6 +185,18 @@ export function createBeltUi(client: Client, doc: Document = document): BeltUi {
     root.dataset.belt = `${b.at.x},${b.at.y}`
     root.dataset.dir = b.dir
     root.dataset.kind = b.kind
+    spawn.hidden = b.kind !== 'Spawner'
+    for (const lane of [0, 1] as const) {
+      const cfg = b.spawn[lane]
+      laneItems[lane].forEach((btn, i) => {
+        const on = cfg === null ? i === ITEM_LABELS.length : cfg.item === i
+        btn.classList.toggle('is-on', on)
+      })
+      laneRates[lane].forEach((btn, rate) => {
+        btn.classList.toggle('is-on', cfg !== null && cfg.rate === rate)
+        btn.disabled = cfg === null
+      })
+    }
     anchor.set(b.at.x + 0.5, b.at.y - 0.2)
   }
 
