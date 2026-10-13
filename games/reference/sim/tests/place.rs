@@ -7,7 +7,7 @@ use common::RefScenario;
 use engine::game::{PlayerId, Unknown, WorldRead};
 use engine::world::{Registry, Tile, TilePos, TileRect, TraitSet};
 use reference_sim::content::{self, ItemId};
-use reference_sim::rules::place::can_place;
+use reference_sim::rules::place::can_place_furnace;
 use reference_sim::{RefAction, RefEntity, RefGame, RefReject};
 
 const P1: PlayerId = PlayerId(1);
@@ -212,13 +212,13 @@ fn can_place_names_no_tile_type() {
         scratch_at: TilePos::new(11, 11),
     };
     // The scratch tile is any of the four footprint tiles of an origin at (10, 10).
-    assert_eq!(can_place(&world, TilePos::new(10, 10)), Ok(false));
-    assert_eq!(can_place(&world, TilePos::new(11, 11)), Ok(false));
-    assert_eq!(can_place(&world, TilePos::new(11, 10)), Ok(false));
-    assert_eq!(can_place(&world, TilePos::new(10, 11)), Ok(false));
-    assert_eq!(can_place(&world, TilePos::new(12, 11)), Ok(true));
+    assert_eq!(can_place_furnace(&world, TilePos::new(10, 10)), Ok(false));
+    assert_eq!(can_place_furnace(&world, TilePos::new(11, 11)), Ok(false));
+    assert_eq!(can_place_furnace(&world, TilePos::new(11, 10)), Ok(false));
+    assert_eq!(can_place_furnace(&world, TilePos::new(10, 11)), Ok(false));
+    assert_eq!(can_place_furnace(&world, TilePos::new(12, 11)), Ok(true));
     assert_eq!(
-        can_place(&world, TilePos::new(9, 9)),
+        can_place_furnace(&world, TilePos::new(9, 9)),
         Ok(true),
         "covers (9..=10)"
     );

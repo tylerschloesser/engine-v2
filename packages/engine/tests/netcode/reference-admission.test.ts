@@ -14,6 +14,7 @@ import { MsgClass, seedToHexU64, worldServerTestHandle } from '../../src/server.
 import { loadGame } from '../../src/server-node.js'
 import { createNetHarness } from '../../src/test/net-harness.js'
 import { gameCrateBuildDir } from '../support/fixtures.js'
+import { readWorldCaps } from '../support/reference-golden.js'
 import { fixedSecret } from './support.js'
 
 const WORLD = JSON.parse(
@@ -70,7 +71,8 @@ test('reference_full_and_bad_key_rejected', async () => {
       seed,
       worldSeed: WORLD.seed,
       clients,
-      world: { params: { worldgen: WORLD.worldgen }, ...world },
+      // `world.json`'s transport caps (M51), as every world the game builds.
+      world: { params: { worldgen: WORLD.worldgen, ...readWorldCaps() }, ...world },
     })
   const reject = async (
     h: Awaited<ReturnType<typeof make>>,

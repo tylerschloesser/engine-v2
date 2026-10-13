@@ -231,6 +231,36 @@ pub const FURNACE_FOOTPRINT: Footprint = Footprint { w: 2, h: 2 };
 /// the frame is `Draw::param`). Must match `scripts/gen-assets.mjs`'s `SPRITES`.
 pub const SPRITE_FURNACE: u16 = 0;
 
+/// The belt's prototype id (M51), registered second in [`register`].
+pub const BELT_PROTO: PrototypeId = PrototypeId(1);
+
+/// A belt, spawner or despawner covers one tile (README "Belts").
+pub const BELT_FOOTPRINT: Footprint = Footprint { w: 1, h: 1 };
+
+/// What a furnace may not stand on: an unbuildable tile or another entity (R1: a resource is fine).
+pub const FURNACE_FORBIDS: TraitSet = NOT_BUILDABLE;
+
+/// What a belt may not stand on: the furnace's set plus a resource (README "Belts", Placement,
+/// assumed: "belts may not cover resources"), asked by trait, never by tile id.
+pub const BELT_FORBIDS: TraitSet = NOT_BUILDABLE.union(COLLECTABLE);
+
+/// Belt sprites (M51, `scripts/gen-assets.mjs`): five families of three facings each, id =
+/// `family + facing` with facing east 0, south 1, north 2 (west is east drawn with `FLIP_X`, which
+/// also swaps a curve's side: a west `CurveLeft` is the east `CurveRight` mirrored). Each is 1 x 1
+/// tile, pivot `[0, 0]`, [`SPRITE_BELT_FRAMES`] frames whose lane marks advance 1/8 tile a frame.
+/// Spawners and despawners are the straight sprite with a mark at the back and front end.
+pub const SPRITE_BELT_STRAIGHT: u16 = 1;
+pub const SPRITE_BELT_CURVE_LEFT: u16 = 4;
+pub const SPRITE_BELT_CURVE_RIGHT: u16 = 7;
+pub const SPRITE_BELT_SPAWNER: u16 = 10;
+pub const SPRITE_BELT_DESPAWNER: u16 = 13;
+pub const SPRITE_BELT_FRAMES: u32 = 8;
+
+/// Item squares (M51; M53 draws them on belts): sprite `SPRITE_ITEM_FIRST + ItemId`, one per item,
+/// half a tile, pivot at the centre, one frame. Transport reserves `Item(0)` for "none", so a belt
+/// item id is `ItemId + 1` and M53's `ItemStyle::sprite(item)` is `SPRITE_ITEM_FIRST + item - 1`.
+pub const SPRITE_ITEM_FIRST: u16 = 16;
+
 /// Trait tables + entity prototypes (0007 §6, `Game::register`'s own doc comment): both waters are
 /// `NOT_BUILDABLE`; every resource id is `COLLECTABLE` and **not** `NOT_BUILDABLE` (R1: a furnace may
 /// stand on a resource); the furnace prototype is `NOT_BUILDABLE` (so one furnace refuses another
@@ -244,14 +274,27 @@ pub fn register(r: &mut Registry) {
     }
     let furnace = r.add_prototype(NOT_BUILDABLE.union(COVERS_RESOURCE), FURNACE_FOOTPRINT);
     assert_eq!(furnace, FURNACE_PROTO, "the furnace must be prototype 0");
+    // A belt is not built over by anything (M51); it never stands on a resource, so it covers none.
+    let belt = r.add_prototype(NOT_BUILDABLE, BELT_FOOTPRINT);
+    assert_eq!(belt, BELT_PROTO, "the belt must be prototype 1");
 }
 
 /// Client-local UI intent codes for `client.input.emit(code, a, b)` (M18's `InputKind.Game` record,
 /// 0024 section 7c), read by `RefClient::frame` from `FrameCx::input()`. Never sim state, never an
 /// action. Mirrored by `src/ui/build.ts`'s `LOCAL`: change both together.
 pub mod local {
-    /// `a != 0` turns construction mode on, `a == 0` off.
+    /// `a` picks the tool (M51): [`TOOL_OFF`] ends construction mode, then furnace, belt, spawner,
+    /// despawner. Any other value is ignored.
     pub const PLACE_MODE: u32 = 1;
     /// Closes the furnace panel (M33b step 3 reads it).
     pub const CLOSE_PANEL: u32 = 2;
+    /// Turns the construction direction clockwise (M51; `a` unused).
+    pub const ROTATE_TOOL: u32 = 3;
+
+    /// `PLACE_MODE`'s `a` values.
+    pub const TOOL_OFF: i32 = 0;
+    pub const TOOL_FURNACE: i32 = 1;
+    pub const TOOL_BELT: i32 = 2;
+    pub const TOOL_SPAWNER: i32 = 3;
+    pub const TOOL_DESPAWNER: i32 = 4;
 }

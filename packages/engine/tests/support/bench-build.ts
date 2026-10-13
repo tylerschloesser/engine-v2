@@ -60,7 +60,9 @@ export function benchWorldConfig(
   return {
     worldId: `bench-${scale}`,
     buildHash,
-    // Seed as `world.json`'s (the reference game's one world).
+    // Seed as `world.json`'s (the reference game's one world). No transport caps (M51), unlike
+    // `world.json`: the large save has no belts, and the recommended caps would reserve about
+    // 20 MiB more against `mem.simHighWaterLargeSave` in the 96 MiB arena.
     params: {
       seed: opts.seed ?? '6840143426475589698',
       worldgen: { bench: scale },

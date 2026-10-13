@@ -44,7 +44,16 @@ const { client, renderer, device, canvasFormat } = await startGame({
   canvas,
   host: {
     kind: 'local',
-    world: { worldId: 'reference', params: { seed: '6840143426475589698', worldgen: {} } },
+    // The transport caps of `world.json` (M51, 0079 §5): the page measures the real reservation.
+    world: {
+      worldId: 'reference',
+      params: {
+        seed: '6840143426475589698',
+        worldgen: {},
+        maxLines: 32_768,
+        maxItems: 262_144,
+      },
+    },
     connect: true,
   },
   test: { clock, flags: { gcHook: true } },

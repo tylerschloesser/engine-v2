@@ -7,6 +7,7 @@ import { expect, test } from 'vitest'
 import { createNetHarness, type NetHarness } from '../../src/test/net-harness.js'
 import { budget } from '../support/budgets.js'
 import { gameCrateBuildDir } from '../support/fixtures.js'
+import { readWorldCaps } from '../support/reference-golden.js'
 
 const WORLD = JSON.parse(
   readFileSync(
@@ -25,7 +26,8 @@ function make(seed: number, clients: number, extra: { production?: boolean } = {
     seed,
     clients,
     world: {
-      params: { worldgen: WORLD.worldgen },
+      // `world.json`'s transport caps (M51), as every world the game builds.
+      params: { worldgen: WORLD.worldgen, ...readWorldCaps() },
       ...(extra.production ? { debugHashMode: 'production' as const } : {}),
     },
   })

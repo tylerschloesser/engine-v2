@@ -724,9 +724,9 @@
       },
       "bytesPerHour": {
         "counter": "bytesDownPerHour",
-        "exact": 324399,
+        "exact": 325638,
         "ceiling": 20000000,
-        "source": "ADR 0062, Bandwidth per client burst row (owner 0010): 10-20 MB per hour of play; the ceiling is the top of that row, not measured plus margin. Measured by reference_bytes_and_mispredictions_in_budget (games/reference/tests/netcode/counters.test.ts): the busier of two clients' downlink bytes over the two-player full game at 60 ms latency, 20 ms jitter, production hash cadence, scaled from the host ticks the game took to one hour at 20 Hz (72,000 ticks). The scripted game is 813 ticks and includes each client's join, so the projection is the conservative direction."
+        "source": "ADR 0062, Bandwidth per client burst row (owner 0010): 10-20 MB per hour of play; the ceiling is the top of that row, not measured plus margin. Measured by reference_bytes_and_mispredictions_in_budget (games/reference/tests/netcode/counters.test.ts): the busier of two clients' downlink bytes over the two-player full game at 60 ms latency, 20 ms jitter, production hash cadence, scaled from the host ticks the game took to one hour at 20 Hz (72,000 ticks). The scripted game is 813 ticks and includes each client's join, so the projection is the conservative direction. M51 (2026-10-12, reviewed raise, 0020 §9): 324,399 -> 325,638 (+1,239, 0.38 %): +531 from the RefEntity enum's discriminant byte on every entity put (measured with the transport caps at 0) and +708 from the world declaring its transport caps (0079 §5: the Welcome cap fields, about 8 raw bytes per join scaled to the hour); the script is unchanged (the .log is byte-identical)."
       },
       "idleHeartbeatBytes10s": {
         "counter": "bytesDown",

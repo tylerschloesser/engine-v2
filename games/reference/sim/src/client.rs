@@ -11,8 +11,8 @@ use std::cell::{Cell, RefCell};
 
 use engine::client::input::kind as input_kind;
 use engine::client::{
-    ANCHOR_CURSOR_TILE, ClientSide, DrawList, FrameCx, FrameView, PREDICTED, SCREEN_PX_STROKE,
-    SpriteId, TileTexel, rgba,
+    ANCHOR_CURSOR_TILE, ClientSide, DrawList, FLIP_X, FrameCx, FrameView, PREDICTED,
+    SCREEN_PX_STROKE, SpriteId, TileTexel, rgba,
 };
 use engine::game::Presence;
 use engine::world::{Tile, TilePos, WorldPos};
@@ -20,8 +20,9 @@ use engine::world::{Tile, TilePos, WorldPos};
 use crate::rules::collect::in_range;
 use crate::worldgen::terrain_at;
 use crate::{
-    Inventory, MAX_IN_RANGE, RefGame, RefParams, TileXY, UiCollecting, UiCrafting, UiFurnace,
-    UiInRange, UiRecipe, UiRosterEntry, WorldXY, content,
+    Belt, BeltKind, BeltShape, Dir, Inventory, MAX_IN_RANGE, RefEntity, RefGame, RefParams, TileXY,
+    Tool, UiCollecting, UiCrafting, UiFurnace, UiInRange, UiPlacing, UiRecipe, UiRosterEntry,
+    WorldXY, content,
 };
 
 /// `Presence` sketch from `0001-camera-and-presence.md` (Decision, `Presence` code block),
@@ -81,6 +82,56 @@ const GHOST_VALID: u32 = rgba(0x40, 0xff, 0x40, 0x90);
 const GHOST_INVALID: u32 = rgba(0xff, 0x40, 0x40, 0x90);
 const GHOST_UNKNOWN: u32 = rgba(0xc0, 0xc0, 0xc0, 0x90);
 const FURNACE_TINT_PREDICTED: u32 = rgba(0xff, 0xff, 0xff, 0x99);
+
+/// Belts (M51) share the furnace's layer, tints and predicted dimming.
+const LAYER_BELT: u8 = LAYER_FURNACE;
+
+/// Belt speed in positions per tick and positions per animation frame (README "Belts", Numbers:
+/// 24 positions a tick, 256 a tile; the sprites' lane marks advance 1/8 tile a frame), so the marks
+/// move at belt speed: `frame = floor(t * 24 / 32) % 8` on the item clock.
+const BELT_SPEED: f64 = 24.0;
+const POSITIONS_PER_FRAME: f64 = 256.0 / content::SPRITE_BELT_FRAMES as f64;
+
+/// The belt animation frame at `view`'s item clock (0078 A12: in step with the items M53 draws); a
+/// view without transport (no caps, or before the first forecast) uses the authoritative tick.
+fn belt_frame(view: &FrameView<'_, RefGame>) -> f32 {
+    let t = view.item_time().unwrap_or_else(|| {
+        let c = view.clocks();
+        f64::from(c.authoritative.0) + f64::from(c.tick_fraction)
+    });
+    let step = (t * BELT_SPEED / POSITIONS_PER_FRAME).floor() as i64;
+    step.rem_euclid(i64::from(content::SPRITE_BELT_FRAMES)) as f32
+}
+
+/// The sprite and `FLIP_X` for a belt of `kind` and `shape` facing `dir` (`content::SPRITE_BELT_*`):
+/// east, south and north have their own sprites; west is east mirrored, which swaps a curve's side.
+/// Spawners and despawners draw their own straight sprite whatever the shape.
+pub fn belt_sprite(kind: BeltKind, shape: BeltShape, dir: Dir) -> (u16, bool) {
+    let (east, west) = match (kind, shape) {
+        (BeltKind::Spawner, _) => (content::SPRITE_BELT_SPAWNER, content::SPRITE_BELT_SPAWNER),
+        (BeltKind::Despawner, _) => (
+            content::SPRITE_BELT_DESPAWNER,
+            content::SPRITE_BELT_DESPAWNER,
+        ),
+        (BeltKind::Belt, BeltShape::Straight) => {
+            (content::SPRITE_BELT_STRAIGHT, content::SPRITE_BELT_STRAIGHT)
+        }
+        (BeltKind::Belt, BeltShape::CurveLeft) => (
+            content::SPRITE_BELT_CURVE_LEFT,
+            content::SPRITE_BELT_CURVE_RIGHT,
+        ),
+        (BeltKind::Belt, BeltShape::CurveRight) => (
+            content::SPRITE_BELT_CURVE_RIGHT,
+            content::SPRITE_BELT_CURVE_LEFT,
+        ),
+    };
+    match dir {
+        Dir::East => (east, false),
+        Dir::South => (east + 1, false),
+        Dir::North => (east + 2, false),
+        Dir::West => (west, true),
+    }
+}
 
 /// The smelt progress bar (M33b): a strip above the furnace, filling left to right; and the outline
 /// of the open furnace, four thin `rect`s (a `rect` is a filled quad). Both above the furnace sprite.
@@ -253,12 +304,16 @@ pub struct RefClient {
     /// actually created with, via `ClientSide::on_init` (gate round 1 fix).
     spawn: TileXY,
     /// M33: construction mode, switched by `content::local::PLACE_MODE` events (client-local: not
-    /// sim state, not `input.setMode`, 0019 section 4). Read by `extract` (the ghost) and `ui`.
+    /// sim state, not `input.setMode`, 0019 section 4). Read by `extract` (the ghost) and `ui`. M51:
+    /// the tool, `None` when off.
     ///
-    /// A `Cell`: `ui` (`&self`) also ends the mode when the last furnace item is gone, so the DOM
-    /// never has to emit an "off" from a `Ui` callback (that record is undrained until the next
-    /// frame, which a stepped test's `stepTick` waits on).
-    placing: Cell<bool>,
+    /// A `Cell`: `ui` (`&self`) also ends the furnace tool when the last furnace item is gone, so the
+    /// DOM never has to emit an "off" from a `Ui` callback (that record is undrained until the next
+    /// frame, which a stepped test's `stepTick` waits on). The belt tools are free and never end so.
+    placing: Cell<Option<Tool>>,
+    /// M51: the construction direction (`content::local::ROTATE_TOOL` turns it clockwise), kept
+    /// across tool changes.
+    dir: Dir,
     /// M33b: the anchor tile of the furnace whose panel is open. Keyed by tile, never by entity id,
     /// so it survives the ghost-to-real swap (0022 section 6); `frame` re-checks it every frame and
     /// clears it when the furnace is gone. TypeScript holds no state for it: it reads `Ui.furnace`.
@@ -273,7 +328,8 @@ impl Default for RefClient {
             initialized: false,
             tracked_range: RefCell::new(Vec::with_capacity(MAX_IN_RANGE)),
             spawn: TileXY::from_tile(nearest_land_tile(content::SEED, &RefParams::default())),
-            placing: Cell::new(false),
+            placing: Cell::new(None),
+            dir: Dir::East,
             open: None,
         }
     }
@@ -291,26 +347,47 @@ impl RefClient {
             initialized: true,
             tracked_range: RefCell::new(Vec::with_capacity(MAX_IN_RANGE)),
             spawn: TileXY::from_tile(nearest_land_tile(content::SEED, &RefParams::default())),
-            placing: Cell::new(false),
+            placing: Cell::new(None),
+            dir: Dir::East,
             open: None,
         }
     }
 
-    /// Whether construction mode is on (test-only accessor, like `spawn`).
+    /// Whether construction mode is on, any tool (test-only accessor, like `spawn`).
     pub fn placing(&self) -> bool {
-        self.placing.get()
+        self.placing.get().is_some()
     }
 
-    /// Applies one client-local intent event (`FrameCx::input()`, kind `GAME`): `PLACE_MODE` sets
-    /// construction mode from `a`, `CLOSE_PANEL` closes the furnace panel. Split out of `frame` so a
+    /// The construction tool and direction (test-only accessor).
+    pub fn tool(&self) -> Option<UiPlacing> {
+        self.placing.get().map(|tool| UiPlacing {
+            tool,
+            dir: self.dir,
+        })
+    }
+
+    /// Applies one client-local intent event (`FrameCx::input()`, kind `GAME`): `PLACE_MODE` picks
+    /// the tool from `a` (`content::local::TOOL_*`; an unknown value is ignored), `ROTATE_TOOL` turns
+    /// the direction clockwise, `CLOSE_PANEL` closes the furnace panel. Split out of `frame` so a
     /// native test can drive it directly.
     pub fn apply_local(&mut self, ev: &engine::client::InputEvent) {
+        use content::local;
         if ev.kind != input_kind::GAME {
             return;
         }
-        if ev.pick_id == content::local::PLACE_MODE {
-            self.placing.set(ev.tile[0] != 0);
-        } else if ev.pick_id == content::local::CLOSE_PANEL {
+        if ev.pick_id == local::PLACE_MODE {
+            let tool = match ev.tile[0] {
+                local::TOOL_OFF => None,
+                local::TOOL_FURNACE => Some(Tool::Furnace),
+                local::TOOL_BELT => Some(Tool::Belt(BeltKind::Belt)),
+                local::TOOL_SPAWNER => Some(Tool::Belt(BeltKind::Spawner)),
+                local::TOOL_DESPAWNER => Some(Tool::Belt(BeltKind::Despawner)),
+                _ => return,
+            };
+            self.placing.set(tool);
+        } else if ev.pick_id == local::ROTATE_TOOL {
+            self.dir = self.dir.cw();
+        } else if ev.pick_id == local::CLOSE_PANEL {
             self.open = None;
         }
     }
@@ -325,15 +402,18 @@ impl RefClient {
     /// overlay-merged view, not by `pick_id`: the engine's picker tests a sprite against its
     /// zero-size record box, so a furnace sprite is never picked (`input/pick.ts`).
     pub fn apply_tap(&mut self, ev: &engine::client::InputEvent, view: &FrameView<'_, RefGame>) {
-        if ev.kind != input_kind::TAP || self.placing.get() {
+        if ev.kind != input_kind::TAP || self.placing.get().is_some() {
             return;
         }
         let fp = content::FURNACE_FOOTPRINT;
         let (tx, ty) = (ev.tile[0], ev.tile[1]);
+        // Furnaces only: a belt has no panel until M53's spawner panel.
         self.open = view
             .entities()
-            .find(|(_, _, o)| {
-                (o.x..o.x + fp.w as i32).contains(&tx) && (o.y..o.y + fp.h as i32).contains(&ty)
+            .find(|(_, e, o)| {
+                matches!(e, RefEntity::Furnace(_))
+                    && (o.x..o.x + fp.w as i32).contains(&tx)
+                    && (o.y..o.y + fp.h as i32).contains(&ty)
             })
             .map(|(_, _, origin)| origin);
     }
@@ -348,9 +428,16 @@ impl RefClient {
             return;
         }
         let present = if view.visible().contains(open) {
-            view.entities().any(|(_, f, _)| f.origin.tile() == open)
+            view.entities()
+                .any(|(_, e, o)| matches!(e, RefEntity::Furnace(_)) && o == open)
         } else {
-            matches!(view.world().entity_at(open), Ok(Some(_)))
+            let w = view.world();
+            match w.entity_at(open) {
+                // A belt that took the tile is not the open furnace; `Unknown` keeps it open.
+                Ok(Some(id)) => !matches!(w.entity(id), Ok(Some(RefEntity::Belt(_)))),
+                Ok(None) => false,
+                Err(_) => true,
+            }
         };
         if !present {
             self.open = None;
@@ -399,6 +486,22 @@ impl RefClient {
                 );
             }
         }
+    }
+
+    /// One belt sprite at its tile (pivot [0, 0]), animation frame `frame` (`belt_frame`).
+    fn belt_draw<'o>(
+        out: &'o mut DrawList,
+        belt: &Belt,
+        origin: TilePos,
+        frame: f32,
+    ) -> &'o mut engine::client::Draw {
+        let (sprite, flip) = belt_sprite(belt.kind, belt.shape, belt.dir);
+        let d = out.sprite(LAYER_BELT, WorldPos::from_tile(origin), SpriteId(sprite));
+        d.param = frame;
+        if flip {
+            d.flags |= FLIP_X;
+        }
+        d
     }
 
     /// The spring's own current position, tiles (test-only accessor; Deviations).
@@ -511,45 +614,77 @@ impl ClientSide<RefGame> for RefClient {
     /// `SCREEN_PX_STROKE` (Scope), both skipped when `view.px_per_tile()` would render the circle
     /// smaller than [`MIN_VISIBLE_PX`].
     fn extract(&self, view: &FrameView<'_, RefGame>, out: &mut DrawList) {
-        // Furnaces first, and never culled by the player circle's size rule below: a furnace is two
-        // tiles wide. One sprite per furnace in view (overlay-merged, so a predicted one is here
-        // too); frame 1 (lit) while it has fuel burning; `pick_id` is the entity id.
-        for (id, furnace, origin) in view.entities() {
-            let d = out.sprite(
-                LAYER_FURNACE,
-                WorldPos::from_tile(origin),
-                SpriteId(content::SPRITE_FURNACE),
-            );
-            d.param = if furnace.burn_left > 0 { 1.0 } else { 0.0 };
+        // Entities first, and never culled by the player circle's size rule below: a furnace is two
+        // tiles wide. One sprite per entity in view (overlay-merged, so a predicted one is here
+        // too); `pick_id` is the entity id. A furnace shows frame 1 (lit) while it has fuel burning;
+        // a belt the sprite for its kind, shape and direction at the item clock's frame (M51).
+        let frame = belt_frame(view);
+        for (id, entity, origin) in view.entities() {
+            let d = match entity {
+                RefEntity::Furnace(furnace) => {
+                    let d = out.sprite(
+                        LAYER_FURNACE,
+                        WorldPos::from_tile(origin),
+                        SpriteId(content::SPRITE_FURNACE),
+                    );
+                    d.param = if furnace.burn_left > 0 { 1.0 } else { 0.0 };
+                    d
+                }
+                RefEntity::Belt(belt) => Self::belt_draw(out, belt, origin, frame),
+            };
             d.pick_id = id.0;
             d.color = FURNACE_TINT;
             if view.is_predicted(id) {
                 d.flags |= PREDICTED;
                 d.color = FURNACE_TINT_PREDICTED;
             }
-            self.extract_furnace_ui(view, out, furnace, origin);
+            if let RefEntity::Furnace(furnace) = entity {
+                self.extract_furnace_ui(view, out, furnace, origin);
+            }
         }
 
         // The ghost: only in construction mode with a cursor tile. `pos` is relative to the cursor
-        // tile (`ANCHOR_CURSOR_TILE`), so it tracks the pointer with no added latency; a quad's pos
-        // is its centre, so a 2x2 footprint whose min corner is the cursor tile centres at (1, 1).
+        // tile (`ANCHOR_CURSOR_TILE`), so it tracks the pointer with no added latency. The furnace's
+        // is a quad (its pos is its centre, so a 2x2 footprint whose min corner is the cursor tile
+        // centres at (1, 1)); a belt's is its sprite in the construction direction, tinted (M51).
         // The colour is the same `can_place` the host runs, over the `View`.
-        if self.placing.get()
+        if let Some(tool) = self.placing.get()
             && let Some(cursor) = view.cursor_tile()
         {
-            let color = match crate::rules::place::can_place(view.world(), cursor) {
+            let verdict = match tool {
+                Tool::Furnace => crate::rules::place::can_place_furnace(view.world(), cursor),
+                Tool::Belt(_) => crate::rules::place::can_place_belt(view.world(), cursor),
+            };
+            let color = match verdict {
                 Ok(true) => GHOST_VALID,
                 Ok(false) => GHOST_INVALID,
                 Err(_) => GHOST_UNKNOWN,
             };
-            let fp = content::FURNACE_FOOTPRINT;
-            let d = out.ghost(
-                LAYER_GHOST,
-                WorldPos { x: 0, y: 0 },
-                [fp.w as f32, fp.h as f32],
-                color,
-            );
-            d.pos = [fp.w as f32 / 2.0, fp.h as f32 / 2.0];
+            let d = match tool {
+                Tool::Furnace => {
+                    let fp = content::FURNACE_FOOTPRINT;
+                    let d = out.ghost(
+                        LAYER_GHOST,
+                        WorldPos { x: 0, y: 0 },
+                        [fp.w as f32, fp.h as f32],
+                        color,
+                    );
+                    d.pos = [fp.w as f32 / 2.0, fp.h as f32 / 2.0];
+                    d
+                }
+                Tool::Belt(kind) => {
+                    let (sprite, flip) = belt_sprite(kind, BeltShape::Straight, self.dir);
+                    let d = out.sprite(LAYER_GHOST, WorldPos { x: 0, y: 0 }, SpriteId(sprite));
+                    // Pivot [0, 0]: the sprite's top-left is the cursor tile's.
+                    d.pos = [0.0, 0.0];
+                    d.param = frame;
+                    d.color = color;
+                    if flip {
+                        d.flags |= FLIP_X;
+                    }
+                    d
+                }
+            };
             d.flags |= ANCHOR_CURSOR_TILE;
         }
 
@@ -607,6 +742,7 @@ impl ClientSide<RefGame> for RefClient {
         out.recipes.clear();
         out.spawn = self.spawn;
         out.can_build = false;
+        let furnace_tool = self.placing.get() == Some(Tool::Furnace);
         if let Ok(player) = world.player(view.me()) {
             out.inventory = player.inventory;
             // The own timers (`collecting`, `crafting`) come from the predicted player, so a collect or
@@ -620,9 +756,9 @@ impl ClientSide<RefGame> for RefClient {
             });
             out.unlocks = player.unlocks;
             out.can_build = player.inventory.get(content::ItemId::Furnace) > 0;
-            // Nothing left to place: construction mode ends here, in the client (see `placing`).
-            if !out.can_build {
-                self.placing.set(false);
+            // No furnace left to place: the furnace tool ends here, in the client (see `placing`).
+            if !out.can_build && furnace_tool {
+                self.placing.set(None);
             }
             out.crafting = own.crafting.map(|c| UiCrafting {
                 recipe: c.recipe,
@@ -645,7 +781,8 @@ impl ClientSide<RefGame> for RefClient {
             }
         }
 
-        out.placing = self.placing.get();
+        out.placing = self.placing.get().is_some();
+        out.tool = self.tool();
 
         out.roster.clear();
         let colours = world.global();
@@ -664,8 +801,10 @@ impl ClientSide<RefGame> for RefClient {
 
         out.furnace = None;
         if let Some(open) = self.open {
-            for (_, f, origin) in view.entities() {
-                if origin == open {
+            for (_, e, origin) in view.entities() {
+                if let RefEntity::Furnace(f) = e
+                    && origin == open
+                {
                     out.furnace = Some(UiFurnace {
                         at: TileXY::from_tile(origin),
                         iron_in: f.iron_in,

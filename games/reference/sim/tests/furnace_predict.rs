@@ -20,9 +20,10 @@ use engine::world::{
 use engine::worldgen::Worldgen;
 use reference_sim::client::PlayerPresence;
 use reference_sim::content::{self, ItemId, RECIPE_FURNACE};
-use reference_sim::rules::place::can_place;
+use reference_sim::rules::place::can_place_furnace;
 use reference_sim::{
-    Furnace, RefAction, RefClient, RefGame, RefParams, RefReject, RefWorldgen, TileXY, WorldXY,
+    Furnace, RefAction, RefClient, RefEntity, RefGame, RefParams, RefReject, RefWorldgen, TileXY,
+    WorldXY,
 };
 
 const SEED: u64 = content::SEED;
@@ -137,12 +138,17 @@ fn items(lb: &Loopback<RefGame>, idx: usize, item: ItemId) -> u32 {
 fn host_furnace(lb: &Loopback<RefGame>, at: TilePos) -> Option<Furnace> {
     let auth = lb.host.sim().expect("genesis ran").authority();
     let id = auth.entity_at(at).expect("host reads are total")?;
-    auth.entity(id).expect("host reads are total").copied()
+    auth.entity(id)
+        .expect("host reads are total")
+        .and_then(RefEntity::as_furnace)
+        .copied()
 }
 
 /// The furnace at `at` in client `idx`'s prediction-merged view.
 fn seen_furnace(lb: &Loopback<RefGame>, idx: usize, at: TilePos) -> Option<Furnace> {
-    lb.visible(idx, TileRect::new(at, at)).cells[0].2
+    lb.visible(idx, TileRect::new(at, at)).cells[0]
+        .2
+        .and_then(|e| e.as_furnace().copied())
 }
 
 /// One client (`delay` ticks of downlink latency) that has crafted `furnaces` furnace items and
@@ -420,7 +426,7 @@ impl WorldRead<RefGame> for Merged<'_> {
     fn entity_at(&self, p: TilePos) -> Result<Option<EntityId>, Unknown> {
         Ok(self.lb.entity_at(self.idx, p))
     }
-    fn entity(&self, _id: EntityId) -> Result<Option<&Furnace>, Unknown> {
+    fn entity(&self, _id: EntityId) -> Result<Option<&RefEntity>, Unknown> {
         Err(Unknown)
     }
     fn player(&self, _who: PlayerId) -> Result<&reference_sim::RefPlayer, Unknown> {
@@ -432,7 +438,7 @@ impl WorldRead<RefGame> for Merged<'_> {
     fn entities_in(
         &self,
         _rect: TileRect,
-        _f: &mut dyn FnMut(EntityId, &Furnace),
+        _f: &mut dyn FnMut(EntityId, &RefEntity),
     ) -> Result<(), Unknown> {
         Err(Unknown)
     }
@@ -445,7 +451,7 @@ fn merged(lb: &Loopback<RefGame>, idx: usize, origin: TilePos) -> (Option<Entity
     let world = Merged { lb, idx, registry };
     (
         lb.entity_at(idx, origin),
-        can_place(&world, origin).expect("held"),
+        can_place_furnace(&world, origin).expect("held"),
     )
 }
 

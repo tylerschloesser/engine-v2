@@ -8,8 +8,14 @@ import world from '../world.json' with { type: 'json' }
 
 export type Host = ClientOptions['host']
 
-/** The one declared default world (`world.json`), shared with `games/reference-server`. */
-export const DEFAULT_WORLD = { seed: world.seed, worldgen: world.worldgen }
+/** The one declared default world (`world.json`), shared with `games/reference-server`: its seed,
+ * worldgen and transport caps (M51: the recommended `maxLines`/`maxItems` of 0079 §5). */
+export const DEFAULT_WORLD = {
+  seed: world.seed,
+  worldgen: world.worldgen,
+  maxLines: world.maxLines,
+  maxItems: world.maxItems,
+}
 
 /**
  * `{ kind: 'remote' }` when the fragment carries a join key (`#k=`, empty for an open server), else

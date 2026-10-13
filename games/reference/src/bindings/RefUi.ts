@@ -5,6 +5,7 @@ import type { UiCollecting } from "./UiCollecting.js";
 import type { UiCrafting } from "./UiCrafting.js";
 import type { UiFurnace } from "./UiFurnace.js";
 import type { UiInRange } from "./UiInRange.js";
+import type { UiPlacing } from "./UiPlacing.js";
 import type { UiRecipe } from "./UiRecipe.js";
 import type { UiRosterEntry } from "./UiRosterEntry.js";
 
@@ -24,11 +25,15 @@ export type RefUi = { me: number, inventory: Inventory, collecting: UiCollecting
  */
 unlocks: number, crafting: UiCrafting | null, recipes: Array<UiRecipe>, 
 /**
- * M33: construction mode is on (client-local, `content::local::PLACE_MODE`).
+ * M33: construction mode is on (client-local, `content::local::PLACE_MODE`), any tool.
  */
 placing: boolean, 
 /**
- * M33: the inventory holds a furnace item (shows the Build button).
+ * M51: the tool and direction while construction mode is on, `None` otherwise.
+ */
+tool: UiPlacing | null, 
+/**
+ * M33: the inventory holds a furnace item (the furnace tool; the belt tools are free, M51).
  */
 can_build: boolean, 
 /**

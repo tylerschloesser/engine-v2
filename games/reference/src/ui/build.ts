@@ -22,7 +22,15 @@ import type { RefUi } from '../bindings/RefUi.js'
 import { el } from './dom.js'
 
 /** `content::local` (`sim/src/content.rs`): change both together. */
-export const LOCAL = { PLACE_MODE: 1, CLOSE_PANEL: 2 } as const
+export const LOCAL = {
+  PLACE_MODE: 1,
+  CLOSE_PANEL: 2,
+  // M51: turns the construction direction clockwise; `PLACE_MODE`'s `a` is one of `TOOL` (the
+  // controls that send them are M51b's).
+  ROTATE_TOOL: 3,
+} as const
+/** `PLACE_MODE`'s `a` values (`content::local::TOOL_*`). */
+export const TOOL = { OFF: 0, FURNACE: 1, BELT: 2, SPAWNER: 3, DESPAWNER: 4 } as const
 
 type AnchorHandle = ReturnType<Client['overlay']['anchor']>
 

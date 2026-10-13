@@ -99,6 +99,21 @@ pub enum RefAction {
     FurnacePickUp {
         at: TileXY,
     },
+    /// M51: place a free belt of `kind` facing `dir` on the tile `at` (README "Belts", Placement:
+    /// no cost, no unlock; not on a resource, not on another entity). Addressed by tile.
+    PlaceBelt {
+        at: TileXY,
+        dir: Dir,
+        kind: BeltKind,
+    },
+    /// M51: turn the belt at `at` clockwise (east, south, west, north); same entity, same anchor.
+    RotateBelt {
+        at: TileXY,
+    },
+    /// M51: remove the belt at `at`; returns nothing to the inventory (README "Belts", Placement).
+    PickUpBelt {
+        at: TileXY,
+    },
 }
 
 /// `Reject` (Scope). `NoResource`/`OutOfRange`/`Busy` are `rules::collect::start`'s own three
@@ -141,6 +156,8 @@ pub enum RefReject {
     /// (`apply`'s own, much tighter, `RANGE_Q8` check against the *tile*) so a client can tell
     /// "the host doesn't believe where you are" from "you really aren't close enough".
     ImplausiblePosition,
+    /// `RotateBelt`/`PickUpBelt` (M51): no belt on the addressed tile (nothing there, or a furnace).
+    NoBeltHere,
 }
 
 impl From<Unknown> for RefReject {
@@ -227,7 +244,7 @@ impl RefGlobal {
     }
 }
 
-/// The one entity kind (M33): a 2x2 furnace (`content::FURNACE_PROTO`). `origin` is its min-corner
+/// The furnace entity (M33; [`RefEntity::Furnace`] since M51): 2x2 (`content::FURNACE_PROTO`). `origin` is its min-corner
 /// tile (`Game::anchor`; `TileXY`, not `TilePos`, for the same `Codec` reason as [`Collecting`]).
 /// The fields after `origin` are the furnace's own state, operated
 /// by M33b; placement leaves them all zero. Furnaces are addressed by tile everywhere (0022 §6).
@@ -254,8 +271,127 @@ impl Furnace {
     }
 }
 
-/// The game's `Game::Entity`; the name every pre-M33 test already imports.
-pub type RefEntity = Furnace;
+/// A belt's direction of travel (M51; the `fx-belts` order). [`Dir::cw`] is `RotateBelt`'s turn.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
+pub enum Dir {
+    #[default]
+    East,
+    South,
+    West,
+    North,
+}
+
+impl Dir {
+    /// The next direction clockwise: east, south, west, north, east.
+    pub const fn cw(self) -> Dir {
+        match self {
+            Dir::East => Dir::South,
+            Dir::South => Dir::West,
+            Dir::West => Dir::North,
+            Dir::North => Dir::East,
+        }
+    }
+}
+
+/// What a belt tile is (README "Belts", Spawner and despawner): a plain belt, a spawner (creates
+/// its configured items at its back end, M53) or a despawner (deletes what would leave its front).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
+#[ts(export)]
+pub enum BeltKind {
+    #[default]
+    Belt,
+    Spawner,
+    Despawner,
+}
+
+/// A belt's shape, derived from its neighbours (README "Belts", Shape; M52 derives and writes it,
+/// M51 places every belt `Straight`). `CurveLeft`: the one input is on the belt's left side (seen
+/// along `dir`), so items turn left onto it; `CurveRight` the mirror.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub enum BeltShape {
+    #[default]
+    Straight,
+    CurveLeft,
+    CurveRight,
+}
+
+/// One lane's spawner configuration (README "Belts", Spawner): the item (a `content::ItemId` wire
+/// id) and the rate. No accumulator: the rule that writes no per-insert state is M53's (0079 §19 (e)).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct SpawnCfg {
+    pub item: u8,
+    pub rate: u16,
+}
+
+/// A one-tile belt entity (M51, `content::BELT_PROTO`): plain data, anchored at `origin`, never
+/// moved (0079 §20 (b): a rotate is a put with the same anchor). `spawn` is per lane, left then right
+/// (seen along `dir`), set by M53's panel; `None` on every placed belt.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Belt {
+    pub origin: TileXY,
+    pub dir: Dir,
+    pub kind: BeltKind,
+    pub shape: BeltShape,
+    pub spawn: [Option<SpawnCfg>; 2],
+}
+
+impl Belt {
+    /// A fresh straight belt with no spawner configuration.
+    pub fn new(origin: TileXY, dir: Dir, kind: BeltKind) -> Self {
+        Belt {
+            origin,
+            dir,
+            kind,
+            shape: BeltShape::Straight,
+            spawn: [None; 2],
+        }
+    }
+}
+
+/// The game's `Game::Entity` (M51: an enum; M33-M50 it was the furnace alone). Every site that reads
+/// an entity dispatches on the variant: a furnace rule ignores a belt and the reverse.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub enum RefEntity {
+    Furnace(Furnace),
+    Belt(Belt),
+}
+
+impl RefEntity {
+    /// The anchor tile (`Game::anchor`): a furnace's min corner, a belt's own tile.
+    pub const fn origin(&self) -> TileXY {
+        match self {
+            RefEntity::Furnace(f) => f.origin,
+            RefEntity::Belt(b) => b.origin,
+        }
+    }
+
+    pub const fn as_furnace(&self) -> Option<&Furnace> {
+        match self {
+            RefEntity::Furnace(f) => Some(f),
+            RefEntity::Belt(_) => None,
+        }
+    }
+
+    pub const fn as_belt(&self) -> Option<&Belt> {
+        match self {
+            RefEntity::Belt(b) => Some(b),
+            RefEntity::Furnace(_) => None,
+        }
+    }
+}
+
+impl From<Furnace> for RefEntity {
+    fn from(f: Furnace) -> Self {
+        RefEntity::Furnace(f)
+    }
+}
+
+impl From<Belt> for RefEntity {
+    fn from(b: Belt) -> Self {
+        RefEntity::Belt(b)
+    }
+}
 
 /// The maximum number of simultaneous `Ui.in_range` entries (M20b step 3, sized correctly in step
 /// 5's own orchestrator fix): `RefClient::ui`'s bounding-box scan (`client.rs`) visits every tile in
@@ -343,6 +479,22 @@ pub struct UiRosterEntry {
     pub me: bool,
 }
 
+/// A construction tool (M51): the furnace (from the inventory) or a free belt of one kind.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, TS)]
+#[ts(export)]
+pub enum Tool {
+    Furnace,
+    Belt(BeltKind),
+}
+
+/// `Ui.tool` (M51): the construction tool and its direction (a belt's facing; the furnace ignores it).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, TS)]
+#[ts(export)]
+pub struct UiPlacing {
+    pub tool: Tool,
+    pub dir: Dir,
+}
+
 /// `Ui { me, inventory, collecting, in_range, spawn }` (Scope, M20b steps 3 and 5). `me` is a raw
 /// `u32`, not `engine::game::PlayerId` (same reason as [`UiCollecting::done_at`]: `PlayerId` has no
 /// `TS` impl). `Default` reserves `in_range`'s capacity once ([`MAX_IN_RANGE`]); `RefClient::ui`
@@ -363,9 +515,11 @@ pub struct RefUi {
     pub unlocks: u32,
     pub crafting: Option<UiCrafting>,
     pub recipes: Vec<UiRecipe>,
-    /// M33: construction mode is on (client-local, `content::local::PLACE_MODE`).
+    /// M33: construction mode is on (client-local, `content::local::PLACE_MODE`), any tool.
     pub placing: bool,
-    /// M33: the inventory holds a furnace item (shows the Build button).
+    /// M51: the tool and direction while construction mode is on, `None` otherwise.
+    pub tool: Option<UiPlacing>,
+    /// M33: the inventory holds a furnace item (the furnace tool; the belt tools are free, M51).
     pub can_build: bool,
     /// M33b: the furnace whose panel is open (`RefClient::open`), `None` when none or it is gone.
     pub furnace: Option<UiFurnace>,
@@ -385,6 +539,7 @@ impl Default for RefUi {
             crafting: None,
             recipes: Vec::with_capacity(content::RECIPES.len()),
             placing: false,
+            tool: None,
             can_build: false,
             furnace: None,
             roster: Vec::with_capacity(content::MAX_PLAYERS),
@@ -427,16 +582,18 @@ pub struct RefGame;
 impl Game for RefGame {
     // `test-hooks` (never shipped) reports one version higher: a save of the normal build is then
     // `SaveIncompatible` (M34b).
-    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 7 } else { 6 };
+    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 8 } else { 7 };
     //  3: `Furnace` entity, `PlaceFurnace`, resources `NOT_BUILDABLE` (M33).
     //  4: `FurnaceDeposit`, `FurnaceTake`, `FurnacePickUp` and their rejects (M33b).
     //  5: `RefGlobal { colours }`, written on `Joined` (M34).
     //  6: resources are buildable (R1); a furnace covers the resources under it: `StartCollect` refuses
     //     a covered tile and a due collect on one ends with no item (M39ai).
+    //  7: `RefEntity` is an enum (`Furnace`, `Belt`); `PlaceBelt`, `RotateBelt`, `PickUpBelt` and
+    //     `NoBeltHere` (M51). No migration: a schema 6 save is refused (0079 §6).
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;
-    type Entity = Furnace;
+    type Entity = RefEntity;
     type Player = RefPlayer;
     type Global = RefGlobal;
     type Presence = PlayerPresence;
@@ -447,12 +604,15 @@ impl Game for RefGame {
         content::register(r);
     }
 
-    fn prototype(_e: &Furnace) -> PrototypeId {
-        content::FURNACE_PROTO
+    fn prototype(e: &RefEntity) -> PrototypeId {
+        match e {
+            RefEntity::Furnace(_) => content::FURNACE_PROTO,
+            RefEntity::Belt(_) => content::BELT_PROTO,
+        }
     }
 
-    fn anchor(e: &Furnace) -> TilePos {
-        e.origin.tile()
+    fn anchor(e: &RefEntity) -> TilePos {
+        e.origin().tile()
     }
 
     fn genesis(w: &mut dyn WorldWrite<Self>) {
@@ -512,6 +672,9 @@ impl Game for RefGame {
             }
             RefAction::FurnaceTake { at } => rules::furnace::take(w, who, at.tile()),
             RefAction::FurnacePickUp { at } => rules::furnace::pick_up(w, who, at.tile()),
+            RefAction::PlaceBelt { at, dir, kind } => rules::belt::place(w, at.tile(), *dir, *kind),
+            RefAction::RotateBelt { at } => rules::belt::rotate(w, at.tile()),
+            RefAction::PickUpBelt { at } => rules::belt::pick_up(w, at.tile()),
         }
     }
 
@@ -529,7 +692,9 @@ impl Game for RefGame {
 
     fn growth(a: &RefAction) -> Option<Growth> {
         match a {
-            RefAction::PlaceFurnace { .. } => Some(Growth::entities(1)),
+            RefAction::PlaceFurnace { .. } | RefAction::PlaceBelt { .. } => {
+                Some(Growth::entities(1))
+            }
             _ => Some(Growth::NONE),
         }
     }
@@ -552,7 +717,10 @@ impl Game for RefGame {
             | RefAction::PlaceFurnace { .. }
             | RefAction::FurnaceDeposit { .. }
             | RefAction::FurnaceTake { .. }
-            | RefAction::FurnacePickUp { .. } => Ok(()),
+            | RefAction::FurnacePickUp { .. }
+            | RefAction::PlaceBelt { .. }
+            | RefAction::RotateBelt { .. }
+            | RefAction::PickUpBelt { .. } => Ok(()),
         }
     }
 }

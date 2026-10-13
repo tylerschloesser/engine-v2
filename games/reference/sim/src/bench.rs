@@ -25,7 +25,7 @@ use engine::game::{WorldRead, WorldWrite};
 use engine::time::Tick;
 use engine::world::{ChunkCoord, Tile, TilePos};
 
-use crate::{Furnace, RefGame, TileXY, content};
+use crate::{Furnace, RefEntity, RefGame, TileXY, content};
 
 /// Furnaces per dense chunk (0010 "dense chunk": 800 of 1,024 tiles under 2x2 footprints).
 pub const ENTITIES_PER_CHUNK: u32 = 200;
@@ -127,7 +127,7 @@ pub fn build(w: &mut dyn WorldWrite<RefGame>, seed: u64, shape: Shape) {
         };
         let phase = (i + offset) % content::SMELT.0;
         let done = Tick(2 + phase);
-        let id = w.spawn(Furnace {
+        let id = w.spawn(RefEntity::Furnace(Furnace {
             origin,
             iron_in: 999,
             coal: 50,
@@ -135,7 +135,7 @@ pub fn build(w: &mut dyn WorldWrite<RefGame>, seed: u64, shape: Shape) {
             burn_left: content::COAL_INGOTS,
             ingots_out: 0,
             smelt_done_at: Some(done),
-        });
+        }));
         // Armed here (ADR 0046): the first wake finds `done` still ahead and leaves the timer.
         w.wake_at(id, done);
     }

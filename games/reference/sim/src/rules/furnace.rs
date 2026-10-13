@@ -12,14 +12,16 @@
 use engine::game::{EntityId, PlayerId, TickCx, WorldRead, WorldWrite};
 use engine::world::TilePos;
 
-use crate::{Furnace, RefGame, RefReject, content};
+use crate::{Furnace, RefEntity, RefGame, RefReject, content};
 use content::ItemId;
 
-/// The furnace at `at`, with its id: `NoFurnaceHere` when the tile has no occupant.
+/// The furnace at `at`, with its id: `NoFurnaceHere` when the tile has no occupant or a belt (M51).
 fn furnace_at(w: &dyn WorldRead<RefGame>, at: TilePos) -> Result<(EntityId, Furnace), RefReject> {
     let id = w.entity_at(at)?.ok_or(RefReject::NoFurnaceHere)?;
-    let f = *w.entity(id)?.ok_or(RefReject::NoFurnaceHere)?;
-    Ok((id, f))
+    match w.entity(id)? {
+        Some(RefEntity::Furnace(f)) => Ok((id, *f)),
+        _ => Err(RefReject::NoFurnaceHere),
+    }
 }
 
 /// `apply(FurnaceDeposit)`: a furnace at `at`, `item` iron/coal/wood, `1 <= count <= held`, the slot
@@ -60,7 +62,7 @@ pub fn deposit(
     *slot += count as u16; // <= SLOT_CAP by the check above.
     let mut next_player = player;
     next_player.inventory.0[item.idx()] -= count;
-    w.put_entity(id, next);
+    w.put_entity(id, RefEntity::Furnace(next));
     w.put_player(who, next_player);
     Ok(())
 }
@@ -78,7 +80,7 @@ pub fn take(w: &mut dyn WorldWrite<RefGame>, who: PlayerId, at: TilePos) -> Resu
     next_player
         .inventory
         .add(ItemId::Ingot, u32::from(furnace.ingots_out));
-    w.put_entity(id, next);
+    w.put_entity(id, RefEntity::Furnace(next));
     w.put_player(who, next_player);
     Ok(())
 }
@@ -107,7 +109,8 @@ pub fn pick_up(
     Ok(())
 }
 
-/// The tick rule: one [`advance`] per woken furnace, then one per due timer.
+/// The tick rule: one [`advance`] per woken entity, then one per due timer. A belt's spawn or put
+/// wakes it here too; `advance` ignores it (M51: belts have no tick rule until M52 maps lines).
 pub fn tick(cx: &mut TickCx<'_, RefGame>) {
     while let Some(id) = cx.next_woken() {
         advance(cx, id);
@@ -122,8 +125,8 @@ pub fn tick(cx: &mut TickCx<'_, RefGame>) {
 /// idle with iron, room in the output slot (`SLOT_CAP`) and either burn left or fuel to light (coal first), light it and schedule the next
 /// finish; otherwise sleep with no timer. At most one `put_entity`, and none when nothing changed.
 pub fn advance(cx: &mut TickCx<'_, RefGame>, id: EntityId) {
-    let Some(mut f) = cx.entity(id).ok().flatten().copied() else {
-        return; // despawned before this tick got to it.
+    let Some(RefEntity::Furnace(mut f)) = cx.entity(id).ok().flatten().copied() else {
+        return; // despawned before this tick got to it, or a belt.
     };
     let now = cx.tick();
     let before = f;
@@ -159,6 +162,6 @@ pub fn advance(cx: &mut TickCx<'_, RefGame>, id: EntityId) {
         cx.cancel_wake(id); // sleeping: no timer left behind.
     }
     if f != before {
-        cx.put_entity(id, f);
+        cx.put_entity(id, RefEntity::Furnace(f));
     }
 }

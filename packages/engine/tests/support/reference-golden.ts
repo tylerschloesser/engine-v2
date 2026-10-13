@@ -35,7 +35,25 @@ export function readFullGame(): { meta: FullGameGolden; frames: Uint8Array } {
 }
 
 export function readWorldJson(): { seed: string; worldgen: unknown } {
-  return JSON.parse(readFileSync(WORLD_JSON, 'utf8')) as { seed: string; worldgen: unknown }
+  // The world's identity only: `world.json` also declares transport caps (M51), which never move a
+  // hash (0079 §1).
+  const w = JSON.parse(readFileSync(WORLD_JSON, 'utf8')) as { seed: string; worldgen: unknown }
+  return { seed: w.seed, worldgen: w.worldgen }
+}
+
+/** `world.json`'s transport caps (M51, 0079 §5): every world the reference game's tests build
+ * declares them (`refHarness`, `startReferenceServer`, the engine-side reference scenarios). */
+export function readWorldCaps(): { maxLines: number; maxItems: number } {
+  const w = JSON.parse(readFileSync(WORLD_JSON, 'utf8')) as { maxLines: unknown; maxItems: unknown }
+  for (const [k, v] of [
+    ['maxLines', w.maxLines],
+    ['maxItems', w.maxItems],
+  ] as const) {
+    if (typeof v !== 'number' || !Number.isInteger(v) || v <= 0) {
+      throw new Error(`world.json: ${k} must be a positive integer, got ${JSON.stringify(v)}`)
+    }
+  }
+  return { maxLines: w.maxLines as number, maxItems: w.maxItems as number }
 }
 
 /** The first checkpoint where `got` differs from `want`, or `null`: what a failing replay reports. */

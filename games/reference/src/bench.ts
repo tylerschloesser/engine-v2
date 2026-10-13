@@ -36,6 +36,11 @@ export function benchHost(scale: number): Host {
       params: {
         ...DEFAULT_WORLD,
         worldgen: { bench: scale },
+        // No transport caps (M51): the large save has no belts, and the recommended caps would
+        // reserve about 20 MiB more against `mem.simHighWaterLargeSave` in the 96 MiB arena.
+        // Revisit when the bench world gets belts.
+        maxLines: 0,
+        maxItems: 0,
         maxEntities: Math.floor(262_144 / scale),
         maxModifiedTiles: Math.floor(1_048_576 / scale),
       },

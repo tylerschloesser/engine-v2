@@ -41,7 +41,7 @@ fn counts(sim: &Sim<RefGame>) -> (u32, u32, u32, u32) {
     let store = sim.authority().store();
     let chunks: BTreeSet<(i32, i32)> = store
         .entities()
-        .map(|(_, f)| (f.origin.x >> 5, f.origin.y >> 5))
+        .map(|(_, e)| (e.origin().x >> 5, e.origin().y >> 5))
         .collect();
     (
         store.entity_count(),
@@ -54,7 +54,8 @@ fn counts(sim: &Sim<RefGame>) -> (u32, u32, u32, u32) {
 /// Furnaces per `smelt_done_at` phase (`(deadline - 2) % SMELT`).
 fn phase_histogram(sim: &Sim<RefGame>) -> Vec<u32> {
     let mut h = vec![0u32; content::SMELT.0 as usize];
-    for (_, f) in sim.authority().store().entities() {
+    for (_, e) in sim.authority().store().entities() {
+        let f = e.as_furnace().expect("the large save holds furnaces only");
         let Tick(d) = f
             .smelt_done_at
             .expect("every bench furnace carries a deadline");
@@ -123,10 +124,19 @@ fn large_save_builder_is_deterministic() {
         .authority()
         .store()
         .entities()
+        .filter_map(|(id, e)| Some((id, e.as_furnace()?)))
         .min_by_key(|(_, f)| f.smelt_done_at)
         .map(|(id, f)| (id, f.smelt_done_at.unwrap()))
         .unwrap();
-    let ingots = |s: &Sim<RefGame>| s.authority().store().entity(first.0).unwrap().ingots_out;
+    let ingots = |s: &Sim<RefGame>| {
+        s.authority()
+            .store()
+            .entity(first.0)
+            .unwrap()
+            .as_furnace()
+            .unwrap()
+            .ingots_out
+    };
     let mut out0 = Vec::new();
     while sim.tick().0 + 1 < first.1.0 {
         sim.step(&[], &mut out0);

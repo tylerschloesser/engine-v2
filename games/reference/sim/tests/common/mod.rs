@@ -155,8 +155,18 @@ impl RefScenario {
     }
 
     /// The furnace whose footprint covers `at` on the host, by value (Provides:
-    /// `RefScenario::furnace_at`).
+    /// `RefScenario::furnace_at`); `None` when the tile is empty or holds a belt.
     pub fn furnace_at(&self, at: TilePos) -> Option<reference_sim::Furnace> {
+        self.entity_value_at(at)?.as_furnace().copied()
+    }
+
+    /// The belt on `at` on the host, by value (M51); `None` when the tile is empty or a furnace's.
+    pub fn belt_at(&self, at: TilePos) -> Option<reference_sim::Belt> {
+        self.entity_value_at(at)?.as_belt().copied()
+    }
+
+    /// The entity whose footprint covers `at` on the host, by value.
+    pub fn entity_value_at(&self, at: TilePos) -> Option<reference_sim::RefEntity> {
         let id = self.entity_at(at)?;
         self.sim
             .authority()
@@ -169,7 +179,9 @@ impl RefScenario {
     /// [`Self::give`]): reaches states that would take 999 smelts. The put wakes the furnace.
     pub fn put_furnace(&mut self, at: TilePos, f: reference_sim::Furnace) {
         let id = self.entity_at(at).expect("a furnace is there");
-        self.sim.authority_mut().put_entity(id, f);
+        self.sim
+            .authority_mut()
+            .put_entity(id, reference_sim::RefEntity::Furnace(f));
     }
 
     /// The host's world as a plain `&dyn WorldRead` (what `can_place` takes).
@@ -219,6 +231,60 @@ impl RefScenario {
             )
             .expect("host reads are total");
         n
+    }
+
+    /// Every entity the host holds near the origin (`furnace_count`'s square), ascending id.
+    pub fn entities(&self) -> Vec<(engine::game::EntityId, reference_sim::RefEntity)> {
+        let r = 200;
+        let mut all = Vec::new();
+        self.sim
+            .authority()
+            .entities_in(
+                TileRect::new(TilePos::new(-r, -r), TilePos::new(r, r)),
+                &mut |id, e| all.push((id, *e)),
+            )
+            .expect("host reads are total");
+        all.sort_by_key(|(id, _)| id.0);
+        all.dedup_by_key(|(id, _)| id.0);
+        all
+    }
+
+    /// `PlaceBelt { at, dir, kind }` for `who` (M51).
+    pub fn place_belt(
+        &mut self,
+        who: PlayerId,
+        at: TilePos,
+        dir: reference_sim::Dir,
+        kind: reference_sim::BeltKind,
+    ) -> Result<(), RefReject> {
+        self.dispatch(
+            who,
+            RefAction::PlaceBelt {
+                at: TileXY::from_tile(at),
+                dir,
+                kind,
+            },
+        )
+    }
+
+    /// `RotateBelt { at }` for `who` (M51).
+    pub fn rotate_belt(&mut self, who: PlayerId, at: TilePos) -> Result<(), RefReject> {
+        self.dispatch(
+            who,
+            RefAction::RotateBelt {
+                at: TileXY::from_tile(at),
+            },
+        )
+    }
+
+    /// `PickUpBelt { at }` for `who` (M51).
+    pub fn pick_up_belt(&mut self, who: PlayerId, at: TilePos) -> Result<(), RefReject> {
+        self.dispatch(
+            who,
+            RefAction::PickUpBelt {
+                at: TileXY::from_tile(at),
+            },
+        )
     }
 
     /// Makes `w` x `h` tiles from `min` plain grass with no resource (native-test-only, like

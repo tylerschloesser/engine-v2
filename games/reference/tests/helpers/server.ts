@@ -15,7 +15,7 @@ import {
 const GAME_DIR = fileURLToPath(new URL('../../sim/target/engine/release', import.meta.url))
 const WORLD = JSON.parse(
   readFileSync(fileURLToPath(new URL('../../world.json', import.meta.url)), 'utf8'),
-) as { seed: string; worldgen: unknown }
+) as { seed: string; worldgen: unknown; maxLines: number; maxItems: number }
 
 export type ReferenceServer = TestServer
 
@@ -35,7 +35,13 @@ export function startReferenceServer(opts: StartReferenceServerOptions): Promise
     fixture: GAME_DIR,
     manualTimer: opts.manualTimer,
     worldId: 'reference-test',
-    params: { seed: opts.seed ?? WORLD.seed, worldgen: WORLD.worldgen },
+    // `world.json`'s transport caps (M51), as every world the game builds.
+    params: {
+      seed: opts.seed ?? WORLD.seed,
+      worldgen: WORLD.worldgen,
+      maxLines: WORLD.maxLines,
+      maxItems: WORLD.maxItems,
+    },
     ...(opts.joinKey !== undefined ? { joinKey: opts.joinKey } : {}),
     ...(opts.maxPlayers !== undefined ? { maxPlayers: opts.maxPlayers } : {}),
     ...(opts.port !== undefined ? { port: opts.port } : {}),

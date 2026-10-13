@@ -26,13 +26,17 @@ const DROP_FOR_TICKS = 800
 /** The longest a client takes to dial again after an outage (dead timer plus the capped backoff). */
 const REDIAL_TICKS = 220
 /**
- * A tight arena, not the 96 MiB default: the soak's live set is under 5 MiB (a 4 MiB arena traps in
- * `engine_init`, 5 MiB passes with zero grows: probed), so 8 MiB leaves 60 % headroom and a leak of
- * 3 MiB over the 30 minutes (about 100 B a tick) exhausts it. With the default arena the same leak
- * would need 90 MiB, and "memory flat" could not fail for anything small. The module exposes no live-byte
- * accessor (0014), so the reservation is the detector: a dev build traps when it is exceeded.
+ * A tight arena, not the 96 MiB default, and small transport caps (`SOAK_CAPS`, about 0.7 MiB
+ * reserved; `world.json`'s recommended ones reserve about 20 MiB, more than the arena). Probed
+ * 2026-10-12 (the arena that traps, then the one that passes): 6.5 MiB traps and 7 MiB passes with
+ * these caps (5.5 and 6 MiB with none), so the live set is 6.5 to 7 MiB and 9 MiB leaves 2 to
+ * 2.5 MiB: a leak of about 60 B a tick over the 30 minutes (36,000 ticks) exhausts it. With the default arena the
+ * same leak would need about 89 MiB, and "memory flat" could not fail for anything small. The module
+ * exposes no live-byte accessor (0014), so the reservation is the detector: a dev build traps when
+ * it is exceeded.
  */
-const SOAK_ARENA_BYTES = 8 << 20
+const SOAK_ARENA_BYTES = 9 << 20
+const SOAK_CAPS = { maxLines: 1_024, maxItems: 8_192 }
 const standBy = (o: Tile): Tile => ({ x: o.x - 5, y: o.y })
 
 /** mulberry32: a seeded stream for the tours (the harness's own seed drives the conditioner). */
@@ -149,7 +153,7 @@ test('soak-netcode @slow', async () => {
     seed,
     conditions: { latencyMs: 60, jitterMs: 20 },
     hashAll: false,
-    ...{ world: { arenaBytes: SOAK_ARENA_BYTES } },
+    ...{ world: { arenaBytes: SOAK_ARENA_BYTES, params: SOAK_CAPS } },
   })
   try {
     const { h } = r

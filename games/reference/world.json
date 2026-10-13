@@ -1,4 +1,6 @@
 {
   "seed": "6840143426475589698",
-  "worldgen": {}
+  "worldgen": {},
+  "maxLines": 32768,
+  "maxItems": 262144
 }

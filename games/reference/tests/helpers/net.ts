@@ -10,11 +10,18 @@ import {
   worldServerTestHandle,
 } from 'engine/test'
 import { gameCrateBuildDir } from '../../../../packages/engine/tests/support/fixtures.js'
-import { readWorldJson } from '../../../../packages/engine/tests/support/reference-golden.js'
+import {
+  readWorldCaps,
+  readWorldJson,
+} from '../../../../packages/engine/tests/support/reference-golden.js'
 import type { RefUiState } from './game.js'
 import { headlessDriver } from './script.js'
 
 export type RefDriver = ReturnType<typeof headlessDriver>
+
+/** `world.json`'s transport caps (M51, 0079 §5): every `refHarness` world declares them unless a
+ * scenario overrides `world.params` (the soak's small caps). */
+export const WORLD_CAPS = readWorldCaps()
 
 export type RefHarnessOptions = {
   clients: number
@@ -54,7 +61,16 @@ export async function refHarness(opts: RefHarnessOptions): Promise<RefHarness> {
     ...(opts.transport ? { transport: opts.transport } : {}),
     ...(opts.hashAll !== undefined ? { hashAll: opts.hashAll } : {}),
     ...(opts.secrets ? { secrets: opts.secrets } : {}),
-    world: { params: { worldgen: world.worldgen }, ...opts.world },
+    // `world.json`'s worldgen and transport caps (M51); `opts.world.params` overrides either.
+    world: {
+      ...opts.world,
+      params: {
+        worldgen: world.worldgen,
+        maxLines: WORLD_CAPS.maxLines,
+        maxItems: WORLD_CAPS.maxItems,
+        ...opts.world?.params,
+      },
+    },
   })
   try {
     opts.cameras?.forEach((cam, i) => {

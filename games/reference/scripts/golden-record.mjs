@@ -43,7 +43,10 @@ const h = await createNetHarness({
   seed: 3405,
   worldSeed: world.seed,
   clients: 1,
-  world: { params: { worldgen: world.worldgen } },
+  // The declared transport caps (M51): they reserve memory and never move a hash (0079 §1).
+  world: {
+    params: { worldgen: world.worldgen, maxLines: world.maxLines, maxItems: world.maxItems },
+  },
 })
 let ticks
 let liveHash

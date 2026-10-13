@@ -4,10 +4,158 @@
   "padding": 2,
   "sprites": {
     "0": {
+      "name": "furnace",
       "rect": [2, 2, 32, 32],
       "pivot": [0, 0],
       "size": [2, 2],
       "frames": 2
+    },
+    "1": {
+      "name": "belt/straight/east",
+      "rect": [2, 38, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "2": {
+      "name": "belt/straight/south",
+      "rect": [2, 58, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "3": {
+      "name": "belt/straight/north",
+      "rect": [2, 78, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "4": {
+      "name": "belt/curveLeft/east",
+      "rect": [2, 98, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "5": {
+      "name": "belt/curveLeft/south",
+      "rect": [2, 118, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "6": {
+      "name": "belt/curveLeft/north",
+      "rect": [2, 138, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "7": {
+      "name": "belt/curveRight/east",
+      "rect": [2, 158, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "8": {
+      "name": "belt/curveRight/south",
+      "rect": [2, 178, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "9": {
+      "name": "belt/curveRight/north",
+      "rect": [2, 198, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "10": {
+      "name": "belt/spawner/east",
+      "rect": [2, 218, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "11": {
+      "name": "belt/spawner/south",
+      "rect": [2, 238, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "12": {
+      "name": "belt/spawner/north",
+      "rect": [2, 258, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "13": {
+      "name": "belt/despawner/east",
+      "rect": [2, 278, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "14": {
+      "name": "belt/despawner/south",
+      "rect": [2, 298, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "15": {
+      "name": "belt/despawner/north",
+      "rect": [2, 318, 16, 16],
+      "pivot": [0, 0],
+      "size": [1, 1],
+      "frames": 8
+    },
+    "16": {
+      "name": "item/stone",
+      "rect": [2, 338, 8, 8],
+      "pivot": [0.5, 0.5],
+      "size": [0.5, 0.5],
+      "frames": 1
+    },
+    "17": {
+      "name": "item/iron",
+      "rect": [14, 338, 8, 8],
+      "pivot": [0.5, 0.5],
+      "size": [0.5, 0.5],
+      "frames": 1
+    },
+    "18": {
+      "name": "item/wood",
+      "rect": [26, 338, 8, 8],
+      "pivot": [0.5, 0.5],
+      "size": [0.5, 0.5],
+      "frames": 1
+    },
+    "19": {
+      "name": "item/coal",
+      "rect": [38, 338, 8, 8],
+      "pivot": [0.5, 0.5],
+      "size": [0.5, 0.5],
+      "frames": 1
+    },
+    "20": {
+      "name": "item/furnace",
+      "rect": [50, 338, 8, 8],
+      "pivot": [0.5, 0.5],
+      "size": [0.5, 0.5],
+      "frames": 1
+    },
+    "21": {
+      "name": "item/ingot",
+      "rect": [62, 338, 8, 8],
+      "pivot": [0.5, 0.5],
+      "size": [0.5, 0.5],
+      "frames": 1
     }
   }
 }

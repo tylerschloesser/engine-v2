@@ -8,7 +8,7 @@ use common::RefScenario;
 use engine::game::PlayerId;
 use engine::world::TilePos;
 use reference_sim::content::{self, ItemId};
-use reference_sim::rules::place::can_place;
+use reference_sim::rules::place::can_place_furnace;
 use reference_sim::{Furnace, RefAction, RefReject, TileXY};
 
 const P1: PlayerId = PlayerId(1);
@@ -262,7 +262,7 @@ fn pickup_empty_despawns_and_returns_item() {
         assert_eq!(s.entity_at(p), None, "({dx},{dy}) released");
     }
     assert!(
-        can_place(s.read(), ORIGIN).unwrap(),
+        can_place_furnace(s.read(), ORIGIN).unwrap(),
         "the four tiles are buildable again"
     );
     assert_asleep(&mut s, 2 * SMELT);

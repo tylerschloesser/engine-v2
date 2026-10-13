@@ -2,7 +2,7 @@ import { deepStrictEqual, ok, strictEqual } from 'node:assert'
 import type { loadGame } from '../../src/server-node.js'
 import type { deleteWorld, exportWorld, importWorld } from '../../src/storage/archive.js'
 import type { createNetHarness, NetHarness, worldServerTestHandle } from '../../src/test.js'
-import { readLandmarks, readWorldJson } from './reference-golden.js'
+import { readLandmarks, readWorldCaps, readWorldJson } from './reference-golden.js'
 
 /** What the caller supplies, so one body runs from `src/` (Vitest, Node) and from `dist/` (the Bun
  * leg, `bun-leg.mjs`): the functions themselves, plus the reference build's directory. */
@@ -49,6 +49,8 @@ async function harness(
       worldId: WORLD_ID,
       params: {
         worldgen: world.worldgen,
+        // `world.json`'s transport caps (M51), as every world the game builds.
+        ...readWorldCaps(),
         ...(opts.maxEntities !== undefined ? { maxEntities: opts.maxEntities } : {}),
       },
     },

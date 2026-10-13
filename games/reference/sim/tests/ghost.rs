@@ -87,7 +87,7 @@ fn ghosts(
     client: &RefClient,
     world: &World<'_>,
     registry: &Registry,
-    entities: &BTreeMap<EntityId, Furnace>,
+    entities: &BTreeMap<EntityId, RefEntity>,
     cursor: Option<TilePos>,
 ) -> (u32, Vec<GhostRec>, u64) {
     let remote = RemotePresences::<RefGame>::new();
@@ -258,7 +258,10 @@ fn ui_reports_placing_and_can_build() {
 fn extract_hash_ghost_and_furnace() {
     let r = registry();
     let mut entities = BTreeMap::new();
-    entities.insert(EntityId(1), Furnace::new(TileXY { x: -3, y: 4 }));
+    entities.insert(
+        EntityId(1),
+        RefEntity::Furnace(Furnace::new(TileXY { x: -3, y: 4 })),
+    );
     let c = placing_client();
     let (n, found, hash) = ghosts(
         &c,
@@ -274,7 +277,7 @@ fn extract_hash_ghost_and_furnace() {
 
 fn cursor_view<'a>(
     w: &'a World<'a>,
-    entities: &'a BTreeMap<EntityId, Furnace>,
+    entities: &'a BTreeMap<EntityId, RefEntity>,
     registry: &'a Registry,
     remote: &'a RemotePresences<RefGame>,
 ) -> FrameView<'a, RefGame> {
@@ -322,4 +325,118 @@ fn placing_ends_when_the_last_furnace_is_gone() {
     let mut region = vec![0u8; REGION_BYTES];
     let n = out.sort_into(&mut region, 0.0, None);
     assert_eq!(n, 2, "circle + ring only, no ghost");
+}
+
+/// M51 tools: `PLACE_MODE`'s `a` picks the tool (an unknown value is ignored), `ROTATE_TOOL` turns
+/// the direction, `Ui.tool` reports both, and only the furnace tool ends when no furnace is left
+/// (the belt tools are free). Fails if a belt tool is tied to the inventory or `Ui.tool` drops the
+/// direction.
+#[test]
+fn belt_tools_report_and_survive_an_empty_inventory() {
+    use reference_sim::{BeltKind, Dir, Tool, UiPlacing};
+    let r = registry();
+    let none = BTreeMap::new();
+    let remote = RemotePresences::<RefGame>::new();
+    let w = world(&r, grass); // no furnace item
+    let ui_of = |c: &RefClient| {
+        let mut ui = RefUi::default();
+        c.ui(&cursor_view(&w, &none, &r, &remote), &mut ui);
+        (ui.placing, ui.tool)
+    };
+    let mut c = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
+    c.apply_local(&game_event(
+        content::local::PLACE_MODE,
+        content::local::TOOL_BELT,
+    ));
+    c.apply_local(&game_event(content::local::ROTATE_TOOL, 0));
+    c.apply_local(&game_event(content::local::ROTATE_TOOL, 0));
+    let belt = UiPlacing {
+        tool: Tool::Belt(BeltKind::Belt),
+        dir: Dir::West,
+    };
+    assert_eq!(ui_of(&c), (true, Some(belt)), "free: stays on");
+    assert_eq!(ui_of(&c), (true, Some(belt)), "and again");
+    c.apply_local(&game_event(content::local::PLACE_MODE, 9));
+    assert_eq!(c.tool(), Some(belt), "an unknown tool code is ignored");
+    c.apply_local(&game_event(
+        content::local::PLACE_MODE,
+        content::local::TOOL_DESPAWNER,
+    ));
+    assert_eq!(
+        c.tool().map(|t| t.tool),
+        Some(Tool::Belt(BeltKind::Despawner))
+    );
+    c.apply_local(&game_event(
+        content::local::PLACE_MODE,
+        content::local::TOOL_FURNACE,
+    ));
+    assert_eq!(
+        ui_of(&c),
+        (false, None),
+        "the furnace tool ends with no furnace to place"
+    );
+}
+
+/// Iron at x >= 7, grass elsewhere.
+fn ore(p: TilePos) -> Result<Tile, Unknown> {
+    Ok(if p.x >= 7 {
+        Tile::new(content::GRASS, content::IRON, 10)
+    } else {
+        Tile::new(content::GRASS, 0, 0)
+    })
+}
+
+/// The colour of the one cursor-anchored record (the ghost, quad or sprite) after one `extract`.
+fn ghost_color(client: &RefClient, world: &World<'_>, registry: &Registry, cursor: TilePos) -> u32 {
+    let none = BTreeMap::new();
+    let remote = RemotePresences::<RefGame>::new();
+    let view = FrameView::new(
+        world as &dyn WorldRead<RefGame>,
+        Default::default(),
+        PlayerId(1),
+        &none,
+        registry,
+        TileRect::new(TilePos::new(-10, -10), TilePos::new(10, 10)),
+        20.0,
+        40.0,
+        Some(cursor),
+        TilePos::new(0, 0),
+        0.0,
+        reference_sim::PlayerPresence::default(),
+        &remote,
+    );
+    let mut out = DrawList::new();
+    out.begin_frame(TilePos::new(0, 0));
+    client.extract(&view, &mut out);
+    let mut region = vec![0u8; REGION_BYTES];
+    let n = out.sort_into(&mut region, 0.0, None);
+    let found: Vec<u32> = (0..n as usize)
+        .map(|i| &region[HEADER_BYTES + i * 32..HEADER_BYTES + (i + 1) * 32])
+        .filter(|r| r[19] & ANCHOR_CURSOR_TILE != 0)
+        .map(|r| u32::from_le_bytes(r[20..24].try_into().unwrap()))
+        .collect();
+    assert_eq!(found.len(), 1, "one ghost");
+    found[0]
+}
+
+/// The belt ghost asks the belt rule (README "Belts": no belt on a resource), not the furnace's:
+/// over iron the belt tool is invalid where the furnace tool is valid (R1); grass is valid for
+/// both; an unheld tile is neutral. Fails if `Tool::Belt` tints by `can_place_furnace`.
+#[test]
+fn belt_ghost_tint_follows_the_belt_rule() {
+    let r = registry();
+    let mut belt = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
+    belt.apply_local(&game_event(
+        content::local::PLACE_MODE,
+        content::local::TOOL_BELT,
+    ));
+    let furnace = placing_client();
+    let (valid, invalid, unknown) = (0x9040_ff40, 0x9040_40ff, 0x90c0_c0c0);
+    let iron = world(&r, ore);
+    assert_eq!(ghost_color(&furnace, &iron, &r, TilePos::new(7, 2)), valid);
+    assert_eq!(ghost_color(&belt, &iron, &r, TilePos::new(7, 2)), invalid);
+    assert_eq!(ghost_color(&belt, &iron, &r, TilePos::new(6, 2)), valid);
+    let unheld = world(&r, edge);
+    assert_eq!(ghost_color(&belt, &unheld, &r, TilePos::new(7, 2)), unknown);
+    assert_eq!(ghost_color(&belt, &unheld, &r, TilePos::new(6, 2)), valid);
 }

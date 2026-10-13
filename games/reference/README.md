@@ -63,7 +63,7 @@ Draft (2026-10-11): Factorio-inspired belts, planned in `PLAN.md` and decided in
 
 ### Not implemented
 
-The Belts section: planned (`PLAN.md`), not yet built. Every other requirement above is met by the code.
+The Belts section: belt, spawner and despawner entities with their placement, rotation and pick-up actions, art and transport caps are built (M51); construction-mode controls for them are M51b, lines and shapes M52, spawner configuration and items on belts M53, splitters M54, undergrounds M55 (`PLAN.md`). Every other requirement above is met by the code.
 
 ### Open questions
 
