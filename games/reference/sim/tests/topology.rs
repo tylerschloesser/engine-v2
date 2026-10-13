@@ -548,9 +548,11 @@ fn topology_surgery_count_per_edit() {
 /// The incremental mapping equals the from-scratch one (`RefScenario::assert_topology`) after every
 /// tick of 1,500 random edits on an 8 x 8 patch (a fixed LCG): placements (M54: one in four a
 /// splitter; M55: one in four an underground end, either kind; 415 placed, 68 of them splitters and
-/// 117 undergrounds, a paired entrance standing on 461 of the ticks), rotations and pick-ups, one to three in a tick (two
-/// edits on neighbouring tiles, or on one tile, served by the same tick). Fails if any reshape, cut or join leaves a run, a curve, an output or a shape behind what
-/// the belts say, or leaks a line.
+/// 117 undergrounds, a paired entrance standing on 660 of the ticks: 461 before M60, when a rotation
+/// unpaired an end instead of flipping the pair), rotations and pick-ups, one to three in a tick
+/// (two edits on neighbouring tiles, or on one tile, served by the same tick). Fails if any reshape,
+/// cut or join leaves a run, a curve, an output or a shape behind what the belts say, or leaks a
+/// line.
 #[test]
 fn topology_random_edits_stay_canonical() {
     let mut s = world();

@@ -32,7 +32,7 @@ export const LANDMARKS = landmarks as {
   resources: Record<Resource, Tile>
 }
 
-/** `Dir::cw` (`RotateBelt`'s turn); a splitter turns 180 degrees (M54). */
+/** `Dir::cw` (`RotateBelt`'s turn); a splitter (M54) and an underground end (M60) turn 180 degrees. */
 const CW = { East: 'South', South: 'West', West: 'North', North: 'East' } as const
 const OPPOSITE = { East: 'West', South: 'North', West: 'East', North: 'South' } as const
 
@@ -716,8 +716,13 @@ export async function domDriver(page: Page): Promise<ScriptDriver> {
       await popoverClick(at, '[data-belt-rotate]')
       await untilBelts('RotateBelt landed', () => true)
       const now = await g.pumpUntil(page, (u) => u?.belt?.dir !== was)
-      // A belt turns clockwise, a splitter 180 degrees in place (M54).
-      const turn = open?.kind === 'Splitter' ? OPPOSITE : CW
+      // A belt turns clockwise, a splitter 180 degrees in place (M54), an underground end flips
+      // (180 degrees, its kind swapped, its paired end with it: M60).
+      const half =
+        open?.kind === 'Splitter' ||
+        open?.kind === 'UndergroundIn' ||
+        open?.kind === 'UndergroundOut'
+      const turn = half ? OPPOSITE : CW
       expect(now?.belt?.dir, 'turned').toBe(turn[was ?? 'East'])
     },
     async pickUpBelt(at) {

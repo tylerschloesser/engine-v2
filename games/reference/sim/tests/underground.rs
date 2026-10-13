@@ -2,8 +2,9 @@
 //! `belts/docs/07` §3, §8): pairing (the nearest same-facing exit within four empty tiles, a nearer
 //! end stealing, perpendicular undergrounds transparent), the lines per lane (the entrance's back half,
 //! a hidden `(gap + 1) x 256` line without segments, the exit's front half), the unpaired ends, the
-//! hood filter on side-loads, rotation and pick-up destroying the hidden items, and items through a
-//! pair: the surface belt's travel time and capacity. Items come from spawners (the game's own path),
+//! hood filter on side-loads, rotation flipping both ends with their items mirrored (M60), pick-up
+//! destroying the hidden items, and items through a pair: the surface belt's travel time and
+//! capacity. Items come from spawners (the game's own path),
 //! so these run in the fast suite; the `test-hooks` case checks the item hook's hidden-lane
 //! addressing.
 
@@ -428,46 +429,329 @@ fn underground_sideload_hood() {
     }
 }
 
-/// Rotating an end turns that end only (`dir.cw()`, the README's assumed line; question 14 (a)): an
-/// entrance paired across gap 2 turned south is unpaired (its lines re-created, the hidden pair
-/// destroyed: four lines); turned three more times it faces east again and pairs anew (a new hidden
-/// pair). The exit turned south unpairs it again; the exit turned back east re-pairs. Fails if a
-/// rotation keeps the hidden lines, turns both ends, or leaves an entrance pointing at a line that is
-/// gone.
+/// Rotating either end of a pair flips both (M60, Tyler's 2026-10-13 answer: README "Belts",
+/// Rotating an underground): an entrance paired east across gap 2, rotated, is an exit facing west
+/// and its partner an entrance facing west, still paired across gap 2 the other way (the hidden
+/// lines `3 x 256`, the same six lines: each end's two and the two hidden, ids kept). Rotated again
+/// at the other tile (now the entrance) the pair is back as placed; rotated at its exit it flips
+/// again, and at the new exit back once more. Fails if a rotation turns 90 degrees, turns one end
+/// only, keeps the kind, unpairs the pair, or re-creates its lines.
 #[test]
-fn underground_rotate_unpairs() {
+fn underground_rotate_flips_both_ends() {
     let mut s = world();
     let (e, x) = (t(40, 50), t(43, 50));
     put(&mut s, e, Dir::East, IN);
     put(&mut s, x, Dir::East, OUT);
-    let before = (lanes(&s, e), assert_paired(&s, e, x, 2, "placed"));
-    s.rotate_belt(P1, e).unwrap();
-    assert_eq!(s.belt_at(e).unwrap().dir, Dir::South);
-    assert_eq!(s.belt_at(x).unwrap().dir, Dir::East, "the other end stays");
-    assert_unpaired(&s, e, "turned south");
-    assert_ne!(lanes(&s, e), before.0, "re-created");
-    for h in before.1 {
-        assert!(tr(&s).len(h).is_err(), "hidden {h:?} destroyed");
-    }
-    assert_eq!(tr(&s).lines_len(), 4);
-    s.assert_topology();
-    for _ in 0..3 {
-        s.rotate_belt(P1, e).unwrap();
-        s.assert_topology();
-    }
-    assert_eq!(s.belt_at(e).unwrap().dir, Dir::East);
-    assert_paired(&s, e, x, 2, "east again");
+    let h = assert_paired(&s, e, x, 2, "placed");
+    let (le, lx) = (lanes(&s, e), lanes(&s, x));
     assert_eq!(tr(&s).lines_len(), 6);
-
-    s.rotate_belt(P1, x).unwrap();
-    assert_unpaired(&s, e, "the exit turned south");
-    assert_eq!(tr(&s).lines_len(), 4);
-    s.assert_topology();
-    for _ in 0..3 {
-        s.rotate_belt(P1, x).unwrap();
+    let ends = |s: &RefScenario| {
+        let (a, b) = (s.belt_at(e).unwrap(), s.belt_at(x).unwrap());
+        [(a.dir, a.kind), (b.dir, b.kind)]
+    };
+    // Rotated at the entrance (e), the new entrance (x), the exit (x) and the new exit (e): each a
+    // flip of the whole pair.
+    for (i, at) in [e, x, x, e].into_iter().enumerate() {
+        s.rotate_belt(P1, at).unwrap();
+        let flipped = i % 2 == 0;
+        let what = format!("rotation {i} at {at:?}");
+        if flipped {
+            assert_eq!(ends(&s), [(Dir::West, OUT), (Dir::West, IN)], "{what}");
+            assert_eq!(assert_paired(&s, x, e, 2, &what), h, "{what}: hidden kept");
+        } else {
+            assert_eq!(ends(&s), [(Dir::East, IN), (Dir::East, OUT)], "{what}");
+            assert_eq!(assert_paired(&s, e, x, 2, &what), h, "{what}: hidden kept");
+        }
+        assert_eq!(
+            (lanes(&s, e), lanes(&s, x)),
+            (le, lx),
+            "{what}: end lines kept"
+        );
+        assert_eq!(tr(&s).lines_len(), 6, "{what}: lines");
         s.assert_topology();
     }
-    assert_paired(&s, e, x, 2, "the exit east again");
+}
+
+/// The items of a pair along its whole path, per lane: `(item, position)` from the exit's front
+/// edge (the exit's half 0..128, the hidden line from 128, the entrance's half from `128 + hidden`),
+/// front to back.
+fn path_items(s: &RefScenario, e: TilePos, x: TilePos) -> [Vec<(u16, u32)>; 2] {
+    let h = hidden_lanes(tr(s), e).expect("paired");
+    let (le, lx) = (lanes(s, e), lanes(s, x));
+    let hl = tr(s).len(h[0]).unwrap();
+    let mut out = [Vec::new(), Vec::new()];
+    for (k, v) in out.iter_mut().enumerate() {
+        for (line, base) in [(lx[k], 0), (h[k], 128), (le[k], 128 + hl)] {
+            tr(s)
+                .items_in(line, &mut |i, p| v.push((i.0, base + p)))
+                .unwrap();
+        }
+    }
+    out
+}
+
+/// A flip keeps the pair's items (M60): a spawner feeds a pair across gap 2 (path 1,024 per lane)
+/// iron on lane 0 and coal on lane 1 at a lower rate for 40 ticks, is switched off, and the items
+/// jam at the exit's dead end (15 and 4, from position 0, 64 apart). Rotating the entrance mirrors
+/// every item along the whole path (`1,023 - pos`, the path reversed), on its own lane index, and
+/// in the same tick they move one tick's travel (24) toward the new exit, which dead-ends head-on
+/// into the spawner: nothing is destroyed, the count per lane is the same. Fails if a flip destroys
+/// or drops items, mirrors them about the wrong point (`1,024 - pos` puts the front item off the
+/// path and collides the next), or swaps lanes.
+#[test]
+fn underground_rotate_keeps_items_mirrored() {
+    let mut s = world();
+    let (f, e, x) = (t(39, 50), t(40, 50), t(43, 50));
+    put(&mut s, f, Dir::East, BeltKind::Spawner);
+    put(&mut s, e, Dir::East, IN);
+    put(&mut s, x, Dir::East, OUT);
+    s.set_spawner(P1, f, 0, IRON, SATURATE).unwrap();
+    s.set_spawner(P1, f, 1, ItemId::Coal as u8, 1).unwrap();
+    s.step_ticks(40);
+    for lane in 0..2 {
+        s.set_spawner(P1, f, lane, reference_sim::content::SPAWN_OFF, 0)
+            .unwrap();
+    }
+    s.step_ticks(300);
+    let before = path_items(&s, e, x);
+    let (n0, n1) = (before[0].len(), before[1].len());
+    assert_eq!((n0, n1), (15, 4), "jammed from the exit's front, 64 apart");
+    let destroyed = reference_sim::rules::belts::topology::belts_destroyed_items();
+    s.rotate_belt(P1, e).unwrap();
+    // Now the entrance is on `x` and the exit on `e`.
+    let after = path_items(&s, x, e);
+    for k in 0..2 {
+        let iron_or_coal = if k == 0 {
+            ItemId::Iron as u16 + 1
+        } else {
+            ItemId::Coal as u16 + 1
+        };
+        let mut want: Vec<(u16, u32)> =
+            before[k].iter().map(|&(i, p)| (i, 1023 - p - 24)).collect();
+        want.reverse();
+        assert_eq!(after[k], want, "lane {k}: mirrored, then one tick on");
+        assert!(
+            after[k].iter().all(|&(i, _)| i == iron_or_coal),
+            "lane {k} kept"
+        );
+    }
+    assert_eq!(
+        reference_sim::rules::belts::topology::belts_destroyed_items(),
+        destroyed,
+        "nothing destroyed"
+    );
+    s.assert_topology();
+}
+
+/// An unpaired end flips alone (M60): an entrance fed by a spawner, with no exit ahead, holds two
+/// items jammed at its hood (0 and 64 on lane 0); rotated, it is an exit facing west on the same
+/// two lines, its items mirrored on its half (`127 - pos`: 127 and 63) then moved one tick (103 and
+/// 39), head-on into the spawner. A lone exit five tiles below flips alone into an entrance facing
+/// west. An exit six tiles ahead of the entrance (beyond the span) is untouched. Fails if a lone
+/// end does not flip, re-creates its lines, loses its items, or turns a far end with it.
+#[test]
+fn underground_rotate_unpaired_end_flips_alone() {
+    let mut s = world();
+    let (f, e, far, lone) = (t(39, 50), t(40, 50), t(46, 50), t(40, 55));
+    put(&mut s, f, Dir::East, BeltKind::Spawner);
+    put(&mut s, e, Dir::East, IN);
+    put(&mut s, far, Dir::East, OUT);
+    put(&mut s, lone, Dir::East, OUT);
+    assert_unpaired(&s, e, "gap 5");
+    s.set_spawner(P1, f, 0, IRON, SATURATE).unwrap();
+    s.step_ticks(60);
+    s.set_spawner(P1, f, 0, reference_sim::content::SPAWN_OFF, 0)
+        .unwrap();
+    s.step_ticks(100);
+    let le = lanes(&s, e);
+    let items = |s: &RefScenario, l: LineId| {
+        let mut v = Vec::new();
+        tr(s).items_in(l, &mut |i, p| v.push((i.0, p))).unwrap();
+        v
+    };
+    let iron = ItemId::Iron as u16 + 1;
+    assert_eq!(
+        items(&s, le[0]),
+        [(iron, 0), (iron, 64)],
+        "jammed at the hood"
+    );
+    let lines = tr(&s).lines_len();
+    s.rotate_belt(P1, e).unwrap();
+    let b = s.belt_at(e).unwrap();
+    assert_eq!((b.dir, b.kind), (Dir::West, OUT));
+    assert_eq!(lanes(&s, e), le, "its lines kept");
+    assert_eq!(
+        items(&s, le[0]),
+        [(iron, 39), (iron, 103)],
+        "mirrored, one tick on"
+    );
+    assert_eq!(items(&s, le[1]), []);
+    let b = s.belt_at(far).unwrap();
+    assert_eq!((b.dir, b.kind), (Dir::East, OUT), "the far exit stays");
+    s.rotate_belt(P1, lone).unwrap();
+    let b = s.belt_at(lone).unwrap();
+    assert_eq!((b.dir, b.kind), (Dir::West, IN), "the lone exit flips");
+    assert_unpaired(&s, lone, "nothing west of it");
+    assert_eq!(tr(&s).lines_len(), lines);
+    s.assert_topology();
+}
+
+/// The exit's scan back (M60, `underground_other_end`) obeys pairing's own rules: (a) an entrance
+/// east at x = 40, an entrance facing west at x = 42 and an exit east at x = 43: the same-axis end
+/// at 42 ends the exit's scan (the entrance at 40 is not its partner: unpaired, it dead-ends), so
+/// rotating the exit flips it alone and the two entrances stay as placed; (b) an entrance six tiles
+/// behind an exit (x = 40 and 46, gap 5, one past the span): rotating the exit flips it alone.
+/// Fails if the scan passes a same-axis underground or reaches past `UNDERGROUND_MAX_GAP` + 1
+/// tiles (the far entrance would flip with the exit).
+#[test]
+fn underground_rotate_exit_scan_bounds() {
+    let ends = |s: &RefScenario, at: &[TilePos]| -> Vec<(Dir, BeltKind)> {
+        at.iter()
+            .map(|&t| {
+                let b = s.belt_at(t).unwrap();
+                (b.dir, b.kind)
+            })
+            .collect()
+    };
+    // (a) A blocking same-axis underground between.
+    let mut s = world();
+    let (e, y, x) = (t(40, 50), t(42, 50), t(43, 50));
+    put(&mut s, e, Dir::East, IN);
+    put(&mut s, y, Dir::West, IN);
+    put(&mut s, x, Dir::East, OUT);
+    assert_unpaired(&s, e, "(a) blocked by the end at 42");
+    s.rotate_belt(P1, x).unwrap();
+    assert_eq!(
+        ends(&s, &[e, y, x]),
+        [(Dir::East, IN), (Dir::West, IN), (Dir::West, IN)],
+        "(a) the exit flips alone"
+    );
+    s.assert_topology();
+    // (b) An entrance one tile past the span.
+    let mut s = world();
+    let (e, x) = (t(40, 50), t(46, 50));
+    put(&mut s, e, Dir::East, IN);
+    put(&mut s, x, Dir::East, OUT);
+    assert_unpaired(&s, e, "(b) gap 5");
+    s.rotate_belt(P1, x).unwrap();
+    assert_eq!(
+        ends(&s, &[e, x]),
+        [(Dir::East, IN), (Dir::West, IN)],
+        "(b) the exit flips alone"
+    );
+    s.assert_topology();
+}
+
+/// A world view holding only the columns `held` (a client's subscription edge), over a scenario's
+/// host state; it counts the puts `apply` makes (they go nowhere).
+struct Edge<'a> {
+    inner: &'a dyn engine::game::WorldRead<reference_sim::RefGame>,
+    held: std::ops::Range<i32>,
+    puts: usize,
+}
+
+impl engine::game::WorldRead<reference_sim::RefGame> for Edge<'_> {
+    fn tick(&self) -> engine::time::Tick {
+        self.inner.tick()
+    }
+    fn tile(&self, p: TilePos) -> Result<engine::world::Tile, engine::game::Unknown> {
+        if !self.held.contains(&p.x) {
+            return Err(engine::game::Unknown);
+        }
+        self.inner.tile(p)
+    }
+    fn traits_at(&self, p: TilePos) -> Result<engine::world::TraitSet, engine::game::Unknown> {
+        if !self.held.contains(&p.x) {
+            return Err(engine::game::Unknown);
+        }
+        self.inner.traits_at(p)
+    }
+    fn entity_at(
+        &self,
+        p: TilePos,
+    ) -> Result<Option<engine::game::EntityId>, engine::game::Unknown> {
+        if !self.held.contains(&p.x) {
+            return Err(engine::game::Unknown);
+        }
+        self.inner.entity_at(p)
+    }
+    fn entity(
+        &self,
+        id: engine::game::EntityId,
+    ) -> Result<Option<&reference_sim::RefEntity>, engine::game::Unknown> {
+        self.inner.entity(id)
+    }
+    fn player(&self, who: PlayerId) -> Result<&reference_sim::RefPlayer, engine::game::Unknown> {
+        self.inner.player(who)
+    }
+    fn global(&self) -> &reference_sim::RefGlobal {
+        self.inner.global()
+    }
+    fn entities_in(
+        &self,
+        _rect: engine::world::TileRect,
+        _f: &mut dyn FnMut(engine::game::EntityId, &reference_sim::RefEntity),
+    ) -> Result<(), engine::game::Unknown> {
+        Err(engine::game::Unknown)
+    }
+}
+
+impl engine::game::WorldWrite<reference_sim::RefGame> for Edge<'_> {
+    fn set_tile(&mut self, _p: TilePos, _t: engine::world::Tile) {
+        self.puts += 1;
+    }
+    fn spawn(&mut self, _e: reference_sim::RefEntity) -> engine::game::EntityId {
+        self.puts += 1;
+        engine::game::EntityId(u32::MAX)
+    }
+    fn put_entity(&mut self, _id: engine::game::EntityId, _e: reference_sim::RefEntity) {
+        self.puts += 1;
+    }
+    fn despawn(&mut self, _id: engine::game::EntityId) {
+        self.puts += 1;
+    }
+    fn put_player(&mut self, _who: PlayerId, _p: reference_sim::RefPlayer) {
+        self.puts += 1;
+    }
+    fn put_global(&mut self, _g: reference_sim::RefGlobal) {
+        self.puts += 1;
+    }
+    fn rng(&mut self) -> Result<&mut engine::rng::SimRng, engine::game::Unknown> {
+        Err(engine::game::Unknown)
+    }
+}
+
+/// A rotation reads the whole pairing scan before it writes (`.claude/rules/prediction.md`): with
+/// the pair's partner side not held (the tiles from x = 42 on unknown, as at a client's
+/// subscription edge), rotating the entrance on (40, 50) is `Unknown` (refused on the host,
+/// `NotPredictable` on a client) with no put; so is rotating the exit on (43, 50) with the tiles up
+/// to x = 41 unknown (its scan back). The control, everything held, writes two puts (both ends)
+/// from either end. The scenario is unchanged throughout (the view's puts go nowhere). Fails if a
+/// rotation guesses past an unknown tile (flips one end alone) or writes before its last read.
+#[test]
+fn underground_rotate_partner_unknown_is_refused() {
+    use reference_sim::rules::belt::rotate;
+    let mut s = world();
+    let (e, x) = (t(40, 50), t(43, 50));
+    put(&mut s, e, Dir::East, IN);
+    put(&mut s, x, Dir::East, OUT);
+    let hash = s.hash();
+    let mut edge = Edge {
+        inner: s.read(),
+        held: i32::MIN..42,
+        puts: 0,
+    };
+    assert_eq!(rotate(&mut edge, e), Err(reference_sim::RefReject::Unknown));
+    assert_eq!(edge.puts, 0, "the entrance: nothing written");
+    edge.held = 42..i32::MAX;
+    assert_eq!(rotate(&mut edge, x), Err(reference_sim::RefReject::Unknown));
+    assert_eq!(edge.puts, 0, "the exit: nothing written");
+    edge.held = i32::MIN..i32::MAX;
+    assert_eq!(rotate(&mut edge, e), Ok(()), "control: all held");
+    assert_eq!(edge.puts, 2, "control: both ends");
+    assert_eq!(rotate(&mut edge, x), Ok(()), "control: all held");
+    assert_eq!(edge.puts, 4, "control: both ends");
+    assert_eq!(s.hash(), hash, "the scenario untouched");
     s.assert_topology();
 }
 

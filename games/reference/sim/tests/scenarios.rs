@@ -303,10 +303,11 @@ fn balancer_4x4_one_output_blocked() {
 }
 
 /// The balancer's edits (for [`edit_during_flow`] and its twin): after 500 ticks of flow, splitter
-/// c picked up and re-placed 50 ticks later, the east entrance turned four times (south, west,
-/// north, east again: unpaired, its hidden lines destroyed, then paired again) and the belt at
-/// (2, 3) turned four times, 20 ticks apart, then 200 ticks. `assert_topology` and conservation
-/// after every tick; returns the destroyed count after each edit.
+/// c picked up and re-placed 50 ticks later, the east entrance turned four times (M60: each a flip
+/// of the pair (1, 3)-(4, 3), reversed, as placed, reversed, as placed; still paired, its items
+/// kept) and the belt at (2, 3) turned four times, 20 ticks apart, then 200 ticks.
+/// `assert_topology` and conservation after every tick; returns the destroyed count after each
+/// edit.
 fn run_edits(b: &mut Bed) -> Vec<u64> {
     let mut destroyed = Vec::new();
     let mut edit =
@@ -335,18 +336,23 @@ fn run_edits(b: &mut Bed) -> Vec<u64> {
 
 /// Edits during flow on the balancer ([`run_edits`]): every edit keeps the topology canonical
 /// (`assert_topology` after each) and conservation exact after every tick with the destroyed items
-/// counted: 16 on splitter c's eight lines, the entrance's turns 44, 1, 16 and 5 (its own items and
-/// its hidden lines' when the pair breaks), the belt's none (M59: its four turns keep the 8, 9, 9 and
-/// 10 items on its two lanes; before M59 they destroyed 8, 7, 0 and 7). Those 22 items no longer
-/// destroyed move the ledger at tick 1,023 from made 2,880 / sunk 2,513 / destroyed 104 to 2,868 /
-/// 2,523 / 82 (live 263 either way): 10 more sunk on the two outputs the belt feeds (303 + 302 and
-/// 304 + 303 become 306 + 305 twice) and 12 fewer made (the kept items hold the feed back where the
-/// destroyed ones left room). The layout is whole again at
-/// the end (tick 1,023) and its outputs sink again. The host's hash is the same across
+/// counted: 16 on splitter c's eight lines and nothing after: the entrance's four turns (M60: the
+/// pair flips with its items mirrored; before M60 each turned that end alone and destroyed 44, 1,
+/// 16 and 5, its own items and its hidden lines' when the pair broke) and the belt's (M59: its four
+/// turns keep the 8, 9, 9 and 10 items on its two lanes). Those 66 items no longer destroyed move
+/// the ledger at tick 1,023 from made 2,868 / live 263 / sunk 2,523 / destroyed 82 to 2,902 / 262 /
+/// 2,624 / 16: destroyed -66, sunk +101 (= 66 kept + 34 more made + 1 fewer live), on all four
+/// outputs (306 + 305, 306 + 305, 325 + 326 and 325 + 325 become 320 + 320, 321 + 321, 336 + 336
+/// and 335 + 335). The 34 more made: the crossing is out of service for 40 of the 80 ticks (two
+/// reversed windows of 20, its exit then head-on into the belt at (0, 3)) instead of 60 (three
+/// unpaired turns), so the feed behind it backs up less and the spawners find room more often. The
+/// 34 is measured, not derived: the two rules' ledgers logged after every edit agree until the
+/// entrance's turns and then part by +15, +29 and +37, settling at +33 to +35. The layout is whole
+/// again at the end (tick 1,023) and its outputs sink again. The host's hash is the same across
 /// `save_and_load` and the restored ledger still balances (the lines, `sunk` and hidden lines come
 /// back), and the snapshot restored as a host restores it (with the world's caps, through
-/// `engine::testing::replay`: `RefScenario::replay_restored`) runs 200 more ticks to the same hash as
-/// the uninterrupted world, whose ledger still balances then. Fails if an edit destroys items
+/// `engine::testing::replay`: `RefScenario::replay_restored`) runs 200 more ticks to the same hash
+/// as the uninterrupted world, whose ledger still balances then. Fails if an edit destroys items
 /// uncounted (conservation), leaves a stale line, or a restore loses a schedule's credit, a toggle,
 /// a hidden line or an item.
 #[test]
@@ -355,23 +361,23 @@ fn edit_during_flow() {
     let destroyed = run_edits(&mut b);
     assert_eq!(
         destroyed,
-        [16, 16, 60, 61, 77, 82, 82, 82, 82, 82],
+        [16, 16, 16, 16, 16, 16, 16, 16, 16, 16],
         "destroyed after each edit"
     );
     let outs = l.tiles_of(O, BeltKind::Despawner);
     let end: Vec<[u64; 2]> = outs.iter().map(|&d| sunk(&b, d)).collect();
     assert_eq!(
         end,
-        [[306, 305], [306, 305], [325, 326], [325, 325]],
+        [[320, 320], [321, 321], [336, 336], [335, 335]],
         "sunk per output at tick 1,023"
     );
     assert_eq!(
         b.check(),
         common::census::Census {
-            made: 2_868,
-            live: 263,
-            sunk: 2_523,
-            destroyed: 82
+            made: 2_902,
+            live: 262,
+            sunk: 2_624,
+            destroyed: 16
         }
     );
     let restored = b.s.replay_restored(200);
@@ -384,10 +390,10 @@ fn edit_during_flow() {
     assert_eq!(
         b.check(),
         common::census::Census {
-            made: 3_468,
-            live: 263,
-            sunk: 3_123,
-            destroyed: 82
+            made: 3_502,
+            live: 262,
+            sunk: 3_224,
+            destroyed: 16
         },
         "the uninterrupted ledger at tick 1,223"
     );

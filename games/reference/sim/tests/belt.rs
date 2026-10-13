@@ -200,7 +200,7 @@ fn pickup_despawns() {
 /// and (M52) every belt's stored shape is the one its neighbours give, curves included. M54: a
 /// splitter is placed and turned every round, and every entity's whole footprint (a furnace's 2x2, a
 /// splitter's 2x1 for its `dir`) is its own after every tick. M55: an underground pair is placed and
-/// its entrance turned every round (one end only).
+/// its entrance turned every round (M60: both ends flip, neither moves).
 /// Fails if any rule moves an entity (a rotate that shifts the origin or turns a splitter's
 /// footprint, a furnace put elsewhere).
 #[test]
@@ -260,7 +260,7 @@ fn no_reference_entity_moves_in_a_tick() {
     s.place_belt(P1, splitter, Dir::East, BeltKind::Splitter)
         .unwrap();
     check(&s, &mut spawned, "splitter placed");
-    // M55: an underground pair (gap 2); the entrance is turned every round.
+    // M55: an underground pair (gap 2); the entrance is turned every round (M60: the pair flips).
     let (entrance, exit) = (TilePos::new(40, 47), TilePos::new(43, 47));
     s.place_belt(P1, entrance, Dir::East, BeltKind::UndergroundIn)
         .unwrap();
@@ -311,10 +311,19 @@ fn no_reference_entity_moves_in_a_tick() {
     assert!(curves.get() > 0, "the rotations made curves (M52)");
     assert_eq!(s.entities().len(), 9);
     assert_eq!(s.belt_at(splitter).unwrap().dir, Dir::East, "six 180s");
+    // M60: six flips of the pair (180 degrees, kinds swapped) leave both ends as placed.
     assert_eq!(
-        s.belt_at(entrance).unwrap().dir,
-        Dir::West,
-        "six quarter turns"
+        (
+            s.belt_at(entrance).unwrap().dir,
+            s.belt_at(entrance).unwrap().kind
+        ),
+        (Dir::East, BeltKind::UndergroundIn),
+        "six flips"
+    );
+    assert_eq!(
+        (s.belt_at(exit).unwrap().dir, s.belt_at(exit).unwrap().kind),
+        (Dir::East, BeltKind::UndergroundOut),
+        "its partner flipped with it six times"
     );
     s.assert_topology();
 }

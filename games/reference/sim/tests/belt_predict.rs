@@ -1,8 +1,9 @@
 //! Belt actions through the real host <-> client round trip (`Loopback`, M25's testkit) and the
 //! belt half of `RefClient::extract` (M51 Tests added): `PlaceBelt`, `RotateBelt` and `PickUpBelt`
-//! predicted then acked, a rejected predicted placement replaced by the host's belt, the DrawList
-//! golden of every kind and direction plus a predicted belt and the belt ghost, and no retained
-//! allocation in `extract` with belts in view.
+//! predicted then acked (M60: an underground pair's rotation, both ends, or `NotPredictable` when
+//! its pairing scan reaches an unheld tile), a rejected predicted placement replaced by the host's
+//! belt, the DrawList golden of every kind and direction plus a predicted belt and the belt ghost,
+//! and no retained allocation in `extract` with belts in view.
 
 use std::collections::BTreeMap;
 
@@ -394,6 +395,133 @@ fn rejected_predicted_rotate_and_pickup_restore() {
         assert!(seen_belt(&lb, a, at).is_none());
     }
     assert!(lb.entities_in(a, WIDE).is_empty());
+}
+
+/// The first row in `ys` whose tiles `x` and `x + 2` are free land (an underground pair across a
+/// gap of one; the tile between may hold anything).
+fn free_pair(xs: std::ops::Range<i32>, ys: std::ops::Range<i32>) -> (TilePos, TilePos) {
+    let free = |x: i32, y: i32| {
+        let t = pristine(x, y);
+        t.resource() == 0 && t.base() >= content::SAND
+    };
+    ys.flat_map(|y| xs.clone().map(move |x| (x, y)))
+        .find(|&(x, y)| free(x, y) && free(x + 2, y))
+        .map(|(x, y)| (TilePos::new(x, y), TilePos::new(x + 2, y)))
+        .expect("two free tiles two apart at TEST_SEED")
+}
+
+/// M60: rotating an underground entrance is predicted as the host applies it, both ends at once:
+/// `A`'s view shows the entrance an exit facing west and its partner an entrance facing west (two
+/// puts) before the host has the action, the host then flips the same two, and after the ack `A`'s
+/// view is the host's. Fails if the prediction turns one end only (the client and host disagree
+/// until the ack) or the action is `NotPredictable` with every tile held.
+#[test]
+fn predicted_underground_rotate_flips_both_ends() {
+    let (e, x) = free_pair(-8..28, -8..30);
+    // `B`'s belt: a free tile on a row of a later pair (never `e`'s row).
+    let (other, _) = free_pair(-8..28, e.y + 3..30);
+    let (mut lb, a, _b) = two_clients(3, other);
+    for (at, kind) in [(e, BeltKind::UndergroundIn), (x, BeltKind::UndergroundOut)] {
+        assert_eq!(
+            dispatch_settled(&mut lb, a, place(at, Dir::East, kind)),
+            Ok(())
+        );
+    }
+    let ends = |b: Option<Belt>| b.map(|b| (b.dir, b.kind));
+    let (seq, st) = lb.dispatch(
+        a,
+        RefAction::RotateBelt {
+            at: TileXY::from_tile(e),
+        },
+    );
+    assert_eq!(st, Prediction::Applied);
+    let flipped = [
+        Some((Dir::West, BeltKind::UndergroundOut)),
+        Some((Dir::West, BeltKind::UndergroundIn)),
+    ];
+    assert_eq!(
+        [ends(seen_belt(&lb, a, e)), ends(seen_belt(&lb, a, x))],
+        flipped,
+        "predicted: both ends"
+    );
+    assert_eq!(
+        [
+            ends(host_belt(&lb, e).map(|h| h.1)),
+            ends(host_belt(&lb, x).map(|h| h.1))
+        ],
+        [
+            Some((Dir::East, BeltKind::UndergroundIn)),
+            Some((Dir::East, BeltKind::UndergroundOut))
+        ],
+        "the host has not heard yet"
+    );
+    assert_eq!(settle(&mut lb, a, seq), Ok(()));
+    assert_eq!(lb.overlay_len(a), 0, "authoritative again");
+    for at in [e, x] {
+        assert_eq!(
+            seen_belt(&lb, a, at),
+            host_belt(&lb, at).map(|h| h.1),
+            "{at:?}"
+        );
+    }
+    assert_eq!(
+        [
+            ends(host_belt(&lb, e).map(|h| h.1)),
+            ends(host_belt(&lb, x).map(|h| h.1))
+        ],
+        flipped,
+        "the host flipped both"
+    );
+}
+
+/// M60: an entrance on the last held column (x = 63; the camera's chunks reach 63) paired with an
+/// exit at x = 65, outside `A`'s subscription: its rotation's pairing scan reads x = 64, `Unknown`
+/// on the client, so the action is `NotPredictable` (no end turned in `A`'s view, never a guess
+/// that flips one end alone) but still sent, and the host flips both ends. Fails if an unknown
+/// read in the scan is skipped or taken as empty.
+#[test]
+fn predicted_underground_rotate_partner_unknown_not_predictable() {
+    let (e, x) = free_pair(63..64, -30..60);
+    let other = free_tiles(-8, 30, 1)[0];
+    let (mut lb, a, _b) = two_clients(3, other);
+    assert_eq!(
+        dispatch_settled(&mut lb, a, place(e, Dir::East, BeltKind::UndergroundIn)),
+        Ok(())
+    );
+    let (seq, st) = lb.dispatch(a, place(x, Dir::East, BeltKind::UndergroundOut));
+    assert_eq!(
+        st,
+        Prediction::NotPredictable,
+        "the exit is outside A's chunks"
+    );
+    assert_eq!(settle(&mut lb, a, seq), Ok(()));
+    let (seq, st) = lb.dispatch(
+        a,
+        RefAction::RotateBelt {
+            at: TileXY::from_tile(e),
+        },
+    );
+    assert_eq!(st, Prediction::NotPredictable);
+    assert_eq!(
+        seen_belt(&lb, a, e).map(|b| (b.dir, b.kind)),
+        Some((Dir::East, BeltKind::UndergroundIn)),
+        "nothing predicted"
+    );
+    assert_eq!(settle(&mut lb, a, seq), Ok(()));
+    let ends = |at| host_belt(&lb, at).map(|(_, b)| (b.dir, b.kind));
+    assert_eq!(
+        [ends(e), ends(x)],
+        [
+            Some((Dir::West, BeltKind::UndergroundOut)),
+            Some((Dir::West, BeltKind::UndergroundIn))
+        ],
+        "the host flipped both"
+    );
+    assert_eq!(
+        seen_belt(&lb, a, e).map(|b| (b.dir, b.kind)),
+        Some((Dir::West, BeltKind::UndergroundOut)),
+        "A on the host's state"
+    );
 }
 
 /// Grass everywhere; traits from the game's own registry; one player with an empty inventory.

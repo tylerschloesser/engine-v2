@@ -1,8 +1,9 @@
 //! Belt placement (M51, README "Belts", Placement): `PlaceBelt`, `RotateBelt`, `PickUpBelt`.
 //!
 //! Belts are free: no inventory read, no unlock. Every action addresses its belt by tile (0022
-//! section 6), validates before its one write (`.claude/rules/prediction.md`) and never moves an
-//! anchor (0079 §20 (b): a rotate is a put with the same id and anchor). `apply` never touches
+//! section 6), validates before it writes (one put, two for an underground pair:
+//! `.claude/rules/prediction.md`) and never moves an anchor (0079 §20 (b): a rotate is a put with
+//! the same id and anchor). `apply` never touches
 //! transport (0076 §6): the spawn or put wakes the belt into `rules::tick`, whose
 //! `belts::topology::on_wake` maps its lines (M52). `PlaceBelt` and `RotateBelt` write the edited
 //! tile's own shape, derived from its neighbours by reads only, so a predicted belt shows its curve at
@@ -14,11 +15,15 @@
 //! min corner (`content::belt_footprint`), found by either tile (`entity_at`), turned 180 degrees in
 //! place by `RotateBelt` (the footprint and anchor never move; changing the axis is a pick-up and a
 //! new placement: README "Belts" question 12's default) and picked up like a belt.
+//!
+//! **Underground ends** (M55, M60) are rotated as a pair: `RotateBelt` on either end flips it and its
+//! paired end in one action (two puts after every read), so the pair stays paired with its flow
+//! reversed; an unpaired end flips alone (README "Belts", Rotating an underground).
 
 use engine::game::{EntityId, WorldRead, WorldWrite};
 use engine::world::TilePos;
 
-use crate::rules::belts::topology::shape_of_kind;
+use crate::rules::belts::topology::{shape_of_kind, underground_other_end};
 use crate::rules::place::can_place_belt_kind;
 use crate::{Belt, BeltKind, Dir, RefEntity, RefGame, RefReject, SpawnCfg, TileXY, content};
 
@@ -54,9 +59,24 @@ pub fn place(
 
 /// `apply(RotateBelt)`: one put of the same belt turned clockwise, with its shape for the new facing;
 /// a splitter (M54) turned 180 degrees, its anchor and footprint unchanged (0079 §20 (b) by
-/// construction: nothing to re-validate).
+/// construction: nothing to re-validate). An underground end (M60, Tyler's 2026-10-13 answer:
+/// README "Belts", Rotating an underground) is flipped: turned 180 degrees with its kind swapped
+/// (an entrance facing `d` becomes an exit facing the opposite way, and the reverse), and so is its
+/// paired end if it has one ([`underground_other_end`]: up to five tiles read, every read `?`, so an
+/// unknown tile refuses the action before either put); the pair stays paired with its flow reversed.
 pub fn rotate(w: &mut dyn WorldWrite<RefGame>, at: TilePos) -> Result<(), RefReject> {
     let (id, belt) = belt_at(w, at)?;
+    if belt.kind.is_underground() {
+        let other = match underground_other_end(w, at, belt)? {
+            Some(t) => Some(belt_at(w, t)?),
+            None => None,
+        };
+        w.put_entity(id, RefEntity::Belt(flipped(belt)));
+        if let Some((oid, ob)) = other {
+            w.put_entity(oid, RefEntity::Belt(flipped(ob)));
+        }
+        return Ok(());
+    }
     let dir = if belt.kind == BeltKind::Splitter {
         belt.dir.cw().cw()
     } else {
@@ -65,6 +85,20 @@ pub fn rotate(w: &mut dyn WorldWrite<RefGame>, at: TilePos) -> Result<(), RefRej
     let shape = shape_of_kind(w, belt.origin.tile(), dir, belt.kind)?;
     w.put_entity(id, RefEntity::Belt(Belt { dir, shape, ..belt }));
     Ok(())
+}
+
+/// An underground end flipped (M60): 180 degrees, entrance and exit swapped; always straight.
+fn flipped(b: Belt) -> Belt {
+    let kind = if b.kind == BeltKind::UndergroundIn {
+        BeltKind::UndergroundOut
+    } else {
+        BeltKind::UndergroundIn
+    };
+    Belt {
+        dir: b.dir.cw().cw(),
+        kind,
+        ..b
+    }
 }
 
 /// `apply(PickUpBelt)`: one put marking the belt `removing`; the tick that follows unmaps its lines

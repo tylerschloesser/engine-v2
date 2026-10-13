@@ -48,11 +48,12 @@
 //! tiles 1..=5 ahead ends the search, and it is the partner iff it is an exit facing `d` (so gaps
 //! 0..=[`UNDERGROUND_MAX_GAP`]); tiles between hold anything, and undergrounds on the other axis are
 //! transparent (question 14 (b)'s default). Pairing is a pure function of the layout: no partner id
-//! is stored (0076 §4), and it runs in the tick only (`apply` never reads five tiles), so a steal, a
-//! removal and a rotation reconcile from the layout alone. A paired entrance owns a **hidden line**
-//! per lane, `(gap + 1) x 256` long with no segments (never in the tile index, never drawn, never
-//! replicated: 0079 §17), linked entrance `Next(hidden)` and hidden `Next(exit lane)`, lane for lane,
-//! so an item takes exactly the surface belt's time; it is reached from the entrance lane's `Next`.
+//! is stored (0076 §4), and the tick reconciles it from the layout alone after a steal, a removal or
+//! a rotation; `apply` reads the scan only to flip a pair (`RotateBelt`, M60:
+//! [`underground_other_end`]). A paired entrance owns a **hidden line** per lane, `(gap + 1) x 256`
+//! long with no segments (never in the tile index, never drawn, never replicated: 0079 §17), linked
+//! entrance `Next(hidden)` and hidden `Next(exit lane)`, lane for lane, so an item takes exactly the
+//! surface belt's time; it is reached from the entrance lane's `Next`.
 //! Unpaired, the entrance's lanes dead-end at the hood (its line's position 0); a pair that breaks
 //! or whose gap changes destroys the hidden line and its items (question 14 (c)'s default) and a new
 //! gap gets a new hidden line. An exit's own lines never change with pairing; a belt behind it
@@ -61,8 +62,9 @@
 //! it counts as an input of that tile. A belt behind an entrance feeds it (`Next`); a belt into
 //! either end's side lands through the hood: on an entrance a landing `L` positions behind the tile's
 //! front edge is `Merge { at: L - 128 }` when `L >= 128` and a dead end otherwise, on an exit `Merge
-//! { at: L }` when `L < 128` and a dead end otherwise. Rotating an end turns that end only (`dir.cw()`,
-//! the README's assumed line; question 14 (a)): its lines are re-created and it unpairs.
+//! { at: L }` when `L < 128` and a dead end otherwise. Rotating either end flips the pair (M60,
+//! Tyler's 2026-10-13 answer to question 14 (a)): both ends turn 180 degrees and swap kinds, so it
+//! stays paired with its flow reversed; an unpaired end flips alone (**Underground flips**).
 //!
 //! **Lines.** One engine line is one lane (0076 §1). Lane 0 is the lane on the belt's left seen along
 //! `dir`, lane 1 its right; lanes keep their index through `Next` (C2) and a curve. One line per lane
@@ -88,8 +90,27 @@
 //! counted in [`belts_destroyed_items`]. Rare: items `SPACING` apart squash at worst to 22 (295 ->
 //! 106), and only a squashed pair held at rest through many more rescales (each may lose a position
 //! to rounding) can come within the 2 positions a 295 -> 106 or 256 -> 106 squash collides; the unit
-//! test builds such a pair with the engine's own surgery. Splitters (180 degrees) and underground
-//! ends keep re-creating their lines on a rotation (their items destroyed).
+//! test builds such a pair with the engine's own surgery. Splitters (180 degrees) keep re-creating
+//! their lines on a rotation (their items destroyed).
+//!
+//! **Underground flips** (M60; README "Belts", Rotating an underground). `apply` puts both ends of a
+//! pair flipped (an entrance facing `d` becomes an exit facing the opposite way, an exit an
+//! entrance), or one end alone when it is unpaired. In the tick a mapped end whose wanted form is
+//! its flip goes through [`flip`] instead of being re-created: its pair is read from the lines (not
+//! the layout, which has changed: [`old_pair`]), and if its partner is flipped too the pair's six
+//! lines (each end's two and the two hidden lines) keep their ids, each line's items are mirrored
+//! in place ([`mirror`]: `pos` -> `len - 1 - pos`, lane index kept), the old entrance's lines are
+//! re-laid as the new exit's half and the old exit's as the new entrance's half, and the links are
+//! reversed (new entrance -> hidden -> new exit, lane for lane). Line by line this is the whole
+//! path reversed: an item `pos` from the exit's front edge along the `total`-long path (exit half,
+//! hidden line, entrance half) ends at `total - 1 - pos` (positions run `0..total`, so the last one,
+//! not `total`, is the mirror of the first: `total - pos` would put an item jammed at the front off
+//! the path). The mirror keeps every distance, but the items are re-inserted with `insert_at`,
+//! which needs `SPACING` clear on both sides: of a squashed pair (closer than `SPACING`, legal
+//! before the flip) the rear item is destroyed, counted in [`belts_destroyed_items`]. An end flipping alone (unpaired, or
+//! its partner was not flipped because another action of the tick changed the pairing) keeps its
+//! two lines with their items mirrored; an old entrance's hidden lines are destroyed with their
+//! items (the pair is broken), and the pairing phase pairs it anew.
 //!
 //! **Run boundaries.** A run is at most [`MAX_LINE_TILES`] (4,096) tiles, the most one line's path
 //! may enter: a tile that would make a run longer starts the next run, linked by `Next` like a curve.
@@ -108,9 +129,10 @@
 //! tile P it reconciles P and its four neighbours (every tile whose inputs, shape or run membership P
 //! can change), in phases: cut (split runs where a tile must leave or change form), reform (destroy
 //! a tile's lines when its belt is gone, create or extend them for a new belt, rescale them keeping
-//! their items for a reshape or a rotation, see **Rotation**), join (`set_out(Next)` then `join` for neighbours of one run), outputs
+//! their items for a reshape or a rotation, see **Rotation**, or flip an underground pair in place,
+//! see **Underground flips**), join (`set_out(Next)` then `join` for neighbours of one run), outputs
 //! (every live belt within two tiles of P whose line it fronts: its output is a function of its front
-//! tile, whose shape P can change), shapes (one `put_entity` per changed shape) and, for a `removing`
+//! tile, whose shape P can change), pairing (M55), shapes (one `put_entity` per changed shape) and, for a `removing`
 //! belt, the despawn. Every op that changes a line's `len` is followed by `set_segments` on that line,
 //! so every line is always in the tile index and the mapping is read back from `lines_at`
 //! ([`mapped`]): the entity stores no line id (0076 §4). Each phase is idempotent, so a tile woken
@@ -118,7 +140,7 @@
 
 use engine::game::{EntityId, TickCx, Unknown, WorldRead, WorldWrite};
 use engine::transport::{
-    Geometry, LineId, MAX_LINE_TILES, Output, Segment, TransportError, TransportRead,
+    Geometry, LineId, MAX_LINE_TILES, Output, SPACING, Segment, TransportError, TransportRead,
     TransportWrite,
 };
 use engine::world::{TilePos, WorldPos};
@@ -194,9 +216,10 @@ pub fn spawners_unscheduled() -> u64 {
 }
 
 /// Items this module's `destroy`s removed from the world on this thread (M56: a refused rotation's
-/// (M59), a pick-up's, a re-pairing's and a splitter's or underground's lines, and a pair a full cap left
-/// unfinished), so a test's conservation reads made = live + sunk + destroyed exactly
-/// (`debug_assertions` only; 0 otherwise, like [`belts_unmapped`]).
+/// (M59), a pick-up's, a re-pairing's, a splitter's lines, an underground flip's collisions and a
+/// broken pair's hidden lines (M60), and a pair a full cap left unfinished), so a test's
+/// conservation reads made = live + sunk + destroyed exactly (`debug_assertions` only; 0
+/// otherwise, like [`belts_unmapped`]).
 pub fn belts_destroyed_items() -> u64 {
     #[cfg(debug_assertions)]
     return DESTROYED.with(core::cell::Cell::get);
@@ -976,9 +999,8 @@ fn run_pair(tr: Tx<'_>, lane: [LineId; 2], front: TilePos, dir: Dir, tiles: u32)
     register(tr, lane, segs, tiles)
 }
 
-/// Destroys a tile's lines (a pick-up, an underground end's rotation and a refused rotation's
-/// rescale destroy the tile's items); an underground entrance's hidden lines first (M55: else they
-/// would leak, reached from nothing).
+/// Destroys a tile's lines (a pick-up and a refused rotation's rescale destroy the tile's items);
+/// an underground entrance's hidden lines first (M55: else they would leak, reached from nothing).
 fn destroy(tr: Tx<'_>, m: Mapped) {
     if let Form::Underground(_, End::In) = m.form {
         for h in hidden_of(tr, m.lane).into_iter().flatten() {
@@ -1219,12 +1241,31 @@ fn cut(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
 
 /// Phase 2: the tile's own lines: destroyed when its belt is gone, created (or a run extended) for a
 /// new belt, rescaled for a reshape or a rotation (items kept; destroyed and re-created only when a
-/// rescale is refused, and for an underground end's rotation).
+/// rescale is refused), and an underground end's flip turned in place with its pair (M60: [`flip`]).
 fn reform(cx: &mut TickCx<'_, RefGame>, at: TilePos) {
     if reform_splitter(cx, at) {
         return;
     }
     let w = want(cx, at);
+    // An underground end flipped by `RotateBelt` (M60): its lines stay, items mirrored, and its old
+    // partner's with them when that end was flipped too.
+    if let Some(w) = w
+        && let Some(m) = mapped(cx.transport(), at)
+        && flips(m.form, w.form)
+    {
+        let pair = old_pair(cx.transport(), at, m).filter(|p| {
+            let other = if p.entrance.0 == at {
+                p.exit
+            } else {
+                p.entrance
+            };
+            want(cx, other.0).is_some_and(|ow| flips(other.1.form, ow.form))
+        });
+        if let Some(tr) = tx(cx) {
+            flip(tr, at, m, pair);
+        }
+        return;
+    }
     let spawner = live_belt(cx, at)
         .ok()
         .flatten()
@@ -1250,8 +1291,9 @@ fn reform_lines(tr: Tx<'_>, at: TilePos, w: Option<Want>) {
             debug_assert!(m.tiles() == 1, "cut left {at:?} in a run");
             // A run or a curve before and after keeps its lines and items, whatever the direction
             // (M59: a reshape, and a rotation since Tyler's 2026-10-13 answer); a refused rescale
-            // falls back to destroy and re-create. An underground end is never rescaled (M55: it
-            // only changes by rotation, which destroys its items).
+            // falls back to destroy and re-create. An underground end is never rescaled: its flip
+            // is `flip`'s (M60), and anything else (a kind changed by a pick-up and a placement in
+            // one tick) is re-created.
             let rescalable = matches!(
                 (w.form, m.form),
                 (
@@ -1290,6 +1332,164 @@ fn reshape(tr: Tx<'_>, at: TilePos, form: Form, m: Mapped) -> bool {
     };
     register(tr, m.lane, segs, 1);
     true
+}
+
+/// `from` -> `to` is an underground end's flip (M60): the opposite direction, the other end.
+fn flips(from: Form, to: Form) -> bool {
+    matches!(
+        (from, to),
+        (Form::Underground(d, e), Form::Underground(d2, e2)) if d2 == opposite(d) && e2 != e
+    )
+}
+
+/// A pair as the lines still hold it (before a flip): the entrance's tile and lines, the exit's,
+/// and the hidden lines between them, lane for lane.
+#[derive(Clone, Copy)]
+struct OldPair {
+    entrance: (TilePos, Mapped),
+    exit: (TilePos, Mapped),
+    hidden: [LineId; 2],
+}
+
+/// The pair the underground end `m` on `at` belongs to in the lines (not the layout, which a flip
+/// has already changed): from an entrance, its hidden lines' exit (`(len / 256)` tiles ahead); from
+/// an exit, the entrance within [`UNDERGROUND_MAX_GAP`] + 1 tiles behind whose hidden lines lead
+/// into its lanes. `None` for an unpaired end.
+fn old_pair(tr: &dyn TransportRead, at: TilePos, m: Mapped) -> Option<OldPair> {
+    let Form::Underground(d, end) = m.form else {
+        return None;
+    };
+    let hidden_into = |e: Mapped, x: [LineId; 2]| match hidden_of(tr, e.lane) {
+        [Some(a), Some(b)]
+            if tr.out(a) == Ok(Output::Next(x[0])) && tr.out(b) == Ok(Output::Next(x[1])) =>
+        {
+            Some([a, b])
+        }
+        _ => None,
+    };
+    match end {
+        End::In => {
+            let [Some(h), _] = hidden_of(tr, m.lane) else {
+                return None;
+            };
+            let Ok(Output::Next(x0)) = tr.out(h) else {
+                return None;
+            };
+            let t = ahead(at, d, (tr.len(h).ok()? / STRAIGHT_LEN) as i32);
+            let x = mapped(tr, t)
+                .filter(|x| x.form == Form::Underground(d, End::Out) && x.lane[0] == x0)?;
+            let hidden = hidden_into(m, x.lane)?;
+            Some(OldPair {
+                entrance: (at, m),
+                exit: (t, x),
+                hidden,
+            })
+        }
+        End::Out => (1..=(UNDERGROUND_MAX_GAP + 1) as i32).find_map(|k| {
+            let t = ahead(at, opposite(d), k);
+            let e = mapped(tr, t).filter(|e| e.form == Form::Underground(d, End::In))?;
+            let hidden = hidden_into(e, m.lane)?;
+            Some(OldPair {
+                entrance: (t, e),
+                exit: (at, m),
+                hidden,
+            })
+        }),
+    }
+}
+
+/// The most items a line of an underground pair keeps through a flip: its longest line, a hidden
+/// line of `(UNDERGROUND_MAX_GAP + 1) x 256`, holds at most one item per `SPACING` (a flip keeps
+/// only items `SPACING` apart: [`mirror`]).
+const MIRROR_CAP: usize = ((UNDERGROUND_MAX_GAP + 1) * STRAIGHT_LEN / SPACING + 1) as usize;
+
+/// Mirrors `line`'s items in place (M60): an item at `pos` moves to `len - 1 - pos`, kept on the
+/// same line (so on the same lane index). Distances are kept, but the items go back with
+/// `insert_at`, which needs `SPACING` clear on both sides: read front to back, an item less than
+/// `SPACING` behind the last one kept (the rear of a squashed pair) is not re-inserted and is
+/// destroyed (counted in [`belts_destroyed_items`]), as is any item `insert_at` refuses. Bounded:
+/// at most [`MIRROR_CAP`] items kept, on the stack; no allocation.
+fn mirror(tr: Tx<'_>, line: LineId) {
+    let Ok(len) = tr.len(line) else { return };
+    let mut keep = [(Item(0), 0u32); MIRROR_CAP];
+    let (mut n, mut total) = (0usize, 0u32);
+    let mut last: Option<u32> = None;
+    let _ = tr.items_in(line, &mut |item, pos| {
+        total += 1;
+        if n < MIRROR_CAP && last.is_none_or(|l| pos >= l + SPACING) {
+            keep[n] = (item, len - 1 - pos);
+            n += 1;
+            last = Some(pos);
+        }
+    });
+    if total == 0 {
+        return;
+    }
+    for _ in 0..total {
+        ok(tr.take_front(line), "take_front(mirror)");
+    }
+    let mut _lost = total - n as u32;
+    for &(item, pos) in &keep[..n] {
+        if ok(tr.insert_at(line, pos, item), "insert_at(mirror)").is_none() {
+            _lost += 1;
+        }
+    }
+    #[cfg(debug_assertions)]
+    DESTROYED.with(|c| c.set(c.get() + u64::from(_lost)));
+}
+
+/// Lays a flipped end's two lines on `at` as `form` (an underground end: same length, so only the
+/// segments change); a refusal drops the pair ([`register`]).
+fn lay_end(tr: Tx<'_>, at: TilePos, lane: [LineId; 2], form: Form) {
+    let Form::Underground(dir, end) = form else {
+        return;
+    };
+    let input = end == End::In;
+    let segs = [
+        splitter_segment(at, dir, 0, input),
+        splitter_segment(at, dir, 1, input),
+    ];
+    register(tr, lane, segs, 1);
+}
+
+/// Phase 2 for a flipped underground end `m` on `at` (M60; module doc, **Underground flips**). With
+/// `pair` (the end was paired in the lines and its partner is flipped too) the whole pair is turned
+/// in place: every one of its six lines (each end's two, the two hidden) keeps its id and has its
+/// items mirrored ([`mirror`]), the old entrance's lines become the new exit's and the old exit's
+/// the new entrance's (re-laid on their own tiles), and the links are reversed: new entrance
+/// `Next(hidden)`, hidden `Next(new exit)`, the new exit dead-ending until the output phase sets
+/// its output. Without (an unpaired end, or one whose partner was not flipped) the end flips alone:
+/// an old entrance's hidden lines are destroyed with their items (the pair is broken), its own two
+/// lines keep their ids and mirrored items and are re-laid; the pairing phase pairs it anew.
+fn flip(tr: Tx<'_>, at: TilePos, m: Mapped, pair: Option<OldPair>) {
+    let Form::Underground(d, end) = m.form else {
+        return;
+    };
+    let nd = opposite(d);
+    let Some(p) = pair else {
+        if end == End::In {
+            for h in hidden_of(tr, m.lane).into_iter().flatten() {
+                kill(tr, h, "destroy(hidden)");
+            }
+        }
+        for l in m.lane {
+            mirror(tr, l);
+        }
+        let other = if end == End::In { End::Out } else { End::In };
+        lay_end(tr, at, m.lane, Form::Underground(nd, other));
+        return;
+    };
+    let (e, x, h) = (p.entrance, p.exit, p.hidden);
+    for l in e.1.lane.into_iter().chain(h).chain(x.1.lane) {
+        mirror(tr, l);
+    }
+    lay_end(tr, e.0, e.1.lane, Form::Underground(nd, End::Out));
+    lay_end(tr, x.0, x.1.lane, Form::Underground(nd, End::In));
+    for ((h, el), xl) in h.into_iter().zip(e.1.lane).zip(x.1.lane) {
+        set_out(tr, h, Output::Next(el));
+        set_out(tr, el, Output::DeadEnd);
+        set_out(tr, xl, Output::Next(h));
+    }
 }
 
 /// A new belt's lines: the run in front grows at its back, or the run behind at its front (while
@@ -1519,6 +1719,35 @@ pub fn underground_partner(
     Ok(None)
 }
 
+/// The other end of the underground `b` standing on `at` (M60: `RotateBelt` flips both ends of a
+/// pair): an entrance's [`underground_partner`]; from an exit the symmetric scan back, nearest first
+/// (the first underground on its axis within [`UNDERGROUND_MAX_GAP`] + 1 tiles behind ends the
+/// search, and it is the partner iff it is an entrance facing `b.dir`, so each end finds the other).
+/// `None` for an unpaired end or any other kind. Every read is `?`: an unknown tile on the scan is
+/// `Err(Unknown)`, never a guess (`.claude/rules/prediction.md`).
+pub fn underground_other_end(
+    w: &dyn WorldRead<RefGame>,
+    at: TilePos,
+    b: Belt,
+) -> Result<Option<TilePos>, Unknown> {
+    match b.kind {
+        BeltKind::UndergroundIn => Ok(underground_partner(w, at, b.dir)?.map(|(t, _)| t)),
+        BeltKind::UndergroundOut => {
+            for k in 1..=UNDERGROUND_MAX_GAP + 1 {
+                let t = ahead(at, opposite(b.dir), k as i32);
+                if let Some(o) = live_belt(w, t)?
+                    && o.kind.is_underground()
+                    && horizontal(o.dir) == horizontal(b.dir)
+                {
+                    return Ok((o.kind == BeltKind::UndergroundIn && o.dir == b.dir).then_some(t));
+                }
+            }
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
 /// The hidden lines an entrance's lanes lead into (a `Next` to a line without segments), per lane.
 fn hidden_of(tr: &dyn TransportRead, lane: [LineId; 2]) -> [Option<LineId>; 2] {
     lane.map(|l| match tr.out(l) {
@@ -1603,9 +1832,10 @@ fn pair_entrance(cx: &mut TickCx<'_, RefGame>, at: TilePos, dir: Dir) {
 /// The pairing phase of a wake (M55), after every tile's lines exist: for each tile of `near` that
 /// is the woken underground (`kind` on `woken`, also when it is being picked up) or holds a live one
 /// (its lines may have been re-created after a full cap), every entrance on it or up to five tiles
-/// behind it along a direction, facing that direction (both axes: a rotation changes the axis), is
-/// reconciled ([`pair_entrance`]). An edit anywhere else changes no pairing (tiles between an
-/// entrance and its exit may hold anything).
+/// behind it along a direction, facing that direction (both axes: before M60 a rotation changed an
+/// end's axis; a flip does not, and the scan stays as it was), is reconciled ([`pair_entrance`]).
+/// An edit anywhere else changes no pairing (tiles between an entrance and its exit may hold
+/// anything).
 fn pair_around(cx: &mut TickCx<'_, RefGame>, near: &[TilePos], woken: TilePos, kind: BeltKind) {
     const DIRS: [Dir; 4] = [Dir::East, Dir::South, Dir::West, Dir::North];
     for &t in near {
@@ -1685,6 +1915,46 @@ pub fn test_insert(cx: &mut TickCx<'_, RefGame>, id: EntityId, r: crate::TestIns
 mod tests {
     use super::*;
     use engine::transport::Transport;
+
+    /// M60's spacing rule: a flip mirrors a line's items in place (`len - 1 - pos`) and re-inserts
+    /// them with `insert_at` (`SPACING` clear on both sides), so an item less than `SPACING` behind
+    /// the last one kept (read front to back) is destroyed. A squashed pair (play reaches one only
+    /// through rescales, M59) is built with the engine's own surgery: items at 0, 128 and 6,400 on
+    /// a 12,800 line rescaled to an underground half (128) sit at 0, 1 and 64. Mirrored, 0 goes to
+    /// 127, 1 (too close to it to re-insert) is destroyed and counted, and 64 goes to 63. Fails if
+    /// a colliding item is kept (two items closer than `SPACING`), dropped uncounted, or the mirror
+    /// point is off by one.
+    #[test]
+    fn topology_flip_mirror_destroys_a_collision() {
+        let mut t = Transport::new(16, 16);
+        let l = t.create(100 * UNDERGROUND_HALF, SPEED).unwrap();
+        for (pos, item) in [(0, 1), (128, 2), (6_400, 3)] {
+            t.insert_at(l, pos, Item(item)).unwrap();
+        }
+        t.rescale(l, UNDERGROUND_HALF).unwrap();
+        let items = |t: &Transport| {
+            let (mut v, mut n) = ([(0u16, 0u32); 3], 0);
+            t.items_in(l, &mut |i, p| {
+                v[n] = (i.0, p);
+                n += 1;
+            })
+            .unwrap();
+            (v, n)
+        };
+        assert_eq!(items(&t), ([(1, 0), (2, 1), (3, 64)], 3), "a squashed pair");
+        let destroyed = belts_destroyed_items();
+        mirror(&mut t, l);
+        assert_eq!(
+            belts_destroyed_items(),
+            destroyed + 1,
+            "the collision counted"
+        );
+        assert_eq!(
+            items(&t),
+            ([(3, 63), (1, 127), (0, 0)], 2),
+            "mirrored, item 2 gone"
+        );
+    }
 
     /// M59's fallback: a rotation whose `rescale` is refused destroys and re-creates the tile's
     /// lines. Play reaches it only through many rescales of a squashed pair at rest (module doc,

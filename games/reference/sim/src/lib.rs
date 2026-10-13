@@ -108,6 +108,8 @@ pub enum RefAction {
     },
     /// M51: turn the belt at `at` clockwise (east, south, west, north); same entity, same anchor.
     /// M54: a splitter (either tile) turns 180 degrees in place (its footprint does not move).
+    /// M60: an underground end flips (180 degrees, entrance and exit swapped) together with its
+    /// paired end, if any (`rules::belt::rotate`); an unknown tile on the pairing scan refuses it.
     RotateBelt {
         at: TileXY,
     },
@@ -304,7 +306,8 @@ impl Furnace {
     }
 }
 
-/// A belt's direction of travel (M51; the `fx-belts` order). [`Dir::cw`] is `RotateBelt`'s turn.
+/// A belt's direction of travel (M51; the `fx-belts` order). [`Dir::cw`] is `RotateBelt`'s turn
+/// (twice for a splitter and an underground end: M54, M60).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize, TS)]
 #[ts(export)]
 pub enum Dir {
@@ -316,7 +319,8 @@ pub enum Dir {
 }
 
 impl Dir {
-    /// The next direction clockwise: east, south, west, north, east.
+    /// The next direction clockwise: east, south, west, north, east (`RotateBelt`'s turn of a belt,
+    /// spawner or despawner; a splitter and an underground end turn by two: M54, M60).
     pub const fn cw(self) -> Dir {
         match self {
             Dir::East => Dir::South,
@@ -690,7 +694,7 @@ pub struct RefGame;
 impl Game for RefGame {
     // `test-hooks` (never shipped) reports one version higher: a save of the normal build is then
     // `SaveIncompatible` (M34b).
-    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 13 } else { 12 };
+    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 14 } else { 13 };
     //  3: `Furnace` entity, `PlaceFurnace`, resources `NOT_BUILDABLE` (M33).
     //  4: `FurnaceDeposit`, `FurnaceTake`, `FurnacePickUp` and their rejects (M33b).
     //  5: `RefGlobal { colours }`, written on `Joined` (M34).
@@ -711,6 +715,9 @@ impl Game for RefGame {
     // 12: a rotated belt, spawner or despawner keeps its lines and items (rescaled, laid along the
     //     new direction; a refused rescale destroys and re-creates them) and a rotated spawner's
     //     schedules restart (M59). Replays diverge; no migration: a schema 11 save is refused.
+    // 13: `RotateBelt` on an underground end flips it (180 degrees, kind swapped) and its paired end
+    //     with it, the pair's lines and items kept (mirrored along the path) (M60). Replays
+    //     diverge; no migration: a schema 12 save is refused.
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;
