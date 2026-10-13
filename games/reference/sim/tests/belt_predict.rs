@@ -167,9 +167,9 @@ fn seen_belt(lb: &Loopback<RefGame>, idx: usize, at: TilePos) -> Option<Belt> {
 
 /// Each belt action shows at once under prediction and is then acked: the placement under a
 /// provisional id that swaps to the host's, the rotation in the replica's direction before the host
-/// has it, the pick-up as an empty tile before the host despawns. Fails if any of the three is
-/// opted out of prediction (`Game::predict`) or `NotPredictable` (an unread `?`, an id-addressed
-/// action), or if the ack does not leave the client on the host's state.
+/// has it, the pick-up as a `removing` belt (drawn as nothing, M52) before the host despawns. Fails
+/// if any of the three is opted out of prediction (`Game::predict`) or `NotPredictable` (an unread
+/// `?`, an id-addressed action), or if the ack does not leave the client on the host's state.
 #[test]
 fn belt_actions_are_predicted() {
     let spots = free_tiles(-8, 30, 2);
@@ -222,7 +222,8 @@ fn belt_actions_are_predicted() {
     );
     assert_eq!(seen_belt(&lb, a, at).map(|b| b.dir), Some(Dir::North));
 
-    // Pick up: gone at once, the host still has it.
+    // Pick up: marked `removing` at once (M52: drawn as nothing, the tile still occupied until the
+    // host's tick unmaps and despawns it), the host still has it.
     let (seq, st) = lb.dispatch(
         a,
         RefAction::PickUpBelt {
@@ -230,12 +231,85 @@ fn belt_actions_are_predicted() {
         },
     );
     assert_eq!(st, Prediction::Applied);
-    assert_eq!(lb.entity_at(a, at), None, "tombstoned");
-    assert!(host_belt(&lb, at).is_some());
+    assert_eq!(lb.entity_at(a, at), Some(real), "still occupied");
+    assert_eq!(
+        seen_belt(&lb, a, at).map(|b| b.removing),
+        Some(true),
+        "removing"
+    );
+    assert!(!host_belt(&lb, at).unwrap().1.removing);
     assert_eq!(settle(&mut lb, a, seq), Ok(()));
     assert!(host_belt(&lb, at).is_none());
     assert_eq!(lb.entity_at(a, at), None);
     assert_eq!(lb.overlay_len(a), 0);
+}
+
+/// M52: a predicted belt shows its curve at once. `A` has an east belt; it places a north belt in
+/// front of it, whose only input is that side neighbour: `apply` derives `CurveLeft` under
+/// prediction, so the predicted sprite is the north left curve before the host has the action, and
+/// after the ack the host's belt (the tick's authoritative shape) is the same curve and the sprite
+/// unchanged. Fails if `apply` stops writing the edited tile's shape (the predicted belt draws
+/// straight until the host's put) or the tick disagrees with `apply`.
+#[test]
+fn predicted_belt_shows_its_curve() {
+    // Two free land tiles side by side, plus one apart for `B`.
+    let (x, y) = (-8..30)
+        .flat_map(|y| (-8..30).map(move |x| (x, y)))
+        .find(|&(x, y)| {
+            [pristine(x, y), pristine(x + 1, y)]
+                .iter()
+                .all(|t| t.resource() == 0 && t.base() >= content::SAND)
+        })
+        .expect("two free tiles side by side at TEST_SEED");
+    let (feeder, at) = (TilePos::new(x, y), TilePos::new(x + 1, y));
+    let other = free_tiles(-8, 30, 8)
+        .into_iter()
+        .find(|t| (t.x - x).abs() > 2 || (t.y - y).abs() > 2)
+        .expect("a free tile apart");
+    let (mut lb, a, _b) = two_clients(3, other);
+    assert_eq!(
+        dispatch_settled(&mut lb, a, place(feeder, Dir::East, BeltKind::Belt)),
+        Ok(())
+    );
+    let client = RefClient::with_spring_state([0.0, 0.0], [0.0, 0.0]);
+    let mut out = DrawList::new();
+    let mut region = vec![0u8; REGION_BYTES];
+    let mut sprite_at = |lb: &Loopback<RefGame>| {
+        let view = lb.frame_view(a, WIDE, TilePos::new(0, 0));
+        out.begin_frame(TilePos::new(0, 0));
+        client.extract(&view, &mut out);
+        let n = out.sort_into(&mut region, 0.0, None);
+        sprite_recs(&region, n)
+            .into_iter()
+            .find(|r| r.0 == [at.x as f32, at.y as f32])
+            .map(|r| (r.5, r.1 & PREDICTED))
+    };
+    let curve_north = content::SPRITE_BELT_CURVE_LEFT + 2;
+
+    let (seq, st) = lb.dispatch(a, place(at, Dir::North, BeltKind::Belt));
+    assert_eq!(st, Prediction::Applied);
+    assert!(host_belt(&lb, at).is_none(), "the host has not heard yet");
+    assert_eq!(
+        seen_belt(&lb, a, at).map(|b| b.shape),
+        Some(BeltShape::CurveLeft),
+        "predicted"
+    );
+    assert_eq!(
+        sprite_at(&lb),
+        Some((curve_north, PREDICTED)),
+        "the predicted sprite"
+    );
+    assert_eq!(settle(&mut lb, a, seq), Ok(()));
+    assert_eq!(
+        host_belt(&lb, at).map(|(_, b)| b.shape),
+        Some(BeltShape::CurveLeft)
+    );
+    assert_eq!(
+        seen_belt(&lb, a, at).map(|b| b.shape),
+        Some(BeltShape::CurveLeft),
+        "acked"
+    );
+    assert_eq!(sprite_at(&lb), Some((curve_north, 0)), "the real sprite");
 }
 
 /// `B`'s belt lands first; `A`, still seeing a free tile, predicts its own: the host refuses
@@ -302,7 +376,11 @@ fn rejected_predicted_rotate_and_pickup_restore() {
             r
         } else {
             let r = lb.dispatch(a, RefAction::PickUpBelt { at: xy });
-            assert_eq!(lb.entity_at(a, at), None, "tombstoned at A");
+            assert_eq!(
+                seen_belt(&lb, a, at).map(|b| b.removing),
+                Some(true),
+                "removing at A"
+            );
             r
         };
         assert_eq!(st, Prediction::Applied, "belt {i}");

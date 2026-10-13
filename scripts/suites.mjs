@@ -80,7 +80,29 @@ export const suites = [
   // `soloTiers: ['slow']` (M36): `slow_tick_large_save` and the other wall-clock benchmarks of the
   // `rust` slow tier gate on a median (0010 desktop proxy, 25 % rule); run beside `browser`'s Chromium
   // pool they measured 32 % over a baseline they hold alone. Same reason as `frame-bench`'s `solo`.
-  { name: 'rust', kind: 'nextest', tiers: ['fast', 'slow'], budgetMs: 10_000, soloTiers: ['slow'] },
+  //
+  // The `test-hooks` leg (M52 fix round 1): the reference crate built with its never-shipped
+  // `test-hooks` feature (`--features reference-sim/test-hooks`, the whole workspace's scope as every
+  // other cargo call here), its own tests minus `slow_*` (nextest profile `test-hooks`), so the
+  // item cases of `sim/tests/topology_items.rs` run in the slow tier. `after`: never beside the
+  // tier's wall-clock benchmarks.
+  {
+    name: 'rust',
+    kind: 'nextest',
+    tiers: ['fast', 'slow'],
+    budgetMs: 10_000,
+    soloTiers: ['slow'],
+    legs: [
+      {
+        name: 'test-hooks',
+        kind: 'nextest',
+        onlyTier: 'slow',
+        after: true,
+        profile: 'test-hooks',
+        args: ['--features', 'reference-sim/test-hooks'],
+      },
+    ],
+  },
   { name: 'unit', kind: 'vitest', tiers: ['fast', 'slow'], budgetMs: 3_000, first: true },
   {
     name: 'wasm',

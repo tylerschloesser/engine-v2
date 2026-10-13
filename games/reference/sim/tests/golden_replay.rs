@@ -12,21 +12,24 @@ use reference_sim::{RefGame, RefParams};
 const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/golden/");
 
 /// `world.json` as the golden recorded it: the same defaults the host builds a world with
-/// (`host/mod.rs`: 262,144 entities, 1,048,576 modified tiles, 4,096 growth).
-fn params(seed: u64) -> WorldParams<RefGame> {
+/// (`host/mod.rs`: 262,144 entities, 1,048,576 modified tiles, 4,096 growth) and the golden's own
+/// transport caps (`full-game.json`, M52: without them no belt line is mapped).
+fn params(g: &Golden) -> WorldParams<RefGame> {
     WorldParams {
-        seed,
+        seed: g.seed,
         worldgen: RefParams::default(),
         max_entities: 262_144,
         max_modified_tiles: 1_048_576,
         max_action_growth: 4_096,
-        max_lines: engine::transport::DEFAULT_MAX_LINES,
-        max_items: engine::transport::DEFAULT_MAX_ITEMS,
+        max_lines: g.max_lines,
+        max_items: g.max_items,
     }
 }
 
 struct Golden {
     seed: u64,
+    max_lines: u32,
+    max_items: u32,
     checkpoints: Vec<(Tick, String)>,
 }
 
@@ -52,13 +55,29 @@ fn read_golden() -> (Golden, Vec<u8>) {
         })
         .collect();
     let log = std::fs::read(format!("{GOLDEN}full-game.log")).expect("full-game.log");
-    (Golden { seed, checkpoints }, log)
+    let cap = |k: &str| {
+        u32::try_from(
+            json[k]
+                .as_u64()
+                .unwrap_or_else(|| panic!("{k} in full-game.json")),
+        )
+        .expect("u32")
+    };
+    (
+        Golden {
+            seed,
+            max_lines: cap("maxLines"),
+            max_items: cap("maxItems"),
+            checkpoints,
+        },
+        log,
+    )
 }
 
 /// The first checkpoint where a replay of `log` differs from `want`, as a message.
-fn first_divergence(seed: u64, log: &[u8], want: &[(Tick, String)]) -> Option<String> {
+fn first_divergence(g: &Golden, log: &[u8], want: &[(Tick, String)]) -> Option<String> {
     let ticks: Vec<Tick> = want.iter().map(|(t, _)| *t).collect();
-    let got = replay(Base::Genesis(params(seed)), log, &ticks);
+    let got = replay(Base::Genesis(params(g)), log, &ticks);
     for (i, (tick, hash)) in want.iter().enumerate() {
         match got.get(i) {
             None => return Some(format!("first divergent tick {}: never reached", tick.0)),
@@ -81,7 +100,7 @@ fn golden_replay() {
         golden.checkpoints.len() > 10,
         "the golden holds a checkpoint every 10 ticks"
     );
-    if let Some(message) = first_divergence(golden.seed, &log, &golden.checkpoints) {
+    if let Some(message) = first_divergence(&golden, &log, &golden.checkpoints) {
         panic!("golden_replay: {message}");
     }
 }
@@ -94,7 +113,7 @@ fn golden_replay_reports_the_first_divergent_tick() {
     // checkpoint from that frame on is missing and the first one is named.
     let n = log.len();
     log[n / 2] ^= 0x01;
-    let message = first_divergence(golden.seed, &log, &golden.checkpoints)
+    let message = first_divergence(&golden, &log, &golden.checkpoints)
         .expect("a changed log must not replay to the golden");
     assert!(message.contains("first divergent tick"), "{message}");
 }
@@ -105,7 +124,7 @@ fn golden_replay_reports_the_first_divergent_tick() {
 #[test]
 fn slow_heavy_full_game_n1() {
     let (golden, log) = read_golden();
-    let result = engine::testing::replay::heavy::<RefGame>(params(golden.seed), &log, 1);
+    let result = engine::testing::replay::heavy::<RefGame>(params(&golden), &log, 1);
     assert!(
         result.is_ok(),
         "heavy mode (N=1) over full-game.log: {result:?}"

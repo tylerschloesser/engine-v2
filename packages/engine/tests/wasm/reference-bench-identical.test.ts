@@ -19,6 +19,7 @@ import { gameCrateBuildDir } from '../support/fixtures.js'
 import {
   divergenceMessage,
   firstDivergence,
+  fullGameParams,
   readFullGame,
   readWorldJson,
 } from '../support/reference-golden.js'
@@ -34,7 +35,7 @@ test('reference_bench_feature_identical: the golden replays to the same hashes o
   const { wasm } = await loadGame(bench.dir)
   const got = await replayLog({
     wasm,
-    params: { seed: meta.seed, worldgen: meta.worldgen },
+    params: fullGameParams(meta),
     frames,
     checkpoints: meta.checkpoints.map((c) => c.tick),
   })

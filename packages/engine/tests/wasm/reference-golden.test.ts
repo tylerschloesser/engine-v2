@@ -13,8 +13,10 @@ import {
   type Checkpoint,
   divergenceMessage,
   firstDivergence,
+  fullGameParams,
   logBytesPerPlayerHour,
   readFullGame,
+  readWorldCaps,
   readWorldJson,
 } from '../support/reference-golden.js'
 
@@ -23,7 +25,7 @@ async function replayGolden(want: Checkpoint[], frames: Uint8Array): Promise<Che
   const { wasm } = await loadGame(gameCrateBuildDir('reference'))
   return replayLog({
     wasm,
-    params: { seed: meta.seed, worldgen: meta.worldgen },
+    params: fullGameParams(meta),
     frames,
     checkpoints: want.map((c) => c.tick),
   })
@@ -33,6 +35,8 @@ test('reference_golden_replay', async () => {
   const { meta, frames } = readFullGame()
   // The golden is the declared world's (`world.json`), not some other seed's.
   expect({ seed: meta.seed, worldgen: meta.worldgen }).toEqual(readWorldJson())
+  // ...with its transport caps (M52: a world without them maps no belt line, another hash).
+  expect({ maxLines: meta.maxLines, maxItems: meta.maxItems }).toEqual(readWorldCaps())
   expect(meta.checkpoints.length).toBeGreaterThan(10)
 
   const got = await replayGolden(meta.checkpoints, frames)

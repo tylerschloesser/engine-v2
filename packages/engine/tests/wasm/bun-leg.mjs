@@ -17,7 +17,12 @@ import { deleteWorld, exportWorld, importWorld } from '../../dist/storage/archiv
 import { memoryStorage } from '../../dist/storage/memory.js'
 import { worldKeys } from '../../dist/storage/types.js'
 import { createNetHarness, replayLog, replayWorld, worldServerTestHandle } from '../../dist/test.js'
-import { divergenceMessage, firstDivergence, readFullGame } from '../support/reference-golden.ts'
+import {
+  divergenceMessage,
+  firstDivergence,
+  fullGameParams,
+  readFullGame,
+} from '../support/reference-golden.ts'
 import { saveToServer, stateBudgetFull } from '../support/reference-single-player.ts'
 import {
   diffCheckpoints,
@@ -274,7 +279,7 @@ async function runReferenceGoldenLeg() {
   )
   const got = await replayLog({
     wasm,
-    params: { seed: meta.seed, worldgen: meta.worldgen },
+    params: fullGameParams(meta),
     frames,
     checkpoints: meta.checkpoints.map((c) => c.tick),
   })

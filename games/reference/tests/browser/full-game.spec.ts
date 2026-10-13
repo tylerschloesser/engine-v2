@@ -1,7 +1,8 @@
 // `reference_full_game_single` (M34b Tests added): the
 // whole reference game, once, through the real DOM: spawn on land, mine to the unlock, craft, place,
 // pick the empty furnace up and place it two tiles over, fetch iron and coal, deposit, smelt, take;
-// a last pick-up is refused because fuel is left. `Ui` is asserted after every phase (the script's
+// a last pick-up is refused because fuel is left; then (M52) a belt line with a curve and a side-load,
+// one belt turned and one picked up, and the furnace panel opened again. `Ui` is asserted after every phase (the script's
 // `expectUi` steps), and the final state hash must equal the headless run's: the golden
 // (`tests/golden/full-game.json`, written by `pnpm --filter reference golden:record` from the same
 // script on the headless driver), so the UI adds nothing the actions do not say. Stepped ticks and

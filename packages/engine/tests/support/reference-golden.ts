@@ -21,11 +21,29 @@ export type FullGameGolden = {
   /** `world.json` (`seed` is a u64 as decimal text): the world the log was recorded in. */
   seed: string
   worldgen: unknown
+  /** `world.json`'s transport caps (M52): every replay declares them, else no belt line is mapped. */
+  maxLines: number
+  maxItems: number
   /** Players scripted (the log has one). */
   players: number
   /** The tick of the log's last frame (a log has no idle ticks after it); `checkpoints` ends here. */
   ticks: number
   checkpoints: Checkpoint[]
+}
+
+/** The `WorldConfig.params` a replay of the golden runs with: the world and its transport caps. */
+export function fullGameParams(meta: FullGameGolden): {
+  seed: string
+  worldgen: unknown
+  maxLines: number
+  maxItems: number
+} {
+  return {
+    seed: meta.seed,
+    worldgen: meta.worldgen,
+    maxLines: meta.maxLines,
+    maxItems: meta.maxItems,
+  }
 }
 
 export function readFullGame(): { meta: FullGameGolden; frames: Uint8Array } {
@@ -35,8 +53,9 @@ export function readFullGame(): { meta: FullGameGolden; frames: Uint8Array } {
 }
 
 export function readWorldJson(): { seed: string; worldgen: unknown } {
-  // The world's identity only: `world.json` also declares transport caps (M51), which never move a
-  // hash (0079 §1).
+  // The world's identity only: `world.json` also declares transport caps (M51, `readWorldCaps`).
+  // Since M52 they decide whether belts are mapped onto lines at all, so a replay passes them
+  // (`fullGameParams`) and `reference_golden_replay` checks the golden's against these.
   const w = JSON.parse(readFileSync(WORLD_JSON, 'utf8')) as { seed: string; worldgen: unknown }
   return { seed: w.seed, worldgen: w.worldgen }
 }

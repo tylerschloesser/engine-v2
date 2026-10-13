@@ -34,7 +34,13 @@ const game = await loadGame(built.dir)
 const world = JSON.parse(
   readFileSync(fileURLToPath(new URL('../world.json', import.meta.url)), 'utf8'),
 )
-const params = { seed: world.seed, worldgen: world.worldgen }
+// The world's transport caps too (M52): a replay without them maps no belt line (0079 §5).
+const params = {
+  seed: world.seed,
+  worldgen: world.worldgen,
+  maxLines: world.maxLines,
+  maxItems: world.maxItems,
+}
 
 // The harness seed is a JS number and only seeds the link conditioner (zero latency here, so it
 // decides nothing); the world's own u64 seed is `world.json`'s, which a number cannot hold.
@@ -43,7 +49,8 @@ const h = await createNetHarness({
   seed: 3405,
   worldSeed: world.seed,
   clients: 1,
-  // The declared transport caps (M51): they reserve memory and never move a hash (0079 §1).
+  // The declared transport caps (M51): they reserve memory and, since M52, decide whether belts are
+  // mapped onto lines, so they move the hash once lines exist; the replay below passes them too.
   world: {
     params: { worldgen: world.worldgen, maxLines: world.maxLines, maxItems: world.maxItems },
   },
@@ -89,7 +96,15 @@ if (last.hash !== liveHash) {
 }
 
 writeFileSync(`${GOLDEN_DIR}full-game.log`, frames)
-const meta = { seed: world.seed, worldgen: world.worldgen, players: 1, ticks: end, checkpoints }
+const meta = {
+  seed: world.seed,
+  worldgen: world.worldgen,
+  maxLines: world.maxLines,
+  maxItems: world.maxItems,
+  players: 1,
+  ticks: end,
+  checkpoints,
+}
 writeFileSync(`${GOLDEN_DIR}full-game.json`, `${JSON.stringify(meta, null, 2)}\n`)
 console.log(
   `full-game: ${end} logged ticks (run: ${ticks}), ${frames.length} log bytes, final hash ${liveHash}`,

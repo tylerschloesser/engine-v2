@@ -32,7 +32,7 @@ declare global {
       run(wasmB64: string, scenario: HashScenario): Promise<string[]>
       replay(
         wasmB64: string,
-        params: { seed: string; worldgen: unknown },
+        params: { seed: string; worldgen: unknown; maxLines?: number; maxItems?: number },
         framesB64: string,
         ticks: number[],
       ): Promise<string[]>
@@ -47,7 +47,7 @@ type ToWorker =
   | {
       type: 'replay'
       module: WebAssembly.Module
-      params: { seed: string; worldgen: unknown }
+      params: { seed: string; worldgen: unknown; maxLines?: number; maxItems?: number }
       frames: Uint8Array
       ticks: number[]
     }
@@ -119,7 +119,12 @@ for (const entry of entries) {
   const outcome = await ask({
     type: 'replay',
     module,
-    params: { seed: referenceGolden.seed, worldgen: referenceGolden.worldgen },
+    params: {
+      seed: referenceGolden.seed,
+      worldgen: referenceGolden.worldgen,
+      maxLines: referenceGolden.maxLines,
+      maxItems: referenceGolden.maxItems,
+    },
     frames,
     ticks: referenceGolden.checkpoints.map((c) => c.tick),
   })

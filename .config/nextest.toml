@@ -13,3 +13,12 @@ default-filter = "test(/(^|::)slow_/)"
 
 [profile.slow.junit]
 path = "junit.xml"
+
+# The `rust` suite's `test-hooks` leg (slow tier, M52 fix round 1): the reference crate built with
+# `--features reference-sim/test-hooks`, every test but `slow_*` (`topology_items.rs` exists only
+# under the feature).
+[profile.test-hooks]
+default-filter = "package(reference-sim) and not test(/(^|::)slow_/)"
+
+[profile.test-hooks.junit]
+path = "junit.xml"

@@ -1,8 +1,10 @@
 {
   "seed": "6840143426475589698",
   "worldgen": {},
+  "maxLines": 32768,
+  "maxItems": 262144,
   "players": 1,
-  "ticks": 705,
+  "ticks": 757,
   "checkpoints": [
     {
       "tick": 10,
@@ -285,8 +287,28 @@
       "hash": "2c7d773858a2c830"
     },
     {
-      "tick": 705,
+      "tick": 710,
       "hash": "0160ff64b8b2e292"
+    },
+    {
+      "tick": 720,
+      "hash": "0160ff64b8b2e292"
+    },
+    {
+      "tick": 730,
+      "hash": "0160ff64b8b2e292"
+    },
+    {
+      "tick": 740,
+      "hash": "bb15827cb6c1b132"
+    },
+    {
+      "tick": 750,
+      "hash": "b8984a1676f32a05"
+    },
+    {
+      "tick": 757,
+      "hash": "73f2d99a3a6c908d"
     }
   ]
 }

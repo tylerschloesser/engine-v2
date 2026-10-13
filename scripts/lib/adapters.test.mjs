@@ -212,3 +212,46 @@ describe('script adapter', () => {
     expect(silent.failures[0].name).toBe('script exited 3 but reported no failure')
   })
 })
+
+// M52 fix round 2: the `rust` suite's `test-hooks` leg (`scripts/suites.mjs`).
+describe('nextest adapter', () => {
+  const hooks = {
+    name: 'test-hooks',
+    onlyTier: 'slow',
+    profile: 'test-hooks',
+    args: ['--features', 'reference-sim/test-hooks'],
+  }
+
+  test('command: a leg with onlyTier only runs in that tier', () => {
+    expect(adapters.nextest.command({ suite: hooks, pattern: undefined, tier: 'fast' })).toBeNull()
+    expect(
+      adapters.nextest.command({ suite: hooks, pattern: undefined, tier: 'slow' }),
+    ).not.toBeNull()
+  })
+
+  test('command: a profile replaces the tier profile and names the junit path', () => {
+    const c = adapters.nextest.command({ suite: hooks, pattern: 'topology', tier: 'slow' })
+    expect(c.args).toEqual([
+      'nextest',
+      'run',
+      '--workspace',
+      '--no-tests=pass',
+      '-P',
+      'test-hooks',
+      '--features',
+      'reference-sim/test-hooks',
+      'topology',
+    ])
+    expect(c.reportPath).toBe('target/nextest/test-hooks/junit.xml')
+  })
+
+  test('command: without a profile the tier picks one', () => {
+    const rust = { name: 'rust' }
+    const fast = adapters.nextest.command({ suite: rust, pattern: undefined, tier: 'fast' })
+    expect(fast.args).not.toContain('-P')
+    expect(fast.reportPath).toBe('target/nextest/default/junit.xml')
+    const slow = adapters.nextest.command({ suite: rust, pattern: undefined, tier: 'slow' })
+    expect(slow.args.slice(4, 6)).toEqual(['-P', 'slow'])
+    expect(slow.reportPath).toBe('target/nextest/slow/junit.xml')
+  })
+})

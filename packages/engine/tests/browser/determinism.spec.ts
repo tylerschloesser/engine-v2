@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { expect, test } from '@playwright/test'
 import { buildVariant, CRATE_KEYS, type VariantName } from '../support/feature-matrix.js'
 import { readGolden } from '../support/fixtures.js'
-import { readFullGame } from '../support/reference-golden.js'
+import { fullGameParams, readFullGame } from '../support/reference-golden.js'
 import { PERSIST_PARAMS, persistCheckpoints, readPersistLog } from '../support/release-golden.js'
 import { diffCheckpoints, type Golden, type HashScenario } from '../support/scenario.js'
 import { openPage } from './support/page.js'
@@ -146,7 +146,7 @@ test('determinism: release variants (plain, wasm-opt, +simd128) reproduce the go
         ),
       [
         wasm('reference'),
-        { seed: full.meta.seed, worldgen: full.meta.worldgen },
+        fullGameParams(full.meta),
         b64(full.frames),
         full.meta.checkpoints.map((c) => c.tick),
       ] as const,

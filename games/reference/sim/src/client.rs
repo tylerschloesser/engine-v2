@@ -436,7 +436,8 @@ impl RefClient {
                     self.open = Some(o);
                     return;
                 }
-                RefEntity::Belt(_) if o.x == tx && o.y == ty => {
+                // A belt being picked up (M52) is gone for the player: the tap finds nothing.
+                RefEntity::Belt(b) if o.x == tx && o.y == ty && !b.removing => {
                     self.belt = Some(o);
                     return;
                 }
@@ -480,11 +481,15 @@ impl RefClient {
         }
         let present = if view.visible().contains(at) {
             view.entities()
-                .any(|(_, e, o)| matches!(e, RefEntity::Belt(_)) && o == at)
+                .any(|(_, e, o)| e.as_live_belt().is_some() && o == at)
         } else {
             let w = view.world();
             match w.entity_at(at) {
-                Ok(Some(id)) => matches!(w.entity(id), Ok(Some(RefEntity::Belt(_))) | Err(_)),
+                Ok(Some(id)) => match w.entity(id) {
+                    Ok(Some(e)) => e.as_live_belt().is_some(),
+                    Ok(None) => false,
+                    Err(_) => true,
+                },
                 Ok(None) => false,
                 Err(_) => true,
             }
@@ -672,6 +677,10 @@ impl ClientSide<RefGame> for RefClient {
         let frame = belt_frame(view);
         for (id, entity, origin) in view.entities() {
             let d = match entity {
+                // A belt being picked up (M52) draws nothing: it vanishes at the (predicted) tap.
+                RefEntity::Belt(belt) if belt.removing => continue,
+                #[cfg(feature = "test-hooks")]
+                RefEntity::TestRequest(_) => continue,
                 RefEntity::Furnace(furnace) => {
                     let d = out.sprite(
                         LAYER_FURNACE,
@@ -872,7 +881,7 @@ impl ClientSide<RefGame> for RefClient {
         out.belt = None;
         if let Some(at) = self.belt {
             for (_, e, origin) in view.entities() {
-                if let RefEntity::Belt(b) = e
+                if let Some(b) = e.as_live_belt()
                     && origin == at
                 {
                     out.belt = Some(UiBelt {

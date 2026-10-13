@@ -29,6 +29,15 @@ impl RefScenario {
     /// A fresh world at [`TEST_SEED`] with default `RefParams` -- the same seed and params
     /// `src/main.ts` uses, so a native test's landmark tiles are what a player actually sees.
     pub fn new() -> Self {
+        Self::with_caps(
+            engine::transport::DEFAULT_MAX_LINES,
+            engine::transport::DEFAULT_MAX_ITEMS,
+        )
+    }
+
+    /// [`Self::new`] with other transport caps (M52: `0, 0` is a world that declares none, like the
+    /// large-save bench's).
+    pub fn with_caps(max_lines: u32, max_items: u32) -> Self {
         RefScenario {
             sim: Sim::genesis(WorldParams {
                 seed: TEST_SEED,
@@ -40,8 +49,8 @@ impl RefScenario {
                 max_entities: 262_144,
                 max_modified_tiles: 1_048_576,
                 max_action_growth: 4_096,
-                max_lines: engine::transport::DEFAULT_MAX_LINES,
-                max_items: engine::transport::DEFAULT_MAX_ITEMS,
+                max_lines,
+                max_items,
             }),
             out: Vec::new(),
             seqs: std::collections::BTreeMap::new(),
@@ -285,6 +294,180 @@ impl RefScenario {
                 at: TileXY::from_tile(at),
             },
         )
+    }
+
+    /// Applies `actions` for `who` in one tick (several edits served by the same tick rule), each
+    /// with its own verdict.
+    pub fn dispatch_batch(
+        &mut self,
+        who: PlayerId,
+        actions: &[RefAction],
+    ) -> Vec<Result<(), RefReject>> {
+        let mut batch = Vec::new();
+        for &action in actions {
+            let s = self.seqs.entry(who).or_insert(0);
+            *s += 1;
+            batch.push(Record::Action {
+                who,
+                seq: *s,
+                action,
+            });
+        }
+        self.sim.step(&batch, &mut self.out);
+        self.out
+            .iter()
+            .map(|o| match &o.result {
+                Ok(_) => Ok(()),
+                Err(Rejected::Game(r)) => Err(*r),
+                Err(Rejected::Engine(e)) => panic!("unexpected engine reject: {e:?}"),
+            })
+            .collect()
+    }
+
+    /// M52: the host's lines are what the belts in `entities()`'s square say, recomputed from scratch
+    /// (`rules::belts::topology`'s rules, not its incremental code): every live belt stores the shape
+    /// its neighbours give and is mapped; a straight belt shares its lines with the belt in front iff
+    /// that one faces the same way (one position block of 256 further from the front) and with the
+    /// belt behind iff that one is a straight belt facing the same way; a curve is a line pair of its
+    /// own (106 on the turn side, 295); the belt fronting a pair sets its output from its front tile
+    /// (`output_of`: `Next` lane for lane, `Merge` onto the near lane at +64 / +192, else `DeadEnd`);
+    /// every line has one segment, and the store holds exactly two lines per fronting belt.
+    pub fn assert_topology(&self) {
+        self.assert_topology_in(TileRect::new(
+            TilePos::new(-200, -200),
+            TilePos::new(200, 200),
+        ));
+    }
+
+    /// [`Self::assert_topology`] over the belts in `rect` (its line count check then counts only
+    /// those: every line must belong to a belt in `rect`). Also: no full cap dropped a belt's lines
+    /// (`topology::belts_unmapped`).
+    pub fn assert_topology_in(&self, rect: TileRect) {
+        assert_eq!(
+            reference_sim::rules::belts::topology::belts_unmapped(),
+            0,
+            "belts left unmapped by a full cap"
+        );
+        use engine::transport::Output;
+        use reference_sim::BeltShape;
+        use reference_sim::rules::belts::topology::{Link, lanes_at, output_of, shape_of};
+        let w = self.read();
+        let tr = w.transport();
+        let ahead = |t: TilePos, d: reference_sim::Dir, n: i32| {
+            let (dx, dy) = match d {
+                reference_sim::Dir::East => (1, 0),
+                reference_sim::Dir::South => (0, 1),
+                reference_sim::Dir::West => (-1, 0),
+                reference_sim::Dir::North => (0, -1),
+            };
+            TilePos::new(t.x + dx * n, t.y + dy * n)
+        };
+        let live = |t: TilePos| {
+            w.entity_at(t).expect("host").and_then(|id| {
+                w.entity(id)
+                    .expect("host")
+                    .and_then(|e| e.as_live_belt().copied())
+            })
+        };
+        let mut fronts = 0u32;
+        let mut all = Vec::new();
+        w.entities_in(rect, &mut |id, e| all.push((id, *e)))
+            .expect("host reads are total");
+        all.sort_by_key(|(id, _)| id.0);
+        all.dedup_by_key(|(id, _)| id.0);
+        for (_, e) in all {
+            let Some(b) = e.as_belt().copied() else {
+                continue;
+            };
+            assert!(!b.removing, "a removing belt outlived its tick: {b:?}");
+            let t = b.origin.tile();
+            let shape = shape_of(w, t, b.dir).expect("host");
+            assert_eq!(b.shape, shape, "{t:?}: stored shape");
+            let m = lanes_at(tr, t).unwrap_or_else(|| panic!("{t:?} is not mapped"));
+            for l in m.lane {
+                let mut n = 0;
+                tr.segments(l, &mut |_| n += 1).expect("line");
+                assert_eq!(n, 1, "{t:?}: line {l:?} segments");
+                if shape == BeltShape::Straight {
+                    assert_eq!(tr.len(l), Ok(m.len), "{t:?}: lanes of one length");
+                }
+            }
+            if shape != BeltShape::Straight {
+                let left = shape == BeltShape::CurveLeft;
+                let lens = if left { [106, 295] } else { [295, 106] };
+                assert_eq!(
+                    (tr.len(m.lane[0]), tr.len(m.lane[1]), m.off),
+                    (Ok(lens[0]), Ok(lens[1]), 0),
+                    "{t:?}: curve"
+                );
+            } else {
+                let front = live(ahead(t, b.dir, 1)).filter(|f| f.dir == b.dir);
+                let back = live(ahead(t, b.dir, -1)).filter(|k| {
+                    k.dir == b.dir
+                        && shape_of(w, ahead(t, b.dir, -1), k.dir) == Ok(BeltShape::Straight)
+                });
+                // Joined to a same-way neighbour, unless the joined run would pass
+                // `MAX_LINE_TILES`: then a run boundary (the output check below sees the `Next`).
+                let max = engine::transport::MAX_LINE_TILES;
+                let tiles = |l: &reference_sim::rules::belts::topology::TileLanes| l.len / 256;
+                if front.is_some() {
+                    let mf = lanes_at(tr, ahead(t, b.dir, 1)).expect("front mapped");
+                    if m.off > 0 {
+                        assert_eq!((mf.lane, mf.off + 256), (m.lane, m.off), "{t:?}: one run");
+                    } else {
+                        assert!(
+                            tiles(&m) + tiles(&mf) > max,
+                            "{t:?}: not joined to the front"
+                        );
+                    }
+                } else {
+                    assert_eq!(m.off, 0, "{t:?}: joined to nothing in front");
+                }
+                if back.is_some() {
+                    if m.off + 256 == m.len {
+                        let mb = lanes_at(tr, ahead(t, b.dir, -1)).expect("back mapped");
+                        assert!(
+                            tiles(&m) + tiles(&mb) > max,
+                            "{t:?}: not joined to the back"
+                        );
+                    }
+                } else {
+                    assert_eq!(m.off + 256, m.len, "{t:?}: joined to nothing behind");
+                }
+                assert!(tiles(&m) <= max, "{t:?}: a run past MAX_LINE_TILES");
+            }
+            if m.off != 0 {
+                continue;
+            }
+            fronts += 1;
+            let f = ahead(t, b.dir, 1);
+            let want = match output_of(w, t, b).expect("host") {
+                Link::DeadEnd => [Output::DeadEnd; 2],
+                Link::Next => {
+                    let mf = lanes_at(tr, f).expect("front mapped");
+                    [Output::Next(mf.lane[0]), Output::Next(mf.lane[1])]
+                }
+                Link::SideLoad { near } => {
+                    let mf = lanes_at(tr, f).expect("front mapped");
+                    let line = mf.lane[usize::from(near)];
+                    let at = |lane: u8| mf.off + if lane == near { 64 } else { 192 };
+                    [
+                        Output::Merge { line, at: at(0) },
+                        Output::Merge { line, at: at(1) },
+                    ]
+                }
+            };
+            assert_eq!(
+                [tr.out(m.lane[0]), tr.out(m.lane[1])],
+                [Ok(want[0]), Ok(want[1])],
+                "{t:?} {b:?}: output"
+            );
+        }
+        assert_eq!(
+            tr.lines_len(),
+            2 * fronts,
+            "two lines per fronting belt, no leak"
+        );
     }
 
     /// Makes `w` x `h` tiles from `min` plain grass with no resource (native-test-only, like

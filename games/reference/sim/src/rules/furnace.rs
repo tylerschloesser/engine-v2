@@ -109,21 +109,12 @@ pub fn pick_up(
     Ok(())
 }
 
-/// The tick rule: one [`advance`] per woken entity, then one per due timer. A belt's spawn or put
-/// wakes it here too; `advance` ignores it (M51: belts have no tick rule until M52 maps lines).
-pub fn tick(cx: &mut TickCx<'_, RefGame>) {
-    while let Some(id) = cx.next_woken() {
-        advance(cx, id);
-    }
-    while let Some(id) = cx.next_due() {
-        advance(cx, id);
-    }
-}
-
-/// The only furnace rule; idempotent for a furnace with nothing to do, so a deposit's wake and the
-/// wheel's due timer share it. If a smelt is due, finish it (iron -1, ingot +1, burn -1); then, if
-/// idle with iron, room in the output slot (`SLOT_CAP`) and either burn left or fuel to light (coal first), light it and schedule the next
-/// finish; otherwise sleep with no timer. At most one `put_entity`, and none when nothing changed.
+/// The only furnace rule, reached through `rules::tick`'s dispatch (a woken or due furnace);
+/// idempotent for a furnace with nothing to do, so a deposit's wake and the wheel's due timer share
+/// it. If a smelt is due, finish it (iron -1, ingot +1, burn -1); then, if idle with iron, room in
+/// the output slot (`SLOT_CAP`) and either burn left or fuel to light (coal first), light it and
+/// schedule the next finish; otherwise sleep with no timer. At most one `put_entity`, and none when
+/// nothing changed.
 pub fn advance(cx: &mut TickCx<'_, RefGame>, id: EntityId) {
     let Some(RefEntity::Furnace(mut f)) = cx.entity(id).ok().flatten().copied() else {
         return; // despawned before this tick got to it, or a belt.

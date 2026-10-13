@@ -9,7 +9,7 @@ import { loadGame } from '../../src/server-node.js'
 import { runHeavy } from '../../src/test/replay.js'
 import { gameCrateBuildDir, loadFixture } from '../support/fixtures.js'
 import { frameLogStorage, LOG_WORLD_ID } from '../support/log-storage.js'
-import { readFullGame } from '../support/reference-golden.js'
+import { fullGameParams, readFullGame } from '../support/reference-golden.js'
 import { PERSIST_PARAMS, readPersistLog } from '../support/release-golden.js'
 
 test('heavy-n1 all logs @slow', async () => {
@@ -37,7 +37,7 @@ test('heavy-n1 all logs @slow', async () => {
   logs.push({
     name: 'reference full-game log',
     wasm: (await loadGame(gameCrateBuildDir('reference'))).wasm,
-    params: { seed: meta.seed, worldgen: meta.worldgen },
+    params: fullGameParams(meta),
     frames,
   })
 

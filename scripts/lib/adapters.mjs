@@ -40,8 +40,12 @@ function fromReport(parseReport) {
 
 export const adapters = {
   nextest: {
+    // `suite.profile` (M52 fix round 1, the `rust` suite's `test-hooks` leg): a nextest profile of
+    // its own (its filter and junit path, `.config/nextest.toml`) in place of the tier's; with
+    // `suite.onlyTier` the leg runs in that tier alone.
     command({ suite, pattern, tier }) {
-      const profile = tier === 'slow' ? 'slow' : 'default'
+      if (suite.onlyTier && suite.onlyTier !== tier) return null
+      const profile = suite.profile ?? (tier === 'slow' ? 'slow' : 'default')
       return {
         cmd: 'cargo',
         // Without --no-tests=pass a filter that matches nothing exits 4.
@@ -50,7 +54,7 @@ export const adapters = {
           'run',
           '--workspace',
           '--no-tests=pass',
-          ...(tier === 'slow' ? ['-P', 'slow'] : []),
+          ...(profile === 'default' ? [] : ['-P', profile]),
           ...(suite.args ?? []),
           ...(pattern ? [pattern] : []),
         ],

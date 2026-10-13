@@ -17,6 +17,7 @@ import {
   type Checkpoint,
   divergenceMessage,
   firstDivergence,
+  fullGameParams,
   readFullGame,
 } from './reference-golden.ts'
 import {
@@ -128,7 +129,7 @@ export async function runGoldens(api: GoldenApi, dirs: GoldenDirs): Promise<Gold
     const { wasm } = await api.loadGame(dirs.reference)
     const got = await api.replayLog({
       wasm,
-      params: { seed: meta.seed, worldgen: meta.worldgen },
+      params: fullGameParams(meta),
       frames,
       checkpoints: meta.checkpoints.map((c) => c.tick),
     })

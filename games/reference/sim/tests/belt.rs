@@ -10,6 +10,7 @@ use common::RefScenario;
 use engine::game::{EntityId, PlayerId};
 use engine::world::{Tile, TilePos};
 use reference_sim::content::{self, ItemId};
+use reference_sim::rules::belts::topology::{lanes_at, shape_of};
 use reference_sim::{Belt, BeltKind, BeltShape, Dir, RefEntity, RefReject, TileXY};
 
 const P1: PlayerId = PlayerId(1);
@@ -44,6 +45,7 @@ fn place_belt_rules() {
                 kind,
                 shape: BeltShape::Straight,
                 spawn: [None, None],
+                removing: false,
             }),
             "{kind:?}"
         );
@@ -194,7 +196,8 @@ fn pickup_despawns() {
 }
 
 /// 0079 §20 (b): over a scripted session of furnace and belt placements, rotations, pick-ups,
-/// deposits and smelting, every entity's anchor at the end of every tick equals its anchor at spawn.
+/// deposits and smelting, every entity's anchor at the end of every tick equals its anchor at spawn,
+/// and (M52) every belt's stored shape is the one its neighbours give, curves included.
 /// Fails if any rule moves an entity (a rotate that shifts the origin, a furnace put elsewhere).
 #[test]
 fn no_reference_entity_moves_in_a_tick() {
@@ -203,6 +206,7 @@ fn no_reference_entity_moves_in_a_tick() {
     s.give(P1, ItemId::Iron, 4);
     s.give(P1, ItemId::Coal, 1);
     let mut spawned: BTreeMap<EntityId, TileXY> = BTreeMap::new();
+    let curves = std::cell::Cell::new(0u32);
     let check = |s: &RefScenario, spawned: &mut BTreeMap<EntityId, TileXY>, step: &str| {
         for (id, e) in s.entities() {
             let at = e.origin();
@@ -214,7 +218,16 @@ fn no_reference_entity_moves_in_a_tick() {
                     Some(id),
                     "{step}: occupancy follows"
                 );
-                assert_eq!(b.shape, BeltShape::Straight);
+                // M52: shapes vary; each is the one its neighbours give.
+                assert_eq!(
+                    Ok(b.shape),
+                    shape_of(s.read(), at.tile(), b.dir),
+                    "{step}: entity {id:?} shape"
+                );
+                assert!(!b.removing, "{step}: a removing belt outlived its tick");
+                if b.shape != BeltShape::Straight {
+                    curves.set(curves.get() + 1);
+                }
             }
         }
     };
@@ -258,13 +271,16 @@ fn no_reference_entity_moves_in_a_tick() {
         "the furnace smelted"
     );
     assert_eq!(spawned.len(), 7, "two furnaces and five belt spawns");
+    assert!(curves.get() > 0, "the rotations made curves (M52)");
     assert_eq!(s.entities().len(), 6);
 }
 
-/// Belts sleep (the furnace rule's `idle_furnaces_cost_nothing`, M51 has no belt tick rule): 1,000
-/// belts of every kind and direction, placed and rotated, cost nothing once their wakes are served:
-/// no put, no entity visit, no state change over 1,000 ticks. Fails if `advance` (or a later belt
-/// rule) leaves a timer on a belt or puts one.
+/// Belts sleep (the furnace rule's `idle_furnaces_cost_nothing`): 1,000 belts of every kind and
+/// direction, placed and rotated, cost nothing once their wakes are served: no put, no entity visit,
+/// no state change over 1,000 ticks. M52: the world is mapped onto lines (its curves, side-loads and
+/// runs counted), so the topology rule is what sleeps. Fails if a belt rule leaves a timer on a belt,
+/// puts one from the tick (a put from the tick wakes nothing, but a wake would revisit), or keeps
+/// re-mapping.
 #[test]
 fn idle_belts_cost_nothing() {
     let mut s = RefScenario::new();
@@ -281,6 +297,29 @@ fn idle_belts_cost_nothing() {
     }
     assert_eq!(s.entities().len(), 1_000);
     s.step_ticks(2); // the last action's wake is served and finds nothing to do.
+
+    // M52: the world is mapped, with curves, side-loads and runs (every belt's lanes indexed).
+    s.assert_topology();
+    let (mut curves, mut merges, mut runs) = (0, 0, 0);
+    for (_, e) in s.entities() {
+        let b = e.as_belt().copied().expect("belts only");
+        let tr = s.read().transport();
+        let m = lanes_at(tr, b.origin.tile()).expect("every belt is mapped");
+        curves += usize::from(b.shape != BeltShape::Straight);
+        runs += usize::from(m.off > 0);
+        if m.off == 0 {
+            merges += m
+                .lane
+                .iter()
+                .filter(|&&l| matches!(tr.out(l), Ok(engine::transport::Output::Merge { .. })))
+                .count();
+        }
+    }
+    assert_eq!(
+        (curves, merges, runs, s.read().transport().lines_len()),
+        (108, 778, 376, 1248),
+        "curves, side-loading lanes, belts inside a run, lines"
+    );
 
     let writes = s.writes_logged();
     let hash = s.hash();

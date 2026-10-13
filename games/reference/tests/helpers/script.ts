@@ -89,8 +89,8 @@ export class Script {
   takeAll(at: Tile): this {
     return this.add({ op: 'takeAll', at })
   }
-  /** M51b: places a belt (free) at `at` facing `dir`; waits for the host's ack. Not yet used by
-   * `fullGame()` (its golden stays as recorded). */
+  /** M51b: places a belt (free) at `at` facing `dir`; waits for the host's ack (`fullGame()`'s belt
+   * passage since M52). */
   placeBelt(at: Tile, dir: Dir, kind: BeltKind = 'Belt'): this {
     return this.add({ op: 'placeBelt', at, dir, kind })
   }
@@ -131,7 +131,7 @@ export function beltScript(): Script {
     .rotateBelt(BELT_A)
     .pickUpBelt(BELT_B)
 }
-export const BELT_SCRIPT_HASH = '4c65ee37b7002807'
+export const BELT_SCRIPT_HASH = '213fa422f7abe35a'
 
 /** What a driver does. A driver throws on anything unexpected (a rejected action, a wait that never
  * ends); it never sleeps: a headless driver advances ticks, a DOM driver steps the manual clock. */
@@ -239,8 +239,12 @@ export async function runScript(
 
 /** The whole reference game, once: spawn, mine to the unlock, craft, place, pick the empty furnace
  * up and place it two tiles over, fetch iron and coal, deposit, smelt, take; a last pick-up is
- * refused because fuel is left (`0003` Consequences' coverage list, M34b Scope). Ends quiescent: no
- * timer, no craft, no collect, so the state hash does not depend on how many ticks the run took. */
+ * refused because fuel is left (`0003` Consequences' coverage list, M34b Scope); then (M52) a belt
+ * line mapped onto transport lines (a 3-tile east run, a curve turning north, a 2-tile north run and
+ * a feeder side-loading into it from the east; the feeder turned north, no longer feeding, then the
+ * run's middle tile picked up, splitting it) and, since the belt tools and taps closed it, the last
+ * furnace's panel opened again (what `reference_full_game_single` reads at the end). Ends quiescent:
+ * no timer, no craft, no collect, so the state hash does not depend on how many ticks the run took. */
 export function fullGame(): Script {
   const [A, B] = [FURNACE_A, FURNACE_B]
   // Stand five tiles west of a furnace: out of range of every resource, so no collect button sits
@@ -289,7 +293,25 @@ export function fullGame(): Script {
     .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1) })
     .pickUp(B, { refused: true })
     .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1) })
+    .panTo(BELTS_STAND)
+    .placeBelt({ x: 2, y: -12 }, 'East')
+    .placeBelt({ x: 3, y: -12 }, 'East')
+    .placeBelt({ x: 4, y: -12 }, 'East')
+    .placeBelt({ x: 5, y: -12 }, 'North')
+    .placeBelt({ x: 5, y: -13 }, 'North')
+    .placeBelt({ x: 5, y: -14 }, 'North')
+    .placeBelt({ x: 6, y: -13 }, 'West')
+    .rotateBelt({ x: 6, y: -13 })
+    .pickUpBelt({ x: 3, y: -12 })
+    .expectUi({ inventory: inv(0, 0, 0, 0, 0, 1), belt: null })
+    .panTo(standBy(B))
+    .openFurnace(B)
 }
+
+/** Where `fullGame()`'s belt passage stands: no resource within collect range, the belts in view
+ * (rows -14 to -12, columns 2 to 6 are free land at `world.json`'s seed), and outside the view of
+ * `reference_late_join_sees_world`'s late joiner, which counts the sprites around the furnaces. */
+export const BELTS_STAND: Tile = { x: 4, y: -10 }
 
 // ---------------------------------------------------------------------------------------------
 // Headless driver

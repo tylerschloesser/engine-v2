@@ -14,7 +14,7 @@ type ToWorker =
   | {
       type: 'replay'
       module: WebAssembly.Module
-      params: { seed: string; worldgen: unknown }
+      params: { seed: string; worldgen: unknown; maxLines?: number; maxItems?: number }
       frames: Uint8Array
       ticks: number[]
     }

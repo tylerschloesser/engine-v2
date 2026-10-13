@@ -111,8 +111,20 @@ pub enum RefAction {
         at: TileXY,
     },
     /// M51: remove the belt at `at`; returns nothing to the inventory (README "Belts", Placement).
+    /// M52: `apply` marks it `removing`; the tick unmaps its lines and despawns it.
     PickUpBelt {
         at: TileXY,
+    },
+    /// M52, `test-hooks` only (never shipped; appended last): insert `item` (an engine item id,
+    /// nonzero) on lane `lane` of the belt at `at`, `pos` positions behind the tile's first position
+    /// on its line, on the next tick (`rules::belts::topology::test_insert`). How native tests put
+    /// items on lines before M53's spawners.
+    #[cfg(feature = "test-hooks")]
+    TestInsertItem {
+        at: TileXY,
+        lane: u8,
+        pos: u16,
+        item: u16,
     },
 }
 
@@ -326,7 +338,10 @@ pub struct SpawnCfg {
 
 /// A one-tile belt entity (M51, `content::BELT_PROTO`): plain data, anchored at `origin`, never
 /// moved (0079 §20 (b): a rotate is a put with the same anchor). `spawn` is per lane, left then right
-/// (seen along `dir`), set by M53's panel; `None` on every placed belt.
+/// (seen along `dir`), set by M53's panel; `None` on every placed belt. `removing` (M52): `apply
+/// (PickUpBelt)` set it and the tick that follows the same `apply` unmaps the belt's lines and
+/// despawns it (a despawn wakes nothing); until then it occupies its tile, draws nothing and takes no
+/// action. On the host it never outlives its tick; a client sees it only as a prediction.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Belt {
     pub origin: TileXY,
@@ -334,6 +349,7 @@ pub struct Belt {
     pub kind: BeltKind,
     pub shape: BeltShape,
     pub spawn: [Option<SpawnCfg>; 2],
+    pub removing: bool,
 }
 
 impl Belt {
@@ -345,8 +361,21 @@ impl Belt {
             kind,
             shape: BeltShape::Straight,
             spawn: [None; 2],
+            removing: false,
         }
     }
+}
+
+/// `test-hooks` only (M52): a one-tick request for `rules::belts::topology::test_insert`, spawned by
+/// `apply(TestInsertItem)` on the belt's tile and despawned by the tick that serves it (born and gone
+/// in one tick, it stamps no chunk: 0079 §20 (b)).
+#[cfg(feature = "test-hooks")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TestInsert {
+    pub at: TileXY,
+    pub lane: u8,
+    pub pos: u16,
+    pub item: u16,
 }
 
 /// The game's `Game::Entity` (M51: an enum; M33-M50 it was the furnace alone). Every site that reads
@@ -355,6 +384,9 @@ impl Belt {
 pub enum RefEntity {
     Furnace(Furnace),
     Belt(Belt),
+    /// M52, `test-hooks` only (appended last: the shipped enum is unchanged).
+    #[cfg(feature = "test-hooks")]
+    TestRequest(TestInsert),
 }
 
 impl RefEntity {
@@ -363,20 +395,32 @@ impl RefEntity {
         match self {
             RefEntity::Furnace(f) => f.origin,
             RefEntity::Belt(b) => b.origin,
+            #[cfg(feature = "test-hooks")]
+            RefEntity::TestRequest(r) => r.at,
         }
     }
 
     pub const fn as_furnace(&self) -> Option<&Furnace> {
         match self {
             RefEntity::Furnace(f) => Some(f),
-            RefEntity::Belt(_) => None,
+            _ => None,
         }
     }
 
+    /// The belt, `removing` included (see [`Self::as_live_belt`]).
     pub const fn as_belt(&self) -> Option<&Belt> {
         match self {
             RefEntity::Belt(b) => Some(b),
-            RefEntity::Furnace(_) => None,
+            _ => None,
+        }
+    }
+
+    /// The belt unless it is being picked up (M52: a `removing` belt counts as gone everywhere but
+    /// occupancy).
+    pub const fn as_live_belt(&self) -> Option<&Belt> {
+        match self {
+            RefEntity::Belt(b) if !b.removing => Some(b),
+            _ => None,
         }
     }
 }
@@ -594,7 +638,7 @@ pub struct RefGame;
 impl Game for RefGame {
     // `test-hooks` (never shipped) reports one version higher: a save of the normal build is then
     // `SaveIncompatible` (M34b).
-    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 8 } else { 7 };
+    const SCHEMA_VERSION: u32 = if cfg!(feature = "test-hooks") { 9 } else { 8 };
     //  3: `Furnace` entity, `PlaceFurnace`, resources `NOT_BUILDABLE` (M33).
     //  4: `FurnaceDeposit`, `FurnaceTake`, `FurnacePickUp` and their rejects (M33b).
     //  5: `RefGlobal { colours }`, written on `Joined` (M34).
@@ -602,6 +646,8 @@ impl Game for RefGame {
     //     a covered tile and a due collect on one ends with no item (M39ai).
     //  7: `RefEntity` is an enum (`Furnace`, `Belt`); `PlaceBelt`, `RotateBelt`, `PickUpBelt` and
     //     `NoBeltHere` (M51). No migration: a schema 6 save is refused (0079 §6).
+    //  8: `Belt.removing`; placed belts are mapped onto transport lines and their `shape` derived
+    //     (M52). No migration: a schema 7 save is refused.
     type Worldgen = RefWorldgen;
     type Action = RefAction;
     type Reject = RefReject;
@@ -620,6 +666,9 @@ impl Game for RefGame {
         match e {
             RefEntity::Furnace(_) => content::FURNACE_PROTO,
             RefEntity::Belt(_) => content::BELT_PROTO,
+            // A one-tick request on its belt's tile: the belt (the older, lower id) stays `entity_at`.
+            #[cfg(feature = "test-hooks")]
+            RefEntity::TestRequest(_) => content::BELT_PROTO,
         }
     }
 
@@ -687,6 +736,21 @@ impl Game for RefGame {
             RefAction::PlaceBelt { at, dir, kind } => rules::belt::place(w, at.tile(), *dir, *kind),
             RefAction::RotateBelt { at } => rules::belt::rotate(w, at.tile()),
             RefAction::PickUpBelt { at } => rules::belt::pick_up(w, at.tile()),
+            #[cfg(feature = "test-hooks")]
+            RefAction::TestInsertItem {
+                at,
+                lane,
+                pos,
+                item,
+            } => {
+                w.spawn(RefEntity::TestRequest(TestInsert {
+                    at: *at,
+                    lane: *lane,
+                    pos: *pos,
+                    item: *item,
+                }));
+                Ok(())
+            }
         }
     }
 
@@ -696,7 +760,10 @@ impl Game for RefGame {
     fn predict(_a: &RefAction) -> bool {
         // `test-hooks` (never shipped): the poison craft is the host's to panic on alone.
         #[cfg(feature = "test-hooks")]
-        if matches!(_a, RefAction::StartCraft { recipe: 255 }) {
+        if matches!(
+            _a,
+            RefAction::StartCraft { recipe: 255 } | RefAction::TestInsertItem { .. }
+        ) {
             return false;
         }
         true
@@ -707,13 +774,14 @@ impl Game for RefGame {
             RefAction::PlaceFurnace { .. } | RefAction::PlaceBelt { .. } => {
                 Some(Growth::entities(1))
             }
+            #[cfg(feature = "test-hooks")]
+            RefAction::TestInsertItem { .. } => Some(Growth::entities(1)),
             _ => Some(Growth::NONE),
         }
     }
 
     fn tick(cx: &mut TickCx<'_, Self>) {
-        rules::collect::tick(cx);
-        rules::furnace::tick(cx);
+        rules::tick(cx);
     }
 
     fn admit(
@@ -733,6 +801,8 @@ impl Game for RefGame {
             | RefAction::PlaceBelt { .. }
             | RefAction::RotateBelt { .. }
             | RefAction::PickUpBelt { .. } => Ok(()),
+            #[cfg(feature = "test-hooks")]
+            RefAction::TestInsertItem { .. } => Ok(()),
         }
     }
 }
