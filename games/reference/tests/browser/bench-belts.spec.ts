@@ -56,9 +56,15 @@ const REFERENCE = fileURLToPath(new URL('../../', import.meta.url))
 const PORT = Number(process.env.ENGINE_TEST_PORT ?? 4517) + 13
 const BASE = `http://127.0.0.1:${PORT}`
 /** `bench-stats.ts`'s window. */
+// Same switch as the frame benches (`frame-bench-belts.spec.ts`): under the CI runner's software
+// adapter the page renders a few frames a second, so the window asks for 20 frames instead of 500
+// and every wait gets a longer ceiling; the record pins and the no-growth check are the same on
+// both, only the printed p95s are a smoke reading there (0020 §10). Run 38374454605 timed out at
+// the 500-frame wait.
+const isSwiftShader = process.env.ENGINE_GPU === 'swiftshader'
 const WINDOW_MS = 10_000
 /** Frames the released window must also hold (at 60 Hz, 10 s is 600). */
-const WINDOW_FRAMES = 500
+const WINDOW_FRAMES = isSwiftShader ? 20 : 500
 /** At `mid`, the tick by which the field's items fill the held view (x 96 to 160). */
 const MID_FILLED_TICK = 1_800
 
@@ -108,7 +114,7 @@ async function scene(
   await page.waitForFunction(() => window.__bench !== undefined)
   await page.evaluate(() => window.__bench?.holdPan())
   await page.waitForFunction((t) => (window.__bench?.hud().tick ?? 0) >= t, fromTick, {
-    timeout: 150_000,
+    timeout: isSwiftShader ? 400_000 : 150_000,
   })
   const read = async () => {
     const h = await hud(page)
@@ -122,7 +128,7 @@ async function scene(
   }
   const first = await read()
   await page.waitForFunction((t) => (window.__bench?.hud().tick ?? 0) >= t, first.tick + 20, {
-    timeout: 10_000,
+    timeout: isSwiftShader ? 30_000 : 10_000,
   })
   const second = await read()
   // The items flow, so only the belt records and drops are compared across the two frames.
@@ -140,7 +146,7 @@ async function scene(
     ([s, ms, n]) =>
       performance.now() - s.t >= ms && (window.__bench?.framesRendered() ?? 0) - s.frames >= n,
     [start, WINDOW_MS + 500, WINDOW_FRAMES] as const,
-    { timeout: 60_000 },
+    { timeout: isSwiftShader ? 300_000 : 60_000 },
   )
   return { held: first, window: await hud(page) }
 }
@@ -148,7 +154,7 @@ async function scene(
 test('bench_belts: the belt field at both zooms and upright, records pinned, no memory growth @slow', async ({
   page,
 }) => {
-  test.setTimeout(360_000)
+  test.setTimeout(isSwiftShader ? 1_500_000 : 360_000)
   const max = await scene(page, 'max', 200)
   const portrait = await scene(page, 'max', 200, { width: 390, height: 844 })
   const mid = await scene(page, 'mid', MID_FILLED_TICK)
