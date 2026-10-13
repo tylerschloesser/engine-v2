@@ -49,6 +49,11 @@ pub struct RefParams {
     #[cfg(feature = "bench")]
     #[ts(skip)]
     pub bench: u32,
+    /// `bench` builds only (M57): what genesis builds on the bench terrain, `crate::bench::Regime`
+    /// as a number (`0` the large save, `1` the belt field). Read only when `bench` is set.
+    #[cfg(feature = "bench")]
+    #[ts(skip)]
+    pub bench_regime: u32,
 }
 
 impl Default for RefParams {
@@ -68,6 +73,8 @@ impl Default for RefParams {
             coal_density: 900,
             #[cfg(feature = "bench")]
             bench: 0,
+            #[cfg(feature = "bench")]
+            bench_regime: 0,
         }
     }
 }
@@ -155,8 +162,13 @@ impl Worldgen for RefWorldgen {
         if params.bench != 0 {
             for ty in 0..EDGE {
                 for tx in 0..EDGE {
-                    out[(ty * EDGE + tx) as usize] =
-                        crate::bench::pristine_tile(chunk, tx, ty, params.bench);
+                    out[(ty * EDGE + tx) as usize] = crate::bench::pristine_tile(
+                        chunk,
+                        tx,
+                        ty,
+                        params.bench,
+                        params.bench_regime,
+                    );
                 }
             }
             return;

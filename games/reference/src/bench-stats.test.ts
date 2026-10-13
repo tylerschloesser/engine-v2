@@ -151,3 +151,18 @@ describe('bench meter: per-phase statistics', () => {
     expect(r.begin_tick).toEqual([0, 0])
   })
 })
+
+describe('bench meter: rAF intervals (M57)', () => {
+  it('countAbove counts the window strictly above the bar, and the window drops old samples', () => {
+    const r = new Rolling()
+    // One interval a frame at t = 0, 16, 32, ...: 16.7 ms intervals, three over 20 ms (20 is not).
+    const intervals = [16.7, 16.7, 33.4, 16.7, 20, 16.7, 50, 16.7, 25.1, 16.7]
+    for (const [i, v] of intervals.entries()) r.push(i * 16, v)
+    expect(r.countAbove(20)).toBe(3)
+    expect(r.values()).toEqual(intervals)
+    // 10 s later only the new sample is in the window.
+    r.push(9 * 16 + WINDOW_MS + 1, 16.7)
+    expect(r.countAbove(20)).toBe(0)
+    expect(r.values()).toEqual([16.7])
+  })
+})

@@ -4,7 +4,10 @@
 // (M03, Planning decisions "Determinism on a physical phone"; the
 // manual device check reads this page directly). `determinism.spec.ts` reads each fixture's
 // `golden/golden.json` in Node and only trusts `window.__determinism`'s freshly-computed
-// checkpoints, never this page's own bundled copies of the goldens.
+// checkpoints, never this page's own bundled copies of the goldens. M57: `fx-belts`' script goldens
+// (`golden/scenario*.json`, discovered as `goldenScenarios()` discovers them) run on request through
+// `window.__determinismGoldens` (the `@engines @slow` test), not on load, so the fast tier's load is
+// unchanged; `?belts` also runs them on load for the banner (a device read).
 import wasm from 'virtual:engine/wasm'
 import referenceGolden from '../../../../../../games/reference/tests/golden/full-game.json' with {
   type: 'json',
@@ -25,6 +28,12 @@ declare global {
       fixtures: Record<string, { checkpoints: string[]; pass: boolean }>
       userAgent: string
       crossOriginIsolated: boolean
+    }
+    /** M57: `fx-belts`' golden scenarios, by file name (`scenario*.json`, sorted), each run on request
+     * in the worker on the page's own `belts` module; checkpoints back, compared in Node. */
+    __determinismGoldens?: {
+      belts: string[]
+      run(fixture: 'belts', scenario: string): Promise<string[]>
     }
     /** M36b `feature-matrix`: the same worker, any module's bytes (base64) and scenario or log from
      * Node; checkpoints back, compared by `determinism.spec.ts`. */
@@ -133,6 +142,44 @@ for (const entry of entries) {
     outcome.checkpoints.length === want.length && outcome.checkpoints.every((c, i) => c === want[i])
   fixtures.reference = { checkpoints: outcome.checkpoints, pass }
   lines.push(`reference (full-game.log): ${pass ? 'PASS' : 'FAIL'}`)
+}
+
+// M57: `fx-belts`' goldens, discovered like `goldenScenarios()` (`tests/support/fixtures.ts`): every
+// `scenario*.json`, its golden the same name with `golden` for `scenario`.
+const BELTS_GOLDEN_DIR = '../../../../fixtures/belts/golden/'
+const beltScenarios = import.meta.glob<HashScenario>(
+  '../../../../fixtures/belts/golden/scenario*.json',
+  { eager: true, import: 'default' },
+)
+const beltGoldens = import.meta.glob<{ checkpoints: string[] }>(
+  '../../../../fixtures/belts/golden/golden*.json',
+  { eager: true, import: 'default' },
+)
+const belts = new Map(
+  Object.entries(beltScenarios).map(([path, sc]) => [path.slice(BELTS_GOLDEN_DIR.length), sc]),
+)
+const beltNames = [...belts.keys()].sort()
+let beltsModule: Promise<WebAssembly.Module> | undefined
+async function runBelts(scenario: string): Promise<string[]> {
+  const sc = belts.get(scenario)
+  if (!sc) throw new Error(`no fx-belts scenario ${scenario}`)
+  beltsModule ??= fixtureWasm('belts').then((w) => WebAssembly.compileStreaming(fetch(w.url)))
+  const outcome = await runOn(await beltsModule, sc)
+  if (outcome.type === 'error') throw new Error(`belts/${scenario}: ${outcome.message}`)
+  return outcome.checkpoints
+}
+window.__determinismGoldens = { belts: beltNames, run: (_, sc) => runBelts(sc) }
+if (new URLSearchParams(location.search).has('belts')) {
+  for (const name of beltNames) {
+    const golden = beltGoldens[`${BELTS_GOLDEN_DIR}${name.replace(/^scenario/, 'golden')}`]
+    const checkpoints = await runBelts(name)
+    const pass =
+      golden !== undefined &&
+      checkpoints.length === golden.checkpoints.length &&
+      checkpoints.every((c, i) => c === golden.checkpoints[i])
+    fixtures[`belts/${name}`] = { checkpoints, pass }
+    lines.push(`belts/${name}: ${pass ? 'PASS' : 'FAIL'}`)
+  }
 }
 
 const fromB64 = (b64: string): Uint8Array<ArrayBuffer> =>

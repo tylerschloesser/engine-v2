@@ -1,5 +1,6 @@
 // The bench page (M36 step 6): `?bench=large-save`, the
-// standard large save of 0020 section 9 played single-player with a bench HUD. **Bench builds only**:
+// standard large save of 0020 section 9 played single-player with a bench HUD; M57: `?bench=belts`,
+// the belt field (`sim/src/bench.rs`) at the phone pair's transport caps. **Bench builds only**:
 // `main.ts` reaches this file through `if (__BENCH__)` (`vite build --mode bench`), so no other build
 // carries it or reads the parameter (`bench.spec.ts` greps `dist/` for it). Diagnostic, outside the
 // zero-GC rule (`.claude/rules/hot-paths.md`): it allocates freely, and only ever runs on this page.
@@ -7,12 +8,24 @@
 // What it measures: the main rAF callback (a wrapper over the page's `Scheduler`), the client
 // worker's `frame` call and the sim worker's tick-running pass (both timed inside the workers, into
 // the control block, because `test.flags.timing` is set), p95 over the last 10 s each; plus
-// `engine_mem_grows`, `tick`, and the draw-call and upload-byte counters per frame.
+// `engine_mem_grows`, `tick`, and the draw-call and upload-byte counters per frame. M57: the main
+// rAF's interval (p95 and the intervals over 20 ms in the window, 0056's advisory pair), the
+// DrawList's belt and item records, and the main pass's GPU time where the adapter has
+// `timestamp-query` (`ClientOptions.render.gpuTiming`'s `renderer.gpuTimer`, belts mode only).
 import type { Client } from 'engine'
 import type { Scheduler } from 'engine/render'
-import { RingConsumer, type RingStats, systemScheduler } from 'engine/render'
+import { type GpuTimer, RingConsumer, type RingStats, systemScheduler } from 'engine/render'
 import { type BenchProbe, benchProbe, parkWorkers, resumeWorkers } from 'engine/test'
-import { type BenchRequest, furnaceBlock } from './bench-request.js'
+import {
+  type BenchRequest,
+  beltField,
+  benchCamera,
+  benchTilesAcross,
+  benchView,
+  furnaceBlock,
+  MAX_TILES_ACROSS,
+  PHONE_CAPS,
+} from './bench-request.js'
 import {
   createPartStats,
   createPhaseStats,
@@ -23,12 +36,43 @@ import {
 import type { StartedGame } from './game.js'
 import { DEFAULT_WORLD, type Host } from './mode.js'
 
+/** The DrawList header's `layer_count[8]` (`client/drawlist.rs`; `render/drawables.ts`). */
+const OFF_LAYER_COUNT = 16
+/** `client.rs`'s `LAYER_BELT` (= `LAYER_FURNACE`) and `content::LAYER_ITEM` (= `LAYER_PLAYER`). */
+const LAYER_BELT = 0
+const LAYER_ITEM = 1
+/** The own player's circle and range ring (`client.rs`'s `extract`), on `LAYER_ITEM`: drawn at every
+ * zoom this page uses (the circle is skipped only below 2 px). */
+const OWN_PLAYER_RECORDS = 2
+
 export { type BenchRequest, benchRequest, furnaceBlock, MAX_TILES_ACROSS } from './bench-request.js'
 
 /** The local world with the bench marker in its worldgen params and both state budgets raised to
  * hold the save (`WorldConfig` defaults would refuse it). Not persisted: 13 MB of snapshot each
- * visit is not what the page measures. */
-export function benchHost(scale: number): Host {
+ * visit is not what the page measures. M57: `belts` names the belt regime in the marker
+ * (`bench_regime: 1`) and declares the phone pair's caps (0079 §21: 8,200,224 B of the sim arena). */
+export function benchHost(req: BenchRequest, viewport: { w: number; h: number }): Host {
+  const { scale } = req
+  if (req.mode === 'belts') {
+    // Portrait at `zoom=max`: the camera spans more than 256 tiles on its long side
+    // (`benchTilesAcross`), so the client camera's clamp is raised to match (the host keeps its
+    // 256-per-axis subscription, which covers the field).
+    const view = benchView(benchTilesAcross(req, viewport.w, viewport.h), viewport.w, viewport.h)
+    return {
+      kind: 'local',
+      world: {
+        worldId: `bench-belts-${scale}`,
+        params: {
+          ...DEFAULT_WORLD,
+          worldgen: { bench: scale, bench_regime: 1 },
+          maxLines: PHONE_CAPS.maxLines,
+          maxItems: PHONE_CAPS.maxItems,
+        },
+        ...(view ? { view } : {}),
+      },
+      connect: true,
+    }
+  }
   return {
     kind: 'local',
     world: {
@@ -54,6 +98,7 @@ export function benchHost(scale: number): Host {
 export const BENCH_TEST_OPTIONS = { flags: { pace: true, timing: true } } as const
 
 export type BenchHud = {
+  mode: BenchRequest['mode']
   scale: number
   engineMemGrows: { sim: number; client: number }
   tick: number
@@ -88,6 +133,23 @@ export type BenchHud = {
   uploadBacklogMax: number
   /** Frames since `resetCounters()` whose drain hit the per-frame byte cap (the queue was not empty after it). */
   uploadFramesAtCap: number
+  /** M57: the main rAF's interval (timestamp to timestamp), p95 over the last 10 s, and how many of
+   * those intervals were over 20 ms (0056's advisory pair: p95 <= 17.5 ms, <= 5 over 20 ms). */
+  rafP95Ms: number
+  rafOver20Per10s: number
+  /** M57: the drawn frame's raw `LAYER_ITEM` record count (items plus the own player's two). */
+  itemLayerRecords: number
+  /** M57: the drawn frame's DrawList records on layer 0 (`client.rs`'s `LAYER_BELT`, the furnaces' layer
+   * too: one per belt entity in view on the belt field) and its items (layer 1, `LAYER_ITEM`, less the
+   * own player's circle and range ring, the layer's only other records on this page), read from the
+   * acquired slot's header. */
+  beltRecords: number
+  itemsDrawn: number
+  /** M57: the main pass's GPU execution time, p95 over the last 10 s (`render/gpu-timing.ts`, one
+   * frame in four); `null` when there is none (not `belts` mode, or no `timestamp-query`:
+   * `gpuUnavailable` says why). */
+  gpuP95Ms: number | null
+  gpuUnavailable: string | null
 }
 
 export type BenchApi = {
@@ -132,6 +194,9 @@ export type BenchMeter = {
 export function createBenchMeter(): BenchMeter {
   const main = new Rolling()
   const frame = new Rolling()
+  const raf = new Rolling()
+  const gpu = new Rolling()
+  let lastRafMs = -1
   const parts = createPartStats()
   const ticks = createTickRing()
   const phases = createPhaseStats()
@@ -155,25 +220,38 @@ export function createBenchMeter(): BenchMeter {
   let backlogMax = 0
   const ringStats: RingStats = { drops: 0, pushed: 0, popped: 0 }
   let ring: RingConsumer | undefined
+  let gpuTimer: GpuTimer | null = null
+
+  /** The main pass's GPU timer of the live renderer (belts mode, `startGame({ gpuTiming })`; the
+   * adapter may lack `timestamp-query`, the timer says so). Re-read on every call: after a device
+   * loss `GpuHost` rebuilds the renderer, so a new timer replaces the dead one and the window
+   * restarts with it. */
+  function liveGpuTimer(): GpuTimer | null {
+    const now = request?.mode === 'belts' ? (game?.gpu.current?.renderer.gpuTimer ?? null) : null
+    if (now !== gpuTimer) {
+      gpuTimer = now
+      gpu.clear()
+      if (now) now.onSample = (ms) => gpu.push(performance.now(), ms)
+    }
+    return now
+  }
 
   function steer(): void {
     if (!game || !request) return
-    const block = furnaceBlock(request.scale)
-    // Triangle wave along x across the middle of the block, slow: the view stays over furnaces. The
-    // step is per frame (`pan` tiles per second at 60 frames a second), so the pan covers the same
-    // ground whether rAF runs at 60 Hz or, as in `bench.frame_reference`, uncapped.
-    const amp = Math.max(0, block.halfSpan - 140)
-    const d = panHeld
-      ? 0
-      : ((frames - panFrame0) * (request.panTilesPerSecond / 60)) % (4 * amp || 1)
-    const x = block.x + (d < 2 * amp ? -amp + d : 3 * amp - d)
-    game.client.camera.moveTo(x, block.y, { durationMs: 0 })
+    // Triangle wave along x (`benchCamera`), slow: the view stays over the furnace block or the belt
+    // field. The step is per frame (`pan` tiles per second at 60 frames a second), so the pan covers
+    // the same ground whether rAF runs at 60 Hz or, as in `bench.frame_reference`, uncapped.
+    const d = panHeld ? 0 : (frames - panFrame0) * (request.panTilesPerSecond / 60)
+    const at = benchCamera(request, d)
+    game.client.camera.moveTo(at.x, at.y, { durationMs: 0 })
   }
 
   const scheduler: Scheduler = {
     ...systemScheduler,
     requestFrame(cb) {
       return systemScheduler.requestFrame((tMs) => {
+        if (lastRafMs >= 0) raf.push(performance.now(), tMs - lastRafMs)
+        lastRafMs = tMs
         steer()
         if (marking) performance.mark(`mf-s-${markN}`)
         const t = performance.now()
@@ -225,7 +303,9 @@ export function createBenchMeter(): BenchMeter {
     const g = game as StartedGame
     const p = probe as BenchProbe
     const pr = parts.readings()
+    const header = g.client.drawListSlot.header
     return {
+      mode: (request as BenchRequest).mode,
       scale: (request as BenchRequest).scale,
       engineMemGrows: { sim: p.simGrows(), client: p.clientGrows() },
       tick: p.tickN(),
@@ -250,6 +330,20 @@ export function createBenchMeter(): BenchMeter {
       ...backlog(),
       uploadFramesAtCap: framesAtCap,
       uploadBacklogMax: backlogMax,
+      rafP95Ms: raf.p95(),
+      rafOver20Per10s: raf.countAbove(20),
+      beltRecords: header.getUint32(OFF_LAYER_COUNT + 4 * LAYER_BELT, true),
+      itemLayerRecords: header.getUint32(OFF_LAYER_COUNT + 4 * LAYER_ITEM, true),
+      // Display only: the clamp hides a count below the player's two (`itemLayerRecords` is exact).
+      itemsDrawn: Math.max(
+        0,
+        header.getUint32(OFF_LAYER_COUNT + 4 * LAYER_ITEM, true) - OWN_PLAYER_RECORDS,
+      ),
+      gpuP95Ms: liveGpuTimer() && gpu.values().length > 0 ? gpu.p95() : null,
+      gpuUnavailable:
+        request?.mode === 'belts'
+          ? (liveGpuTimer()?.unavailable ?? 'no GPU timer (device lost)')
+          : 'not timed (large-save mode)',
     }
   }
 
@@ -262,7 +356,7 @@ export function createBenchMeter(): BenchMeter {
     const h = hud()
     const ms = (v: number): string => v.toFixed(2)
     return [
-      `bench large-save (1/${h.scale})`,
+      `bench ${h.mode} (1/${h.scale})`,
       `engine_mem_grows: sim ${h.engineMemGrows.sim}, client ${h.engineMemGrows.client}`,
       `tick: ${h.tick}`,
       `main p95: ${ms(h.mainP95Ms)} ms`,
@@ -270,6 +364,9 @@ export function createBenchMeter(): BenchMeter {
       `tick p95: ${ms(h.tickP95Ms)} ms`,
       `  tick p50 ${ms(h.tickP50Ms)}, seal p95 ${ms(h.sealP95Ms)}, sim_tick p50/p95 ${ms(h.simTickP50Ms)} / ${ms(h.simTickP95Ms)}, frame build p95 ${ms(h.frameBuildP95Ms)}, resync p95 ${ms(h.resyncP95Ms)} ms; catch-up ticks/10s ${h.catchupTicksPer10s}`,
       `drawables: ${h.records} (dropped ${h.dropped}), draws/frame max ${h.drawCallsMax}, upload B/frame max ${h.uploadBytesMax}, upload backlog ${h.uploadBacklog}, at cap ${h.uploadFramesAtCap} frames, drops ${h.uploadDrops}`,
+      `rAF p95: ${ms(h.rafP95Ms)} ms, over 20 ms/10s: ${h.rafOver20Per10s}`,
+      `belt records: ${h.beltRecords}, items drawn: ${h.itemsDrawn}`,
+      `gpu p95: ${h.gpuP95Ms === null ? `none (${h.gpuUnavailable})` : `${ms(h.gpuP95Ms)} ms`}`,
     ].join('\n')
   }
 
@@ -281,10 +378,14 @@ export function createBenchMeter(): BenchMeter {
       probe = benchProbe(g.client as Client)
       // A second view of the upload ring, for its counters only: it never pops.
       ring = new RingConsumer(g.client.uploadRing)
-      // Max zoom-out over the middle of the dense block, before the first `Ui` can move it to the
-      // spawn (`shouldMoveToSpawn` sees a camera that is no longer where the client made it).
-      const block = furnaceBlock(req.scale)
-      g.client.camera.moveTo(block.x, block.y, { tiles: req.tilesAcross, durationMs: 0 })
+      // Max zoom-out over the middle of the dense block (or the belt field's centre), before the
+      // first `Ui` can move it to the spawn (`shouldMoveToSpawn` sees a camera that is no longer
+      // where the client made it).
+      const at = req.mode === 'belts' ? beltField(req.scale) : furnaceBlock(req.scale)
+      const tiles = benchTilesAcross(req, innerWidth, innerHeight)
+      if (tiles > MAX_TILES_ACROSS) g.client.camera.setConstraints({ maxTiles: tiles })
+      g.client.camera.moveTo(at.x, at.y, { tiles, durationMs: 0 })
+      liveGpuTimer()
       const el = document.createElement('pre')
       el.id = 'bench-hud'
       el.style.cssText =

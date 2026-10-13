@@ -93,6 +93,43 @@ pub const SIDELOAD_CHAIN: &str = "\
 .. .. sv .. .. sv .. .. sv .. .. sv .. .. sv .. .. sv .. .. sv .. .. sv ..
 s> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> d>";
 
+/// The bench page's belt field (M57, `?bench=belts`; `src/bench.rs`'s module doc), tiled from its
+/// primitives: 48 east runs of 256 tiles, one every third row, each a spawner, belts and a
+/// despawner; every eighth run (from the first) with two splitters at x 64 and 65 (their other
+/// tiles `--` in the row below) and an underground pair from x 128 over a gap of 4. 144 rows, the
+/// 256 x 144 view. The same text as `layout.ts`'s `benchField()`; `bench_belts.rs` checks the
+/// genesis builder writes exactly these placements and pins the hash.
+pub fn bench_field() -> String {
+    let mut rows = Vec::new();
+    for k in 0..48 {
+        let special = k % 8 == 0;
+        let run: Vec<&str> = (0..256)
+            .map(|x| match x {
+                0 => "s>",
+                255 => "d>",
+                64 | 65 if special => "S>",
+                128 if special => "u>",
+                129..=132 if special => "..",
+                133 if special => "x>",
+                _ => "b>",
+            })
+            .collect();
+        let below: Vec<&str> = (0..256)
+            .map(|x| {
+                if special && (x == 64 || x == 65) {
+                    "--"
+                } else {
+                    ".."
+                }
+            })
+            .collect();
+        rows.push(run.join(" "));
+        rows.push(below.join(" "));
+        rows.push(vec![".."; 256].join(" "));
+    }
+    rows.join("\n")
+}
+
 /// One placement: a tile relative to the layout's top-left, a facing and a kind.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Placement {

@@ -1,7 +1,8 @@
 // `bench: a shipped build ignores ?bench=large-save @slow` (M36
 // step 6): the bench page and its HUD exist only in the bench build (`vite build --mode bench`,
 // `__BENCH__`). The production `dist/` has no trace of it in any script, and the page it serves
-// shows no HUD and exposes no `window.__bench` when asked for `?bench=large-save`.
+// shows no HUD and exposes no `window.__bench` when asked for `?bench=large-save` or (M57)
+// `?bench=belts` (whose marker, `bench_regime`, is in no shipped script either).
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,10 +18,16 @@ test('bench: a shipped build ignores ?bench=large-save @slow', async ({ page }) 
     const text = readFileSync(join(DIST, f), 'utf8')
     expect(text, `${f} carries the bench page`).not.toContain('large-save')
     expect(text, `${f} carries the bench HUD`).not.toContain('bench-hud')
+    expect(text, `${f} carries the belt bench`).not.toContain('bench_regime')
   }
 
   await openGame(page, { path: '/index.html?bench=large-save' })
   expect(await page.locator('#bench-hud').count(), 'no HUD element').toBe(0)
   const bench = await page.evaluate(() => (window as unknown as { __bench?: unknown }).__bench)
   expect(bench, 'no window.__bench').toBeUndefined()
+
+  await openGame(page, { path: '/index.html?bench=belts&zoom=max' })
+  expect(await page.locator('#bench-hud').count(), 'belts: no HUD element').toBe(0)
+  const belts = await page.evaluate(() => (window as unknown as { __bench?: unknown }).__bench)
+  expect(belts, 'belts: no window.__bench').toBeUndefined()
 })

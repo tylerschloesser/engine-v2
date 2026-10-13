@@ -1,7 +1,8 @@
 // The cross-engine golden hash (docs/decisions/0002 §3 "Cross-engine golden hashes"; 0020 §5, §6):
 // the same scenario, same driver (`tests/support/scenario.ts`) as the native, Node and Bun legs,
 // this time run from a worker in Chromium, WebKit and Firefox, for every fixture `determinism.html`
-// lists (`hash`, `worldgen`, M08. `@engines` runs it in all
+// lists (`hash`, `worldgen`, M08; the reference full-game log, M34b; `fx-belts`' fifteen script
+// goldens on request, M57, `@slow`). `@engines` runs it in all
 // three (Planning decisions, "Browsers and projects"); it needs no GPU, so headless Firefox and
 // WebKit's JavaScriptCore both qualify (0020 §6).
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -9,7 +10,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect, test } from '@playwright/test'
 import { buildVariant, CRATE_KEYS, type VariantName } from '../support/feature-matrix.js'
-import { readGolden } from '../support/fixtures.js'
+import { goldenScenarios, readGolden } from '../support/fixtures.js'
 import { fullGameParams, readFullGame } from '../support/reference-golden.js'
 import { PERSIST_PARAMS, persistCheckpoints, readPersistLog } from '../support/release-golden.js'
 import { diffCheckpoints, type Golden, type HashScenario } from '../support/scenario.js'
@@ -31,8 +32,15 @@ declare global {
       userAgent: string
       crossOriginIsolated: boolean
     }
+    __determinismGoldens?: {
+      belts: string[]
+      run(fixture: 'belts', scenario: string): Promise<string[]>
+    }
   }
 }
+
+/** M57: `fx-belts`' goldens as Node discovers them (`goldenScenarios()`, the Node leg's list). */
+const BELTS = goldenScenarios().filter((g) => g.fixture === 'belts')
 
 test('determinism: golden reproduced in the browser @engines', async ({ page }) => {
   // Read in Node, not trusted from the page (Tests added): the page's own bundled copies of
@@ -69,6 +77,27 @@ test('determinism: golden reproduced in the browser @engines', async ({ page }) 
   ).toBeNull()
   expect(result.crossOriginIsolated).toBe(true)
   expect(result.userAgent.length).toBeGreaterThan(0)
+})
+
+// M57: `fx-belts`' script goldens (a sim instance plus a client-role encoder per scenario, the Node
+// leg's `runGoldenScenario`) in the page's worker. `@slow`: the fast Chromium tier never runs them;
+// WebKit and Firefox run them in the `engines` leg. The page's discovered list must be Node's.
+test('determinism: fx-belts goldens reproduced in the browser @engines @slow', async ({ page }) => {
+  test.setTimeout(300_000)
+  await openPage(page, '/determinism.html')
+  const listed = await page.evaluate(() => window.__determinismGoldens?.belts ?? [])
+  expect(listed, "the page's fx-belts scenarios are Node's").toEqual(BELTS.map((g) => g.scenario))
+  expect(listed.length, 'fx-belts scenarios').toBe(15)
+  const diverged: Record<string, string> = {}
+  for (const { scenario, golden } of BELTS) {
+    const got = await page.evaluate(
+      (sc) => window.__determinismGoldens?.run('belts', sc) ?? Promise.resolve([]),
+      scenario,
+    )
+    const message = diffCheckpoints(got, readGolden<Golden>('belts', golden).checkpoints)
+    if (message !== null) diverged[scenario] = message
+  }
+  expect(diverged, 'fx-belts scenarios whose checkpoints differ from the golden').toEqual({})
 })
 
 // M36b `feature-matrix` (the browser half; the Node and Bun half is `tests/wasm/feature-matrix.test.ts`):
@@ -115,6 +144,17 @@ test('determinism: release variants (plain, wasm-opt, +simd128) reproduce the go
         [wasm(name), scenario] as const,
       )
       row[`fx-${name}`] = diffCheckpoints(got ?? [], golden.checkpoints)
+    }
+    // M57: every `fx-belts` script golden on the variant's `belts` module.
+    for (const { scenario, golden } of BELTS) {
+      const got = await page.evaluate(
+        ([w, sc]) => window.__determinismVariant?.run(w as string, sc as HashScenario),
+        [wasm('belts'), readGolden<HashScenario>('belts', scenario)] as const,
+      )
+      row[`fx-belts/${scenario}`] = diffCheckpoints(
+        got ?? [],
+        readGolden<Golden>('belts', golden).checkpoints,
+      )
     }
     const persist = await page.evaluate(
       ([w, p, f, t]) =>

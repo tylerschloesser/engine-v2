@@ -14,8 +14,9 @@ import { fixtureDir } from './fixtures.js'
 
 export type VariantName = 'plain' | 'wasm-opt' | 'simd128'
 export const VARIANTS: readonly VariantName[] = ['plain', 'wasm-opt', 'simd128']
-export type CrateKey = 'hash' | 'worldgen' | 'persist' | 'reference'
-export const CRATE_KEYS: readonly CrateKey[] = ['hash', 'worldgen', 'persist', 'reference']
+export type CrateKey = 'hash' | 'worldgen' | 'persist' | 'reference' | 'belts'
+/** M57: `belts` (`fx-belts`, its script goldens) for the browser release-variants test. */
+export const CRATE_KEYS: readonly CrateKey[] = ['hash', 'worldgen', 'persist', 'reference', 'belts']
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url))
 
@@ -24,6 +25,7 @@ export const CRATES: Record<CrateKey, string> = {
   worldgen: fixtureDir('worldgen'),
   persist: fixtureDir('persist'),
   reference: join(REPO, 'games/reference/sim'),
+  belts: fixtureDir('belts'),
 }
 
 /** Its own cargo target directory: a changed `RUSTFLAGS` would otherwise rebuild the plain

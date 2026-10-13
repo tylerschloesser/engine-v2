@@ -13,6 +13,8 @@ const LAYOUT_HASHES: Record<LayoutName, [number, string]> = {
   'ring-fed': [22, '9306dc06600ec9d0'],
   'ring-splitter': [23, '645be27010f550c8'],
   'sideload-chain': [33, 'eeab0d8d66c48a95'],
+  // M57: the bench page's belt field (`bench_belts.rs`'s `bench_field_layout_pinned`).
+  'bench-field': [12_264, '634de43a74348615'],
 }
 
 test('layout_hashes_match_rust', () => {

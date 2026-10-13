@@ -1,11 +1,13 @@
 // The bare worker of docs/decisions/0020 §5 ("a bare page with the .wasm in a worker"): instantiate
 // once, run the whole cross-engine golden scenario with `tests/support/scenario.ts`'s own driver
-// (the same function the native, Node and Bun legs use), reply with the checkpoints. No harness/SAB
+// (`runGoldenScenario`, the function the Node leg runs every discovered golden with: one instance of
+// the scenario's role, or for a `script` scenario a sim instance plus a client-role encoder, M57),
+// reply with the checkpoints. No harness/SAB
 // machinery: `sim_admit` runs on every 7th tick throughout 10,000 ticks, for which the harness's
 // postMessage-only `admit` (park-required, setup-rate) would be far too slow.
 import { instantiate } from '../../../../src/loader.ts'
 import { replayLog } from '../../../../src/test/replay.ts'
-import { type HashScenario, roleOf, runHashScenario } from '../../../support/scenario.ts'
+import { type HashScenario, runGoldenScenario } from '../../../support/scenario.ts'
 
 /** `replay`: a recorded log (M34b's reference full-game golden) replayed from genesis, one hash per
  * checkpoint tick, through `replayLog` (the same driver the Node and Bun legs use). */
@@ -37,8 +39,7 @@ scope.onmessage = (ev) => {
   }
   if (m.type !== 'run') return
   try {
-    const inst = instantiate(m.module, roleOf(m.scenario), m.scenario.config, { onLog() {} })
-    const checkpoints = runHashScenario(inst, m.scenario)
+    const checkpoints = runGoldenScenario(instantiate, m.module, m.scenario)
     scope.postMessage({ type: 'result', checkpoints })
   } catch (e) {
     scope.postMessage({ type: 'error', message: e instanceof Error ? e.message : String(e) })

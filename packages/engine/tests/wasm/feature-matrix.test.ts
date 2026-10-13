@@ -1,6 +1,6 @@
 // `feature-matrix @slow` (M36b; M02's hand-over, 0002
 // Consequences): every golden (the `fx-hash` and `fx-worldgen` scenarios, the `fx-persist` log, the
-// reference game's full-game log) replayed on the reference game's and each fixture's `release`
+// reference game's full-game log; M57: `fx-belts`' fifteen script goldens) replayed on the reference game's and each fixture's `release`
 // module built (a) plain, (b) with `wasm-opt`, (c) with `+simd128`, under Node and under Bun. The
 // browser engines are `determinism.spec.ts`'s "release variants" test (`@engines @slow`).
 //
@@ -136,6 +136,7 @@ describe.each(VARIANTS)('feature-matrix %s @slow', (variant) => {
       worldgen: mods.worldgen.dir,
       persist: mods.persist.dir,
       reference: mods.reference.dir,
+      belts: mods.belts.dir,
     }
     const node = await runGoldens({ instantiate, loadGame, replayLog }, dirs)
     row.runtimes.node = node
@@ -147,9 +148,10 @@ describe.each(VARIANTS)('feature-matrix %s @slow', (variant) => {
     const line = bun.stdout.trim().split('\n').at(-1) ?? ''
     row.runtimes.bun = (JSON.parse(line) as { results: GoldenResult[] }).results
 
-    expect(node.length).toBe(4)
+    // M57: four goldens plus `fx-belts`' fifteen script goldens.
+    expect(node.length).toBe(19)
     expect(failures(node), `${variant} under Node`).toEqual([])
-    expect(row.runtimes.bun.length).toBe(4)
+    expect(row.runtimes.bun.length).toBe(19)
     expect(failures(row.runtimes.bun), `${variant} under Bun`).toEqual([])
   }, 600_000)
 })

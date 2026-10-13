@@ -29,7 +29,7 @@ if (!support.ok) {
   // the build's `VITE_SERVER_URL` (`wss://...`) when the client is on a static host apart from the server;
   // otherwise a world of this browser's own. The local world is `world.json` (the seed every native
   // test also uses, so the landmark tiles this package's tests probe are the ones a player sees).
-  // `?bench=large-save` (M36): in a bench build only (`vite build --mode bench`); `__BENCH__` is a
+  // `?bench=large-save` (M36; M57 `?bench=belts`): in a bench build only (`vite build --mode bench`); `__BENCH__` is a
   // build-time false everywhere else, so the branch and `bench.ts` are not in the bundle at all.
   const benchModule = __BENCH__ ? await import('./bench.js') : undefined
   const bench = benchModule?.benchRequest(location.search)
@@ -43,9 +43,10 @@ if (!support.ok) {
     bench && meter && benchModule
       ? {
           canvas,
-          host: benchModule.benchHost(bench.scale),
+          host: benchModule.benchHost(bench, { w: innerWidth, h: innerHeight }),
           scheduler: meter.scheduler,
           test: benchModule.BENCH_TEST_OPTIONS,
+          ...(bench.mode === 'belts' ? { gpuTiming: true } : {}),
           ...onClient,
         }
       : {

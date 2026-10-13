@@ -9,7 +9,7 @@
 //! (`RefParams::bench`, a scale divisor: `1` is the full save, `64` a 1/64-scale one for the fast
 //! test). `Game::genesis` sees no params, so the marker is a tile: with `bench` set `RefWorldgen`
 //! generates a flat bench terrain and a marker tile at [`MARKER_TILE`] whose `aux` carries the
-//! divisor ([`marker_scale`]).
+//! divisor and the regime ([`marker`]).
 //!
 //! Layout (chunks are 32x32 tiles, furnaces 2x2):
 //! - **Furnaces:** [`ENTITIES_PER_CHUNK`] (200, 800 of 1,024 tiles) per chunk, in a block of chunks
@@ -20,12 +20,27 @@
 //! - **Timers:** every furnace is lit (`burn_left`), stocked and carries a `smelt_done_at` deadline,
 //!   `2 + (index + seed) mod SMELT`, uniformly staggered: 262,144 / 100 = 2,621.4 completions per
 //!   tick. The builder arms each timer itself with `WorldWrite::wake_at` (ADR 0046).
+//!
+//! **The belt field** (M57, [`Regime::Belts`], `?bench=belts`): the marker's bits 13-14 name the
+//! regime, so the same flat terrain carries either world. [`build_belts`] writes [`FIELD_RUNS`]
+//! east-west runs of [`FIELD_W`] tiles, one every [`RUN_PITCH`] rows from the origin (the 256 x 144
+//! view at the camera's maximum zoom-out): a spawner at the west end (both lanes at saturation,
+//! `content::SPAWN_RATES[3]`, item [`FEED`] by run), belts, a despawner at the east end; every
+//! [`SPECIAL_EVERY`]th run (from the first) carries a splitter pair at [`SPLITTER_X`] (two east
+//! splitters side by side, their right halves in the row below: the first's right output feeds the
+//! second's right half, whose own right output dead-ends; the first's right half has no input, so in
+//! steady state that stub fills and both splitters' forks send everything left) and an
+//! underground pair from [`UNDERGROUND_X`] with a gap of [`UNDERGROUND_GAP`] tiles. The entities
+//! are spawned row-major (the layout's order, `tests/common/layout.rs` `bench_field`) and woken by
+//! the spawn (genesis writes go through `Authority`'s own `WorldWrite`), so tick 1's
+//! `topology::on_wake` maps every line and sets every spawner's schedule: no action, no timer.
+//! Nothing reads the seed: the field depends on the marker alone.
 
 use engine::game::{WorldRead, WorldWrite};
 use engine::time::Tick;
 use engine::world::{ChunkCoord, Tile, TilePos};
 
-use crate::{Furnace, RefEntity, RefGame, TileXY, content};
+use crate::{Belt, BeltKind, Dir, Furnace, RefEntity, RefGame, SpawnCfg, TileXY, content};
 
 /// Furnaces per dense chunk (0010 "dense chunk": 800 of 1,024 tiles under 2x2 footprints).
 pub const ENTITIES_PER_CHUNK: u32 = 200;
@@ -44,6 +59,58 @@ pub const MOD_BLOCK: i32 = 64;
 /// The tile whose `aux` carries the marker (the last tile of chunk (-1, -1)).
 pub const MARKER_TILE: TilePos = TilePos::new(-1, -1);
 const MARKER_FLAG: u16 = 0x8000;
+/// The marker's regime field (M57): bits 13-14, beside the scale in bits 0-12.
+const REGIME_SHIFT: u16 = 13;
+const REGIME_MASK: u16 = 0x3;
+const SCALE_MASK: u16 = 0x1fff;
+
+/// What genesis builds on the bench terrain (M57): `RefParams::bench_regime` as a number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Regime {
+    /// `0`: the standard large save (0020 §9), [`build`].
+    LargeSave,
+    /// `1`: the belt field (module doc), [`build_belts`].
+    Belts,
+}
+
+impl Regime {
+    /// `RefParams::bench_regime`'s value; an unknown number reads as the large save.
+    pub const fn from_param(n: u32) -> Regime {
+        match n {
+            1 => Regime::Belts,
+            _ => Regime::LargeSave,
+        }
+    }
+
+    const fn bits(self) -> u16 {
+        match self {
+            Regime::LargeSave => 0,
+            Regime::Belts => 1,
+        }
+    }
+}
+
+/// The belt field (module doc): runs, their length and pitch.
+pub const FIELD_RUNS: u32 = 48;
+pub const FIELD_W: i32 = 256;
+pub const RUN_PITCH: i32 = 3;
+/// Every this many runs (the first included) carries the splitter and underground pairs.
+pub const SPECIAL_EVERY: u32 = 8;
+/// The first splitter's tile on a special run (the second is one east).
+pub const SPLITTER_X: i32 = 64;
+/// The underground entrance's tile on a special run; the exit is `UNDERGROUND_GAP + 1` east.
+pub const UNDERGROUND_X: i32 = 128;
+pub const UNDERGROUND_GAP: i32 = 4;
+/// Run `k`'s spawner makes `FEED[k % 4]` on both lanes (`content::ItemId` wire ids: iron, coal,
+/// wood, stone, as M56's balancer).
+pub const FEED: [u8; 4] = [
+    content::ItemId::Iron as u8,
+    content::ItemId::Coal as u8,
+    content::ItemId::Wood as u8,
+    content::ItemId::Stone as u8,
+];
+/// `content::SPAWN_RATES`' saturation index.
+pub const SATURATE: u8 = 3;
 
 /// How big a save is: the two state-budget figures (entity count, modified-tile count).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,10 +154,12 @@ const fn cols(n: u32) -> u32 {
 }
 
 /// The bench worldgen's tile at `chunk` + local `(tx, ty)`: flat grass, iron over the depleted-tile
-/// block, and the marker tile (aux = `0x8000 | scale`).
-pub fn pristine_tile(chunk: ChunkCoord, tx: i32, ty: i32, scale: u32) -> Tile {
+/// block, and the marker tile (aux = `0x8000 | regime << 13 | scale`).
+pub fn pristine_tile(chunk: ChunkCoord, tx: i32, ty: i32, scale: u32, regime: u32) -> Tile {
     if chunk.x == -1 && chunk.y == -1 && tx == 31 && ty == 31 {
-        return Tile::new(content::GRASS, 0, MARKER_FLAG | (scale.min(0x7fff) as u16));
+        let regime = Regime::from_param(regime).bits() << REGIME_SHIFT;
+        let scale = scale.min(u32::from(SCALE_MASK)) as u16;
+        return Tile::new(content::GRASS, 0, MARKER_FLAG | regime | scale);
     }
     let in_block =
         (MOD_X0..MOD_X0 + MOD_BLOCK).contains(&chunk.x) && (0..MOD_BLOCK).contains(&chunk.y);
@@ -101,11 +170,64 @@ pub fn pristine_tile(chunk: ChunkCoord, tx: i32, ty: i32, scale: u32) -> Tile {
     }
 }
 
-/// `Some(scale)` when this world's worldgen carried the bench marker. A read of one terrain tile.
-pub fn marker_scale(w: &dyn WorldRead<RefGame>) -> Option<u32> {
+/// `Some((scale, regime))` when this world's worldgen carried the bench marker. A read of one
+/// terrain tile.
+pub fn marker(w: &dyn WorldRead<RefGame>) -> Option<(u32, Regime)> {
     let t = w.tile(MARKER_TILE).ok()?;
-    (t.aux() & MARKER_FLAG != 0 && t.base() == content::GRASS && t.resource() == 0)
-        .then(|| u32::from(t.aux() & !MARKER_FLAG))
+    (t.aux() & MARKER_FLAG != 0 && t.base() == content::GRASS && t.resource() == 0).then(|| {
+        let regime = Regime::from_param(u32::from((t.aux() >> REGIME_SHIFT) & REGIME_MASK));
+        (u32::from(t.aux() & SCALE_MASK), regime)
+    })
+}
+
+/// The belt field's placements in row-major order (`y`, then `x`): `(tile, facing, kind)`, the
+/// anchors only (a splitter's second tile is the one south of it). `runs` east-west runs; see the
+/// module doc.
+pub fn belt_field(runs: u32) -> Vec<(TileXY, Dir, BeltKind)> {
+    let mut v = Vec::new();
+    for k in 0..runs {
+        let y = k as i32 * RUN_PITCH;
+        let special = k % SPECIAL_EVERY == 0;
+        let exit_x = UNDERGROUND_X + UNDERGROUND_GAP + 1;
+        for x in 0..FIELD_W {
+            let kind = if x == 0 {
+                BeltKind::Spawner
+            } else if x == FIELD_W - 1 {
+                BeltKind::Despawner
+            } else if special && (x == SPLITTER_X || x == SPLITTER_X + 1) {
+                BeltKind::Splitter
+            } else if special && x == UNDERGROUND_X {
+                BeltKind::UndergroundIn
+            } else if special && x == exit_x {
+                BeltKind::UndergroundOut
+            } else if special && x > UNDERGROUND_X && x < exit_x {
+                continue;
+            } else {
+                BeltKind::Belt
+            };
+            v.push((TileXY { x, y }, Dir::East, kind));
+        }
+    }
+    v
+}
+
+/// Writes the belt field (module doc) of `FIELD_RUNS / scale` runs (at least one): one spawn per
+/// placement, the spawners configured at saturation. Woken by the spawn; tick 1 maps them.
+pub fn build_belts(w: &mut dyn WorldWrite<RefGame>, scale: u32) {
+    let runs = (FIELD_RUNS / scale.max(1)).max(1);
+    let mut spawner = 0usize;
+    for (origin, dir, kind) in belt_field(runs) {
+        let mut belt = Belt::new(origin, dir, kind);
+        if kind == BeltKind::Spawner {
+            let cfg = SpawnCfg {
+                item: FEED[spawner % FEED.len()],
+                rate: SATURATE,
+            };
+            belt.spawn = [Some(cfg); 2];
+            spawner += 1;
+        }
+        w.spawn(RefEntity::Belt(belt));
+    }
 }
 
 /// The standard large save (0020 §9) at full scale: see the module doc.

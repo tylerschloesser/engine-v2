@@ -19,6 +19,32 @@ import type { BeltKind, Dir } from './game.js'
 export type Placement = { x: number; y: number; dir: Dir; kind: BeltKind }
 export type Layout = { placements: Placement[]; width: number; height: number }
 
+/** M57: the bench page's belt field (`?bench=belts`, `sim/src/bench.rs`'s module doc), tiled from
+ * its primitives as `layout.rs`'s `bench_field()` does: 48 east runs of 256 tiles, one every third
+ * row, each a spawner, belts and a despawner; every eighth run (from the first) with two splitters
+ * at x 64 and 65 (their other tiles in the row below) and an underground pair from x 128 over a gap
+ * of 4. 144 rows: the 256 x 144 view. */
+export function benchField(): string {
+  const rows: string[] = []
+  for (let k = 0; k < 48; k++) {
+    const special = k % 8 === 0
+    const run = Array.from({ length: 256 }, (_, x) => {
+      if (x === 0) return 's>'
+      if (x === 255) return 'd>'
+      if (special && (x === 64 || x === 65)) return 'S>'
+      if (special && x === 128) return 'u>'
+      if (special && x > 128 && x < 133) return '..'
+      if (special && x === 133) return 'x>'
+      return 'b>'
+    })
+    const below = Array.from({ length: 256 }, (_, x) =>
+      special && (x === 64 || x === 65) ? '--' : '..',
+    )
+    rows.push(run.join(' '), below.join(' '), Array(256).fill('..').join(' '))
+  }
+  return rows.join('\n')
+}
+
 /** The layouts, the same text as `sim/tests/common/layout.rs` (one place each side). */
 export const LAYOUTS = {
   balancer: [
@@ -66,6 +92,7 @@ export const LAYOUTS = {
     '.. .. sv .. .. sv .. .. sv .. .. sv .. .. sv .. .. sv .. .. sv .. .. sv ..',
     's> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> b> d>',
   ].join('\n'),
+  'bench-field': benchField(),
 } as const
 
 export type LayoutName = keyof typeof LAYOUTS
@@ -191,17 +218,18 @@ export function layoutActions(layout: Layout, origin: { x: number; y: number }, 
 
 /** The host's action rate (0004 defaults) and the client's pending queue. */
 const RATE_BURST = 40
-const RATE_PER_TICK = 1 // 20 a second at 20 Hz
 const OUTBOX = 32
 
 /** Dispatches `actions` from `client` at the host's rate: a token bucket mirroring the host's (40
  * to start, one more a tick, at most 40) and at most 32 actions awaiting a verdict; advances one
  * tick at a time until every verdict is in. Throws on any verdict but `Confirmed`. Returns the ticks
- * it advanced. */
+ * it advanced. `rate` mirrors a world's raised `WorldConfig.actionRate` (M57: `perSecond` at 20 Hz,
+ * `burst`); the pending queue still bounds it at 32 in flight. */
 export async function buildPaced(
   client: HeadlessClient,
   advance: (ticks: number) => Promise<void>,
   actions: unknown[],
+  rate: { perSecond: number; burst: number } = { perSecond: 20, burst: RATE_BURST },
 ): Promise<{ ticks: number }> {
   const verdicts = new Map<number, unknown>()
   const off = client.onActionResult((seq, result) => {
@@ -209,7 +237,8 @@ export async function buildPaced(
   })
   try {
     const seqs: number[] = []
-    let tokens = RATE_BURST
+    const perTick = rate.perSecond / 20
+    let tokens = rate.burst
     let next = 0
     let ticks = 0
     while (next < actions.length || seqs.some((s) => !verdicts.has(s))) {
@@ -223,8 +252,8 @@ export async function buildPaced(
       }
       await advance(1)
       ticks++
-      tokens = Math.min(RATE_BURST, tokens + RATE_PER_TICK)
-      if (ticks > 2_000) throw new Error('buildPaced: verdicts did not arrive')
+      tokens = Math.min(rate.burst, tokens + perTick)
+      if (ticks > 2_000 + actions.length) throw new Error('buildPaced: verdicts did not arrive')
     }
     for (const [i, s] of seqs.entries()) {
       const v = verdicts.get(s)

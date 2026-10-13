@@ -9,7 +9,9 @@
 //   - `fx-worldgen` scenario (`fixtures/worldgen/golden/`): gen-role chunk hashes.
 //   - `fx-persist` recorded log (`fixtures/persist/tests/golden/persist_fixture_log.hex`), five checkpoints.
 //   - the reference game's `full-game.log` (M34b), 71 checkpoints.
-import { readFileSync } from 'node:fs'
+//   - M57, when `dirs.belts` is given (the feature-matrix variants): every `fx-belts` script golden
+//     (`fixtures/belts/golden/scenario*.json`), one result each, through `runGoldenScenario`.
+import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { Role } from '../../src/abi.ts'
 import type { EngineInstance, InstanceConfig } from '../../src/loader.ts'
@@ -25,6 +27,7 @@ import {
   type Golden,
   type HashScenario,
   roleOf,
+  runGoldenScenario,
   runHashScenario,
 } from './scenario.ts'
 
@@ -45,7 +48,14 @@ export type GoldenApi = {
 }
 
 /** One build directory (`buildGame`'s `dir`) per golden crate. */
-export type GoldenDirs = { hash: string; worldgen: string; persist: string; reference: string }
+export type GoldenDirs = {
+  hash: string
+  worldgen: string
+  persist: string
+  reference: string
+  /** M57: `fx-belts`' build; its fifteen script goldens are replayed only when it is given. */
+  belts?: string
+}
 
 export type GoldenResult = { name: string; ok: boolean; message: string | null }
 
@@ -136,5 +146,24 @@ export async function runGoldens(api: GoldenApi, dirs: GoldenDirs): Promise<Gold
     const message = divergenceMessage(firstDivergence(got, meta.checkpoints))
     return { name: 'reference full-game log', ok: message === null, message }
   })
+  const beltsDir = dirs.belts
+  if (beltsDir !== undefined) {
+    const scenarios = readdirSync(`${FIXTURES}belts/golden/`)
+      .filter((f) => /^scenario(-.*)?\.json$/.test(f))
+      .sort()
+    for (const file of scenarios) {
+      const name = `fx-belts ${file}`
+      await attempt(name, async () => {
+        const { wasm } = await api.loadGame(beltsDir)
+        const scenario = readFixtureGolden<HashScenario>('belts', file)
+        const golden = readFixtureGolden<Golden>('belts', file.replace(/^scenario/, 'golden'))
+        const message = diffCheckpoints(
+          runGoldenScenario(api.instantiate, wasm, scenario),
+          golden.checkpoints,
+        )
+        return { name, ok: message === null, message }
+      })
+    }
+  }
   return results
 }

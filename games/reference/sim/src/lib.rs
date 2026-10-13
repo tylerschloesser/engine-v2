@@ -745,13 +745,20 @@ impl Game for RefGame {
         // `bench` (never shipped): the worldgen carried the bench marker, so fill the world with the
         // standard large save (0020 section 9). The seed comes from the world's own rng, which is
         // seeded from the world seed: genesis sees no params.
+        // M57: the marker's regime picks the belt field instead (`bench::build_belts`), which
+        // reads no seed.
         #[cfg(feature = "bench")]
-        if let Some(scale) = bench::marker_scale(w) {
-            let seed = match w.rng() {
-                Ok(r) => (u64::from(r.next_u32()) << 32) | u64::from(r.next_u32()),
-                Err(_) => 0,
-            };
-            bench::build(w, seed, bench::Shape::scaled(scale));
+        if let Some((scale, regime)) = bench::marker(w) {
+            match regime {
+                bench::Regime::LargeSave => {
+                    let seed = match w.rng() {
+                        Ok(r) => (u64::from(r.next_u32()) << 32) | u64::from(r.next_u32()),
+                        Err(_) => 0,
+                    };
+                    bench::build(w, seed, bench::Shape::scaled(scale));
+                }
+                bench::Regime::Belts => bench::build_belts(w, scale),
+            }
         }
     }
 

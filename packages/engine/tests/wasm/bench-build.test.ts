@@ -4,6 +4,8 @@
 // reaches `genesis` through the worldgen marker, builds the FULL save inside the default arena with
 // no memory growth (genesis writes are not logged, ADR 0046), arms its timers in genesis (the world
 // hash moves over 120 ticks), is deterministic across instances and carries no `test-hooks`. Native counts: `large_save.rs`.
+// M57: the belt field (`?bench=belts`, `bench_regime: 1`) at the phone pair's caps hashes at tick 200
+// what `bench_belts.rs`'s `bench_belts_field_hash` pins natively.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeAll, expect, test } from 'vitest'
@@ -66,4 +68,20 @@ test('bench-build @slow', async () => {
     0,
   )
   expect(withMarker).toBe(without)
+}, 120_000)
+
+/** `bench_belts.rs`'s `bench_belts_field_hash`: the belt field's state hash at tick 200 (seed 7). */
+const BELT_FIELD_HASH_200 = 'ee989193ed484d9e'
+
+test('bench-build: reference belt field hashes as natively @slow', async () => {
+  const cfg: WorldConfig = {
+    ...benchWorldConfig(bench.buildHash, 1, { seed: '7' }),
+    params: {
+      seed: '7',
+      worldgen: { bench: 1, bench_regime: 1 },
+      maxLines: 12_288,
+      maxItems: 98_304,
+    },
+  }
+  expect(await worldHash(bench.dir, cfg, 200)).toBe(BELT_FIELD_HASH_200)
 }, 120_000)

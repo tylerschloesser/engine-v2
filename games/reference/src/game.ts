@@ -50,6 +50,9 @@ export type StartGameOptions = {
   onClient?: (client: Client) => void
   /** The dev-only desync counter (default: a Vite dev server, `import.meta.env.DEV`). */
   dev?: boolean
+  /** `ClientOptions.render.gpuTiming` (M57: the bench page's belt mode only): the main pass's GPU time
+   * through `renderer.gpuTimer` where the adapter has `timestamp-query`. */
+  gpuTiming?: boolean
 }
 
 export type StartedGame = {
@@ -146,6 +149,7 @@ export async function startGame(opts: StartGameOptions): Promise<StartedGame> {
     tilesUrl: assets.tiles,
     client,
     ...(opts.clock ? { clock: opts.clock } : {}),
+    ...(opts.gpuTiming ? { gpuTiming: true } : {}),
   })
   const first = gpu.current as NonNullable<GpuHost['current']>
   const { device, renderer } = first

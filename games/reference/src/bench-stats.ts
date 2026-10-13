@@ -30,6 +30,21 @@ export class Rolling {
   p95(): number {
     return this.quantile(0.95)
   }
+  /** The window's samples, oldest first (the live array: read, never keep). */
+  values(): readonly number[] {
+    return this.vs
+  }
+  /** Empties the window (M57: a new GPU timer after a device loss). */
+  clear(): void {
+    this.ts.length = 0
+    this.vs.length = 0
+  }
+  /** How many of the window's samples are above `x` (M57: rAF intervals over 20 ms). */
+  countAbove(x: number): number {
+    let n = 0
+    for (const v of this.vs) if (v > x) n++
+    return n
+  }
   sum(): number {
     let s = 0
     for (const v of this.vs) s += v
