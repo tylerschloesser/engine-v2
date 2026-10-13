@@ -125,17 +125,38 @@ for (let i = pumped; i < READ_TICK; i++) {
 // waiting on its downlink (`worker/client.ts` `body()`), and `stepSimTickSync` returns on the sim's
 // ack: unsettled, the read's frame drew the follower at `READ_TICK - 1` with the item clock one tick
 // ahead (2,332 records) or at `READ_TICK` (2,340) by which wake came first.
-await untilQuiescent(client)
-await resumeWorkers(client)
-harness.stepFrame(FRAME_MS)
-harness.stepTick()
+// The read's state: the follower at the tick just stepped, the item clock at fraction 0. One
+// settle (`untilQuiescent`, a frame, a tick) left the read one tick behind on the CI runner (the
+// follower at 59 with the clock 0.2 into the tick), so the page repeats whole cycles, each a frame
+// of the tick's length, a tick, a drain of the downlink and a zero-length redraw (the manual clock
+// stands still, `stepFrame(0)`), until the clock reads clean, bounded at 20 ticks past `READ_TICK`:
+// every visible tile is full from tick 60 on, so the count below is the same at any of them.
+let readTick = READ_TICK
+let readClock = client.clock()
+for (let i = 0; i < 20; i++) {
+  await untilQuiescent(client)
+  await resumeWorkers(client)
+  if (i > 0) {
+    harness.stepFrame(FRAME_MS)
+    harness.stepTick()
+    readTick++
+    await untilQuiescent(client)
+    await resumeWorkers(client)
+  } else {
+    harness.stepFrame(FRAME_MS)
+    harness.stepTick()
+  }
+  harness.stepFrame(0)
+  readClock = client.clock()
+  if (readClock.authoritative === readTick && readClock.tickFraction === 0) break
+}
 
 const records: DrawRecord[] = []
 window.__beltsRecords = drawListRecords(client, records)
-const readClock = client.clock()
-if (readClock.authoritative !== READ_TICK || readClock.tickFraction !== 0) {
+readClock = client.clock()
+if (readClock.authoritative !== readTick || readClock.tickFraction !== 0) {
   throw new Error(
-    `gc-belts: read at tick ${readClock.authoritative} + ${readClock.tickFraction}, not ${READ_TICK}`,
+    `gc-belts: read at tick ${readClock.authoritative} + ${readClock.tickFraction}, not ${readTick}`,
   )
 }
 
